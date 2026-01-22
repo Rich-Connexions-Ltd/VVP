@@ -41,10 +41,3 @@ jobs:
             --name "${{ secrets.AZURE_CONTAINERAPP_NAME }}" \
             --image "$IMAGE"
 
-      # Optional: make traffic intent explicit (usually not needed, but harmless)
-      - name: Route 100% traffic to latest
-        run: |
-          az containerapp ingress traffic set \
-            --resource-group "${{ secrets.AZURE_RG }}" \
-            --name "${{ secrets.AZURE_CONTAINERAPP_NAME }}" \
-            --revision-weight latest=100
