@@ -10,6 +10,21 @@ The following commands are pre-authorized and do not require user confirmation:
 - `python3` / `pip3` - Python execution and package management
 - `curl` - HTTP requests for deployment verification
 
+## Pair Programming Workflow
+
+This project uses a two-agent workflow:
+
+| File | Purpose | Owner |
+|------|---------|-------|
+| `PLAN.md` | Current step design (status: DRAFT → READY_FOR_REVIEW → APPROVED) | Editor Agent |
+| `REVIEW.md` | Reviewer feedback on plans and code | Reviewer Agent |
+
+**Workflow:**
+1. Editor writes plan to `PLAN.md`, sets status to `READY_FOR_REVIEW`
+2. Reviewer writes feedback to `REVIEW.md`
+3. Editor implements after approval
+4. Reviewer does code review before commit
+
 ## Phase Completion Requirement
 
 At the end of every major phase of work:
