@@ -41,13 +41,27 @@ At the end of every major phase of work:
 
 ## Key Design Decisions
 
+### Normative (fixed by spec)
+
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| Signature Algorithm | EdDSA (Ed25519) only | VVP spec mandates, KERI ecosystem standard |
-| Max PASSporT Validity | 300 seconds | Per §5.2B |
-| Max iat Drift | 5 seconds | Per §5.2A (NORMATIVE) |
+| Signature Algorithm | EdDSA (Ed25519) only | §5.0, §5.1 - VVP mandates |
+| Max iat Drift | 5 seconds | §5.2A - "MUST be ≤ 5 seconds" |
 | SAID Algorithm | Blake3-256 | KERI ecosystem standard |
-| Clock Skew | ±300 seconds | Per §4.1A |
+
+### Configurable Defaults
+
+| Decision | Default | Rationale |
+|----------|---------|-----------|
+| Max PASSporT Validity | 300 seconds | §5.2B - "unless explicitly configured otherwise" |
+| Clock Skew | ±300 seconds | §4.1A - "default policy" |
+| Max Token Age | 300 seconds | §5.2B - configurable |
+
+## Vendored Dependencies
+
+- **keripy/** - KERI Python library (vendored, not yet integrated)
+  - Excluded from pytest discovery via `pytest.ini`
+  - TODO: Record upstream commit/version for reproducibility
 
 ## Project Structure
 

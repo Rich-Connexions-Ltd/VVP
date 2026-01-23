@@ -250,22 +250,24 @@ class TestDeriveOverallStatus:
 
 
 # =============================================================================
-# Config Tests (§4.1A, §5.2A/B)
+# Config Tests
 # =============================================================================
 
 class TestConfig:
-    """Tests for configuration constants"""
+    """Tests for configuration constants - verifies defaults match spec"""
 
-    def test_clock_skew(self):
-        """Clock skew is ±300 seconds per §4.1A"""
-        assert CLOCK_SKEW_SECONDS == 300
-
-    def test_max_iat_drift(self):
-        """Max iat drift is 5 seconds per §5.2A (NORMATIVE)"""
+    # Normative values (fixed by spec, cannot be changed)
+    def test_max_iat_drift_normative(self):
+        """Max iat drift is 5 seconds per §5.2A (NORMATIVE - spec mandated)"""
         assert MAX_IAT_DRIFT_SECONDS == 5
 
-    def test_max_token_age(self):
-        """Max token age is 300 seconds per §5.2B"""
+    # Configurable defaults (may be overridden per deployment)
+    def test_clock_skew_default(self):
+        """Clock skew default is ±300 seconds per §4.1A (configurable)"""
+        assert CLOCK_SKEW_SECONDS == 300
+
+    def test_max_token_age_default(self):
+        """Max token age default is 300 seconds per §5.2B (configurable)"""
         assert MAX_TOKEN_AGE_SECONDS == 300
 
     def test_max_passport_validity(self):
