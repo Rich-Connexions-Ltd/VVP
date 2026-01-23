@@ -1,0 +1,7 @@
+{
+  "name": "github-actions-main",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "subject": "repo:andrewbalercnx/vvp-verifier:ref:refs/heads/main",
+  "description": "OIDC for GitHub Actions on andrewbalercnx/vvp-verifier (main)",
+  "audiences": ["api://AzureADTokenExchange"]
+}

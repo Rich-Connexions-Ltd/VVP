@@ -1,4 +1,5 @@
 import logging, time
+import os
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -38,3 +39,9 @@ async def verify(req: VerifyRequest, request: Request):
     log.info("verify_called", extra={"request_id":req_id, "route":"/verify",
                                     "remote_addr": request.client.host if request.client else "-"})
     return JSONResponse(resp.model_dump())
+
+
+@app.get("/version")
+def version():
+    # GIT_SHA is injected at deploy time by GitHub Actions
+    return {"git_sha": os.getenv("GIT_SHA", "unknown")}
