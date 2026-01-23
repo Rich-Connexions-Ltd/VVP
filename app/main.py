@@ -35,7 +35,8 @@ async def req_log(request: Request, call_next):
 
 @app.post("/verify")
 async def verify(req: VerifyRequest, request: Request):
-    req_id, resp = verify_vvp(req)
+    vvp_identity_header = request.headers.get("VVP-Identity")
+    req_id, resp = await verify_vvp(req, vvp_identity_header)
     log.info("verify_called", extra={"request_id":req_id, "route":"/verify",
                                     "remote_addr": request.client.host if request.client else "-"})
     return JSONResponse(resp.model_dump())
