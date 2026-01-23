@@ -811,6 +811,36 @@ class TestExpiryPolicy:
         assert exc.value.code == ErrorCode.PASSPORT_EXPIRED
         assert "exp absent" in exc.value.message.lower() or "omission" in exc.value.message.lower()
 
+    def test_exp_omission_allowed_when_configured(self):
+        """PASSporT exp absent, VVP-Identity exp explicit, but ALLOW_PASSPORT_EXP_OMISSION=True → Valid.
+
+        Tests the §5.2A configuration override: when ALLOW_PASSPORT_EXP_OMISSION is True,
+        PASSporT exp omission is permitted even when VVP-Identity has explicit exp.
+        """
+        import app.vvp.passport as passport_module
+
+        now = int(time.time())
+        payload = valid_payload(now)
+        # No exp field in PASSporT
+        passport = parse_passport(make_jwt(valid_header(), payload))
+        # VVP-Identity has explicit exp
+        identity = VVPIdentity(
+            ppt="vvp",
+            kid="did:keri:EExampleAID123",
+            evd="oobi:http://example.com/oobi/EExampleAID123",
+            iat=now,
+            exp=now + 300,
+            exp_provided=True,  # Explicit exp - would normally trigger rejection
+        )
+        # Patch the config to allow exp omission
+        original_value = passport_module.ALLOW_PASSPORT_EXP_OMISSION
+        try:
+            passport_module.ALLOW_PASSPORT_EXP_OMISSION = True
+            # Should not raise when config allows omission
+            validate_passport_binding(passport, identity, now)
+        finally:
+            passport_module.ALLOW_PASSPORT_EXP_OMISSION = original_value
+
 
 # =============================================================================
 # Signature Decoding Tests
