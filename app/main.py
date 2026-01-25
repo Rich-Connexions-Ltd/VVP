@@ -639,7 +639,10 @@ async def ui_check_revocation(
 
     try:
         # Unescape HTML entities (form value may have &quot; etc. from template escaping)
-        acdc_list = json.loads(html.unescape(acdcs))
+        unescaped = html.unescape(acdcs)
+        log.debug(f"check-revocation received acdcs (first 200 chars): {acdcs[:200]}")
+        log.debug(f"check-revocation unescaped (first 200 chars): {unescaped[:200]}")
+        acdc_list = json.loads(unescaped)
         client = get_tel_client()
         results = []
 
@@ -699,7 +702,10 @@ async def ui_credential_graph(
 
     try:
         # Unescape HTML entities (form value may have &quot; etc. from template escaping)
-        acdc_list = json.loads(html.unescape(dossier_data))
+        unescaped = html.unescape(dossier_data)
+        log.debug(f"credential-graph received dossier_data (first 200 chars): {dossier_data[:200]}")
+        log.debug(f"credential-graph unescaped (first 200 chars): {unescaped[:200]}")
+        acdc_list = json.loads(unescaped)
         dossier_acdcs: dict[str, ACDC] = {}
 
         for acdc_data in acdc_list:

@@ -12,7 +12,7 @@
 {% else %}
 {# Hidden data element for graph building #}
 {% if acdcs %}
-<span data-graph-available="true" data-acdcs="{{ acdcs | tojson | e }}" style="display:none;"></span>
+<span data-graph-available="true" data-acdcs="{{ acdcs | tojson | forceescape }}" style="display:none;"></span>
 {% endif %}
 
 <h3>Dossier Contents</h3>
@@ -27,7 +27,7 @@
 
 {# Revocation check form #}
 <form hx-post="/ui/check-revocation" hx-target="#revocation-result" hx-swap="innerHTML" style="margin-top:1rem;">
-    <input type="hidden" name="acdcs" value="{{ acdcs | tojson | e }}">
+    <input type="hidden" name="acdcs" value="{{ acdcs | tojson | forceescape }}">
     <input type="hidden" name="kid_url" value="{{ kid_url or '' }}">
     <input type="hidden" name="dossier_stream" value="{{ dossier_stream or '' }}">
     <button type="submit" class="secondary">
