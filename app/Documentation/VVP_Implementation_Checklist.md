@@ -1,10 +1,10 @@
 # VVP Verifier Implementation Checklist
 
-**Document Version:** 3.6
+**Document Version:** 3.7
 **Specification Version:** v1.4 FINAL + draft-hardman-verifiable-voice-protocol §5
 **Created:** 2026-01-23
 **Last Updated:** 2026-01-25
-**Status:** Tier 1 Complete, Tier 2 In Progress (54% overall)
+**Status:** Tier 1 Complete, Tier 2 In Progress (68% overall)
 
 ---
 
@@ -39,17 +39,17 @@ The following VVP spec requirements are **out of scope** for this verification A
 
 **Rationale:** The VVP Verifier is a cryptographic verification service that validates PASSporTs, dossiers, and KERI credentials. SIP/SDP layer requirements are the responsibility of the telephony endpoints that generate and consume these artifacts.
 
-### Policy Deviation: exp Maximum Age (300s vs 60s)
+### exp Maximum Age Policy (VVP Compliant)
 
-**Spec Reference:** STIR/RFC 8224 specifies PASSporT expiry MUST NOT exceed 60 seconds.
+**Spec Reference:** VVP §4.2 specifies "a recommended expiration should be 30 seconds, with a minimum of 10 seconds and a **maximum of 300 seconds**."
 
 **VVP Policy:** This implementation uses a **300 second** maximum token age (configurable).
 
-**Justification:**
-1. VVP extends STIR PASSporT with richer evidence (dossiers, KERI credentials) that may require longer verification windows.
-2. The VVP specification (draft-hardman-verifiable-voice-protocol §4.2) does not explicitly override the STIR 60s limit, but the added complexity of KERI resolution and dossier validation justifies a longer window.
-3. The v1.4 FINAL internal specification (§4.1A, §5.2B) documents 300s as the configurable default.
-4. Operators may configure a stricter 60s policy if required for STIR compliance.
+**Compliance Notes:**
+1. VVP explicitly overrides the STIR/RFC 8224 60-second limit, allowing up to 300 seconds.
+2. The 300s maximum accommodates KERI resolution and dossier validation latency.
+3. Operators may configure a stricter policy (e.g., 30s recommended) via configuration.
+4. The v1.4 FINAL internal specification (§4.1A, §5.2B) aligns with VVP's 300s maximum.
 
 **Configuration:** `app/core/config.py:MAX_PASSPORT_VALIDITY_SECONDS = 300`
 
@@ -67,6 +67,7 @@ The following VVP spec requirements are **out of scope** for this verification A
 | 1.6 | Define `ErrorDetail` model (code, message, recoverable) | [x] | | Per §4.2 |
 | 1.7 | Create error code constants per §4.2A registry (18 codes) | [x] | | See Error Code Registry below |
 | 1.8 | Implement `overall_status` derivation logic per §4.3A | [x] | | Precedence rules |
+| 1.9 | Configure trusted root AIDs (GLEIF for vLEI governance) | [x] | Phase 10 | Per VVP §5.1-7 - verifier MUST accept root of trust - **MUST** |
 
 ---
 
@@ -104,9 +105,10 @@ The following VVP spec requirements are **out of scope** for this verification A
 | 3.11 | Validate `kid` binding between PASSporT and VVP-Identity | [x] | | Per §5.2 |
 | 3.12 | Validate `iat` drift ≤ 5 seconds between PASSporT and VVP-Identity | [x] | | Per §5.2A - NORMATIVE |
 | 3.13 | Unit tests for PASSporT parsing | [x] | | |
-| 3.14 | Validate `orig.tn` contains exactly ONE phone number | [ ] | | Per VVP §4.2 - **MUST** |
-| 3.15 | Validate `typ` MUST be "passport" | [ ] | | Per VVP §4.2 / RFC8225 - **MUST** |
-| 3.16 | Validate `orig`/`dest` conform to SHAKEN E.164 format | [ ] | | Per VVP §4.2 / RFC8225 - **MUST** |
+| 3.14 | Validate `orig.tn` contains exactly ONE phone number | [x] | Sprint 12 | Per VVP §4.2 - **MUST** |
+| 3.15 | Validate `typ` MUST be "passport" | [x] | Sprint 12 | Per VVP §4.2 / RFC8225 - **MUST** |
+| 3.16 | Validate `orig`/`dest` conform to SHAKEN E.164 format | [x] | Sprint 12 | Per VVP §4.2 / RFC8225 - **MUST** |
+| 3.17 | Decode PSS (PASSporT-Specific Signature) from CESR format | [x] | Phase 10 | Per VVP §6.3.1 - PSS uses `0B` prefix CESR, NOT standard JWS - **MUST** |
 
 ---
 
@@ -115,7 +117,7 @@ The following VVP spec requirements are **out of scope** for this verification A
 | # | Task | Status | Commit | Comments |
 |---|------|--------|--------|----------|
 | 4.1 | Create `app/vvp/keri/` module structure | [x] | | key_parser.py, signature.py, exceptions.py |
-| 4.2 | Parse KERI AID from `kid` field | [x] | | Support "B" (transferable) and "D" (non-transferable) prefixes |
+| 4.2 | Parse KERI AID from `kid` field | [x] | | Support "B" (Basic/non-transferable) and "D" (Digest/transferable) prefixes per §6.2.3 |
 | 4.3 | Extract Ed25519 public key from AID | [x] | | Base64url decode, validate 32 bytes |
 | 4.4 | Implement Ed25519 signature verification via pysodium | [x] | | crypto_sign_verify_detached |
 | 4.5 | Handle invalid kid format → INDETERMINATE | [x] | | ResolutionFailedError |
@@ -181,9 +183,9 @@ The following VVP spec requirements are **out of scope** for this verification A
 | 7.12 | CESR parsing (`application/json+cesr`) | [x] | | Standalone CESR parser |
 | 7.13 | KERI canonical serialization | [x] | | `keri_canonical.py` |
 | 7.14 | Live witness resolution (Provenant staging) | [x] | | Tested with witness5.stage.provenant.net |
-| 7.15 | Delegation validation (`dip`, `drt` events) | [ ] | | Raises DelegationNotSupportedError |
-| 7.16 | Witness receipt signature validation | [ ] | | Currently presence-only check |
-| 7.17 | Validate `kid` OOBI content is a KEL | [ ] | | Per VVP §4.2 - **MUST** |
+| 7.15 | Delegation validation (`dip`, `drt` events) | [ ] | | Raises DelegationNotSupportedError - Deferred to Tier 3 |
+| 7.16 | Witness receipt signature validation | [x] | Sprint 12 | Full signature validation in strict mode |
+| 7.17 | Validate `kid` OOBI content is a KEL | [x] | Phase 11 | Per VVP §4.2 - **MUST** |
 
 ---
 
@@ -193,20 +195,20 @@ The following VVP spec requirements are **out of scope** for this verification A
 
 | # | Task | Status | Commit | Comments |
 |---|------|--------|--------|----------|
-| 8.1 | Create `app/vvp/dossier/acdc_verifier.py` module | [ ] | | |
-| 8.2 | Compute SAID using Blake3-256 "most compact form" | [ ] | | Per ACDC spec |
-| 8.3 | Verify each ACDC SAID matches computed value | [ ] | | Error: ACDC_SAID_MISMATCH |
-| 8.4 | Resolve issuer key state at ACDC issuance time | [ ] | | Per §5.1.1-2.8.2 |
-| 8.5 | Verify ACDC signature against issuer key | [ ] | | Ed25519 |
-| 8.6 | Validate ACDC schema against declared schema SAID | [ ] | | Per §5.1.1-2.8.3 |
-| 8.7 | Traverse evidence chain to root of trust | [ ] | | Per §5.1.1-2.8.3 |
-| 8.8 | Verify correct relationships among artifacts | [ ] | | Per §5.1.1-2.8.3 |
-| 8.9 | Handle ACDC variants: compact, partial, aggregate | [ ] | | Per §1.4/§6.1B |
-| 8.10 | Unit tests for ACDC verification | [ ] | | |
-| 8.11 | Validate vetting credential has JL to qualifying credential | [ ] | | Per VVP §6.3.5 - **MUST** |
-| 8.12 | Verify credentials are NOT bearer tokens (have issuee binding) | [ ] | | Per VVP §6.3.5 - **MUST NOT** |
-| 8.13 | Validate all stable evidence is ACDC format | [ ] | | Per VVP §7.3 - **MUST** |
-| 8.14 | Verifier **MUST** accept root of trust as valid authority | [ ] | | Per VVP §5.1-7 - **MUST** |
+| 8.1 | Create `app/vvp/acdc/verifier.py` module | [x] | Phase 10 | Chain validation and signature verification |
+| 8.2 | Compute SAID using Blake3-256 "most compact form" | [x] | Phase 10 | `compute_said()` in acdc module |
+| 8.3 | Verify each ACDC SAID matches computed value | [x] | Phase 10 | Error: ACDC_SAID_MISMATCH |
+| 8.4 | Resolve issuer key state at ACDC issuance time | [x] | Phase 11 | Strict OOBI/KEL validation |
+| 8.5 | Verify ACDC signature against issuer key | [x] | Phase 10 | Ed25519 via verify_acdc_signature() |
+| 8.6 | Validate ACDC schema against declared schema SAID | [ ] | | Per §5.1.1-2.8.3 - Deferred |
+| 8.7 | Traverse evidence chain to root of trust | [x] | Phase 10 | validate_credential_chain() |
+| 8.8 | Verify correct relationships among artifacts | [ ] | | Per §5.1.1-2.8.3 - Deferred to Tier 3 |
+| 8.9 | Handle ACDC variants: compact, partial, aggregate | [ ] | | Per §1.4/§6.1B - Deferred to Tier 3 |
+| 8.10 | Unit tests for ACDC verification | [x] | Phase 10 | test_acdc.py |
+| 8.11 | Validate vetting credential has JL to qualifying credential | [ ] | | Per VVP §6.3.5 - Deferred to Tier 3 |
+| 8.12 | Verify credentials are NOT bearer tokens (have issuee binding) | [x] | Sprint 12 | Per VVP §6.3.5 - validate_issuee_binding() |
+| 8.13 | Validate all stable evidence is ACDC format | [x] | Phase 10 | Dossier parser validates ACDC structure |
+| 8.14 | Verifier **MUST** accept root of trust as valid authority | [x] | Phase 10 | Per VVP §5.1-7 - TRUSTED_ROOT_AIDS |
 
 ---
 
@@ -250,6 +252,7 @@ The following VVP spec requirements are **out of scope** for this verification A
 | 10.16 | Verify PSS signer matches OP AID (not OSP) | [ ] | | Per VVP §6.3.4 - **MUST** |
 | 10.17 | Verify OP is issuee of vetting OR delegated signer credential | [ ] | | Per VVP §5.1-9 - **MUST** |
 | 10.18 | Validate `kid` AID is single-sig; require DE when not legal entity AID | [ ] | | Per VVP §4.2 - **MUST** |
+| 10.19 | Validate vetting credential conforms to LE vLEI schema | [ ] | | Per VVP §6.3.5 - reference type implies schema/governance - **MUST** |
 
 ---
 
@@ -403,23 +406,23 @@ These are the **18 error codes** defined in the v1.4 FINAL specification:
 
 | Phase | Description | Total | Done | % |
 |-------|-------------|-------|------|---|
-| 1 | Core Infrastructure | 8 | 8 | 100% |
+| 1 | Core Infrastructure | 9 | 9 | 100% |
 | 2 | VVP-Identity Header | 10 | 10 | 100% |
-| 3 | PASSporT JWT | 16 | 13 | 81% |
+| 3 | PASSporT JWT | 17 | 17 | 100% |
 | 4 | KERI Signature (Tier 1) | 7 | 7 | 100% |
 | 5 | Dossier Validation (Tier 1) | 15 | 15 | 100% |
 | 6 | Verification Orchestration (Tier 1) | 8 | 8 | 100% |
-| 7 | KEL Key State Resolution (Tier 2) | 17 | 14 | 82% |
-| 8 | ACDC Signature Verification (Tier 2) | 14 | 0 | 0% |
+| 7 | KEL Key State Resolution (Tier 2) | 17 | 16 | 94% |
+| 8 | ACDC Signature Verification (Tier 2) | 14 | 10 | 71% |
 | 9 | Revocation Checking (Tier 2) | 7 | 7 | 100% |
-| 10 | Authorization Verification (Tier 3) | 18 | 0 | 0% |
+| 10 | Authorization Verification (Tier 3) | 19 | 0 | 0% |
 | 11 | Brand and Business Logic (Tier 3) | 17 | 0 | 0% |
 | 12 | Callee Verification (Tier 3) | 15 | 0 | 0% |
 | 13 | SIP Contextual Alignment | 6 | 0 | 0% |
 | 14 | Caching and Efficiency | 8 | 5 | 63% |
 | 15 | Test Vectors | 14 | 6 | 43% |
 | 16 | API Routes and Deployment | 9 | 4 | 44% |
-| **TOTAL** | | **179** | **97** | **54%** |
+| **TOTAL** | | **182** | **124** | **68%** |
 
 ---
 
@@ -465,6 +468,8 @@ These are the **18 error codes** defined in the v1.4 FINAL specification:
 | 3.4 | 2026-01-25 | VVP spec gap analysis: Added 15 missing MUST requirements from draft-hardman-verifiable-voice-protocol. Phase 3: +1 (orig single TN). Phase 8: +4 (JL validation, bearer token check, ACDC format, root of trust). Phase 10: +6 (APE/DE validation, PSS signer). Phase 11: +4 (card/goal justification, brand JL). Overall 56% complete. |
 | 3.5 | 2026-01-25 | Reviewer feedback: Added 4 more missing MUSTs. Phase 3: +1 (typ="passport"). Phase 7: +1 (kid OOBI must be KEL). Phase 10: +1 (kid AID single-sig). Phase 11: +1 (vCard conformance). Note: exp max 300s is correct per VVP spec §4.2 (reviewer incorrectly cited 60s from STIR/RFC 8224). |
 | 3.6 | 2026-01-25 | Reviewer re-review: Added 2 more items. Phase 3: +1 (SHAKEN E.164 format). Phase 12: +1 (unknown claims ignored). Added "Scope Exclusions and Policy Deviations" section documenting SIP out-of-scope and exp 300s policy with justification. Total 179 items (54% complete). |
+| 3.7 | 2026-01-25 | VVP spec review corrections: Fixed 4.2 AID prefix definitions (B=non-transferable, D=transferable per §6.2.3). Added 3.17 (PSS CESR signature decoding per §6.3.1). Added 10.19 (vetting credential LE vLEI schema validation per §6.3.5). Added 1.9 (root of trust configuration per §5.1-7). Updated exp policy section to reflect VVP compliance (300s max is spec-compliant, not deviation). Total 182 items (53% complete). |
+| 3.8 | 2026-01-25 | Sprint 12 completion: Phase 1 (1.9 root AIDs), Phase 3 (3.14-3.17 PASSporT validation complete), Phase 7 (7.16-7.17 witness sigs and OOBI KEL), Phase 8 (8.1-8.5, 8.7, 8.10, 8.12-8.14 ACDC verification). Total 182 items (68% complete). |
 
 ---
 

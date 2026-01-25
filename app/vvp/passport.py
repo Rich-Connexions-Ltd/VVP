@@ -3,13 +3,21 @@ PASSporT JWT parser and validator per spec §5.0-§5.4.
 
 Parses and validates VVP PASSporT JWTs. Signature verification is deferred
 to Phase 4 (requires KERI key state).
+
+Sprint 12: Added E.164 phone validation (§4.2), orig.tn/dest.tn validation,
+typ header validation (RFC8225).
 """
 
 import base64
 import json
+import re
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, List, Optional
+
+# E.164 phone number format: +[1-9][0-9]{1,14}
+# Per ITU-T E.164: 1-15 digits total, must start with non-zero
+E164_PATTERN = re.compile(r"^\+[1-9]\d{1,14}$")
 
 from app.core.config import (
     ALLOW_PASSPORT_EXP_OMISSION,
@@ -269,10 +277,13 @@ def _parse_header(data: dict[str, Any]) -> PassportHeader:
     ppt = _require_string(data, "ppt", "header")
     kid = _require_string(data, "kid", "header")
 
-    # Optional field (not validated)
+    # Optional field - typ validation per RFC8225
     typ = data.get("typ")
     if typ is not None and not isinstance(typ, str):
         typ = None  # Ignore non-string typ
+
+    # Validate typ if present (must be "passport" per RFC8225)
+    _validate_typ_header(typ)
 
     return PassportHeader(alg=alg, ppt=ppt, kid=kid, typ=typ)
 
@@ -286,6 +297,10 @@ def _parse_payload(data: dict[str, Any]) -> PassportPayload:
     orig = _require_dict(data, "orig", "payload")
     dest = _require_dict(data, "dest", "payload")
     evd = _require_string(data, "evd", "payload")
+
+    # Validate phone number fields per VVP §4.2
+    _validate_orig_tn_field(orig)
+    _validate_dest_tn_field(dest)
 
     # Optional fields
     iss = data.get("iss")
@@ -328,6 +343,116 @@ def _validate_algorithm(alg: str) -> None:
     # Check allowed algorithms
     if alg not in ALLOWED_ALGORITHMS:
         raise PassportError.forbidden_alg(alg)
+
+
+def _validate_typ_header(typ: Optional[str]) -> None:
+    """Validate typ header per RFC8225 and VVP §4.2.
+
+    Per RFC8225: typ MUST be "passport" when present.
+    Per VVP §4.2: PASSporTs MUST comply with RFC8225.
+
+    Args:
+        typ: The typ header value (may be None).
+
+    Raises:
+        PassportError: If typ is present but not "passport".
+    """
+    if typ is not None and typ != "passport":
+        raise PassportError.parse_failed(
+            f"typ must be 'passport' when present, got '{typ}'"
+        )
+
+
+def _validate_phone_format(phone: str) -> bool:
+    """Validate E.164 phone number format per VVP §4.2.
+
+    E.164 format: +[1-9][0-9]{1,14}
+    - Starts with +
+    - First digit after + must be 1-9 (no leading zeros)
+    - Total 1-15 digits (excluding +)
+
+    Args:
+        phone: Phone number string to validate.
+
+    Returns:
+        True if valid E.164 format.
+    """
+    return bool(E164_PATTERN.match(phone))
+
+
+def _validate_orig_tn_field(orig: dict) -> None:
+    """Validate orig.tn field per VVP §4.2.
+
+    Per spec:
+    - orig.tn MUST be a single phone number (string, not array)
+    - Phone number MUST be in E.164 format
+
+    Args:
+        orig: The orig claim object.
+
+    Raises:
+        PassportError: If orig.tn is missing, an array, or not valid E.164.
+    """
+    if "tn" not in orig:
+        raise PassportError.parse_failed("payload orig.tn is required")
+
+    tn = orig["tn"]
+
+    # orig.tn MUST be a single string, not an array
+    if isinstance(tn, list):
+        raise PassportError.parse_failed(
+            "orig.tn must be a single phone number (string), not an array"
+        )
+
+    if not isinstance(tn, str):
+        raise PassportError.parse_failed(
+            f"orig.tn must be a string, got {type(tn).__name__}"
+        )
+
+    if not _validate_phone_format(tn):
+        raise PassportError.parse_failed(
+            f"orig.tn must be E.164 format (+[1-9][0-9]{{1,14}}), got '{tn}'"
+        )
+
+
+def _validate_dest_tn_field(dest: dict) -> None:
+    """Validate dest.tn field per RFC8225.
+
+    Per RFC8225:
+    - dest.tn MUST be an array of phone numbers
+    - Each phone number MUST be in E.164 format
+    - Array must not be empty
+
+    Args:
+        dest: The dest claim object.
+
+    Raises:
+        PassportError: If dest.tn is missing, not an array, empty, or contains invalid numbers.
+    """
+    if "tn" not in dest:
+        raise PassportError.parse_failed("payload dest.tn is required")
+
+    tn = dest["tn"]
+
+    # dest.tn MUST be an array
+    if not isinstance(tn, list):
+        raise PassportError.parse_failed(
+            f"dest.tn must be an array, got {type(tn).__name__}"
+        )
+
+    if len(tn) == 0:
+        raise PassportError.parse_failed("dest.tn array must not be empty")
+
+    # Validate each phone number
+    for i, phone in enumerate(tn):
+        if not isinstance(phone, str):
+            raise PassportError.parse_failed(
+                f"dest.tn[{i}] must be a string, got {type(phone).__name__}"
+            )
+        if not _validate_phone_format(phone):
+            raise PassportError.parse_failed(
+                f"dest.tn[{i}] must be E.164 format, got '{phone}'"
+            )
 
 
 def _validate_expiry(passport: Passport, now: int) -> None:

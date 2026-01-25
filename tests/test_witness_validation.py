@@ -15,6 +15,17 @@ from pathlib import Path
 
 import pytest
 
+# Check if pysodium/libsodium is available for actual signature verification
+try:
+    import pysodium
+    PYSODIUM_AVAILABLE = True
+except (ImportError, ValueError):
+    PYSODIUM_AVAILABLE = False
+
+requires_pysodium = pytest.mark.skipif(
+    not PYSODIUM_AVAILABLE, reason="requires pysodium/libsodium for cryptographic verification"
+)
+
 from app.vvp.keri.exceptions import KELChainInvalidError, ResolutionFailedError
 from app.vvp.keri.kel_parser import (
     KELEvent,
@@ -85,6 +96,7 @@ class TestVerifyWitnessSignature:
         """Load witness receipts fixture."""
         return load_fixture("witness_receipts_keripy.json")
 
+    @requires_pysodium
     def test_valid_signature_passes(self, fixture):
         """Valid witness signature verifies correctly."""
         event = fixture["event"]
@@ -98,6 +110,7 @@ class TestVerifyWitnessSignature:
 
         assert result is True
 
+    @requires_pysodium
     def test_all_valid_signatures_pass(self, fixture):
         """All valid witness signatures verify correctly."""
         canonical_bytes = bytes.fromhex(fixture["canonical_bytes_hex"])
@@ -171,6 +184,7 @@ class TestValidateWitnessReceipts:
             raw=event_dict,
         ), canonical_bytes
 
+    @requires_pysodium
     def test_valid_receipts_pass(self, event_with_receipts):
         """Event with sufficient valid receipts passes validation."""
         event, canonical_bytes = event_with_receipts
@@ -180,6 +194,7 @@ class TestValidateWitnessReceipts:
 
         assert len(validated_aids) >= 2
 
+    @requires_pysodium
     def test_exceeds_threshold(self, event_with_receipts):
         """3 valid receipts with threshold 2 passes."""
         event, canonical_bytes = event_with_receipts
@@ -188,6 +203,7 @@ class TestValidateWitnessReceipts:
 
         assert len(validated_aids) == 3  # All 3 receipts are valid
 
+    @requires_pysodium
     def test_uses_event_toad_when_threshold_zero(self, event_with_receipts):
         """When min_threshold=0, uses event.toad."""
         event, canonical_bytes = event_with_receipts
@@ -214,6 +230,7 @@ class TestValidateWitnessReceipts:
         assert "Insufficient valid witness signatures" in str(exc.value)
         assert "0 < threshold 2" in str(exc.value)
 
+    @requires_pysodium
     def test_partial_valid_receipts_below_threshold(self, event_with_receipts, fixture):
         """1 valid receipt with threshold 2 raises error."""
         event, canonical_bytes = event_with_receipts
@@ -278,6 +295,7 @@ class TestValidateWitnessReceipts:
 
         assert "No witness receipts" in str(exc.value)
 
+    @requires_pysodium
     def test_witness_not_in_list_skipped(self, event_with_receipts, fixture):
         """Receipt from witness not in event's list is skipped."""
         event, canonical_bytes = event_with_receipts

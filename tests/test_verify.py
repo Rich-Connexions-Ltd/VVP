@@ -317,10 +317,10 @@ class TestVerifyVVPIntegration:
             patch("app.vvp.verify.parse_vvp_identity") as mock_vvp,
             patch("app.vvp.verify.parse_passport") as mock_passport,
             patch("app.vvp.verify.validate_passport_binding") as mock_binding,
-            patch("app.vvp.verify.verify_passport_signature") as mock_sig,
+            patch("app.vvp.verify.verify_passport_signature_tier2") as mock_sig,
         ):
             mock_vvp.return_value = MagicMock(evd="http://example.com/dossier")
-            mock_passport.return_value = MagicMock(header=MagicMock(kid="EAbc123456789012345"))
+            mock_passport.return_value = MagicMock(header=MagicMock(kid="http://witness.example.com/oobi/EAbc123456789012345/witness/EXyz"))
             mock_binding.return_value = None
             mock_sig.side_effect = SignatureInvalidError("bad signature")
 
@@ -338,11 +338,11 @@ class TestVerifyVVPIntegration:
             patch("app.vvp.verify.parse_vvp_identity") as mock_vvp,
             patch("app.vvp.verify.parse_passport") as mock_passport,
             patch("app.vvp.verify.validate_passport_binding") as mock_binding,
-            patch("app.vvp.verify.verify_passport_signature") as mock_sig,
+            patch("app.vvp.verify.verify_passport_signature_tier2") as mock_sig,
             patch("app.vvp.verify.fetch_dossier") as mock_fetch,
         ):
             mock_vvp.return_value = MagicMock(evd="http://example.com/dossier")
-            mock_passport.return_value = MagicMock(header=MagicMock(kid="EAbc123456789012345"))
+            mock_passport.return_value = MagicMock(header=MagicMock(kid="http://witness.example.com/oobi/EAbc123456789012345/witness/EXyz"))
             mock_binding.return_value = None
             mock_sig.side_effect = ResolutionFailedError("network error")
             mock_fetch.return_value = b'[]'
@@ -360,11 +360,11 @@ class TestVerifyVVPIntegration:
             patch("app.vvp.verify.parse_vvp_identity") as mock_vvp,
             patch("app.vvp.verify.parse_passport") as mock_passport,
             patch("app.vvp.verify.validate_passport_binding") as mock_binding,
-            patch("app.vvp.verify.verify_passport_signature") as mock_sig,
+            patch("app.vvp.verify.verify_passport_signature_tier2") as mock_sig,
             patch("app.vvp.verify.fetch_dossier") as mock_fetch,
         ):
             mock_vvp.return_value = MagicMock(evd="http://example.com/dossier")
-            mock_passport.return_value = MagicMock(header=MagicMock(kid="EAbc123456789012345"))
+            mock_passport.return_value = MagicMock(header=MagicMock(kid="http://witness.example.com/oobi/EAbc123456789012345/witness/EXyz"))
             mock_binding.return_value = None
             mock_sig.return_value = None
             mock_fetch.side_effect = FetchError("timeout")
@@ -382,12 +382,12 @@ class TestVerifyVVPIntegration:
             patch("app.vvp.verify.parse_vvp_identity") as mock_vvp,
             patch("app.vvp.verify.parse_passport") as mock_passport,
             patch("app.vvp.verify.validate_passport_binding") as mock_binding,
-            patch("app.vvp.verify.verify_passport_signature") as mock_sig,
+            patch("app.vvp.verify.verify_passport_signature_tier2") as mock_sig,
             patch("app.vvp.verify.fetch_dossier") as mock_fetch,
             patch("app.vvp.verify.parse_dossier") as mock_parse,
         ):
             mock_vvp.return_value = MagicMock(evd="http://example.com/dossier")
-            mock_passport.return_value = MagicMock(header=MagicMock(kid="EAbc123456789012345"))
+            mock_passport.return_value = MagicMock(header=MagicMock(kid="http://witness.example.com/oobi/EAbc123456789012345/witness/EXyz"))
             mock_binding.return_value = None
             mock_sig.return_value = None
             mock_fetch.return_value = b'invalid json'
@@ -406,12 +406,12 @@ class TestVerifyVVPIntegration:
             patch("app.vvp.verify.parse_vvp_identity") as mock_vvp,
             patch("app.vvp.verify.parse_passport") as mock_passport,
             patch("app.vvp.verify.validate_passport_binding") as mock_binding,
-            patch("app.vvp.verify.verify_passport_signature") as mock_sig,
+            patch("app.vvp.verify.verify_passport_signature_tier2") as mock_sig,
             patch("app.vvp.verify.fetch_dossier") as mock_fetch,
             patch("app.vvp.verify.parse_dossier") as mock_parse,
         ):
             mock_vvp.return_value = MagicMock(evd="http://example.com/dossier")
-            mock_passport.return_value = MagicMock(header=MagicMock(kid="EAbc123456789012345"))
+            mock_passport.return_value = MagicMock(header=MagicMock(kid="http://witness.example.com/oobi/EAbc123456789012345/witness/EXyz"))
             mock_binding.return_value = None
             mock_sig.return_value = None
             mock_fetch.return_value = b""  # Empty dossier
@@ -432,18 +432,18 @@ class TestVerifyVVPIntegration:
             patch("app.vvp.verify.parse_vvp_identity") as mock_vvp,
             patch("app.vvp.verify.parse_passport") as mock_passport,
             patch("app.vvp.verify.validate_passport_binding") as mock_binding,
-            patch("app.vvp.verify.verify_passport_signature") as mock_sig,
+            patch("app.vvp.verify.verify_passport_signature_tier2") as mock_sig,
             patch("app.vvp.verify.fetch_dossier") as mock_fetch,
             patch("app.vvp.verify.parse_dossier") as mock_parse,
             patch("app.vvp.verify.build_dag") as mock_build,
             patch("app.vvp.verify.validate_dag") as mock_validate,
         ):
             mock_vvp.return_value = MagicMock(evd="http://example.com/dossier")
-            mock_passport.return_value = MagicMock(header=MagicMock(kid="EAbc123456789012345"))
+            mock_passport.return_value = MagicMock(header=MagicMock(kid="http://witness.example.com/oobi/EAbc123456789012345/witness/EXyz"))
             mock_binding.return_value = None
             mock_sig.return_value = None
             mock_fetch.return_value = b'[]'
-            mock_parse.return_value = []
+            mock_parse.return_value = ([], {})
             mock_build.return_value = MagicMock()
             mock_validate.side_effect = GraphError("cycle detected")
 
@@ -482,22 +482,34 @@ class TestVerifyVVPIntegration:
             patch("app.vvp.verify.parse_vvp_identity") as mock_vvp,
             patch("app.vvp.verify.parse_passport") as mock_passport,
             patch("app.vvp.verify.validate_passport_binding") as mock_binding,
-            patch("app.vvp.verify.verify_passport_signature") as mock_sig,
+            patch("app.vvp.verify.verify_passport_signature_tier2") as mock_sig,
             patch("app.vvp.verify.fetch_dossier") as mock_fetch,
             patch("app.vvp.verify.parse_dossier") as mock_parse,
             patch("app.vvp.verify.build_dag") as mock_build,
             patch("app.vvp.verify.validate_dag") as mock_validate,
+            patch("app.vvp.verify._find_leaf_credentials") as mock_find_leaves,
+            patch("app.vvp.verify._convert_dag_to_acdcs") as mock_convert,
+            patch("app.vvp.acdc.validate_credential_chain") as mock_chain,
         ):
             mock_vvp.return_value = MagicMock(evd="http://example.com/dossier")
-            mock_passport.return_value = MagicMock(header=MagicMock(kid="EAbc123456789012345"))
+            mock_passport.return_value = MagicMock(header=MagicMock(kid="http://witness.example.com/oobi/EAbc123456789012345/witness/EXyz"))
             mock_binding.return_value = None
             mock_sig.return_value = None
             mock_fetch.return_value = b'[]'
-            mock_parse.return_value = []
+            mock_parse.return_value = ([], {})
             mock_dag = MagicMock()
             mock_dag.root_said = "SAID123"
             mock_build.return_value = mock_dag
             mock_validate.return_value = None
+            mock_find_leaves.return_value = ["SAID123"]  # Return leaf SAIDs
+            # Return a mock ACDC for the leaf SAID
+            mock_acdc = MagicMock()
+            mock_acdc.said = "SAID123"
+            mock_convert.return_value = {"SAID123": mock_acdc}
+            # Chain validation returns success with root_aid
+            mock_result = MagicMock()
+            mock_result.root_aid = "EGLEIF0000000000"
+            mock_chain.return_value = mock_result
 
             req = VerifyRequest(passport_jwt="test", context=valid_context)
             req_id, resp = await verify_vvp(req, "valid-header")
@@ -515,18 +527,18 @@ class TestVerifyVVPIntegration:
             patch("app.vvp.verify.parse_vvp_identity") as mock_vvp,
             patch("app.vvp.verify.parse_passport") as mock_passport,
             patch("app.vvp.verify.validate_passport_binding") as mock_binding,
-            patch("app.vvp.verify.verify_passport_signature") as mock_sig,
+            patch("app.vvp.verify.verify_passport_signature_tier2") as mock_sig,
             patch("app.vvp.verify.fetch_dossier") as mock_fetch,
             patch("app.vvp.verify.parse_dossier") as mock_parse,
             patch("app.vvp.verify.build_dag") as mock_build,
             patch("app.vvp.verify.validate_dag") as mock_validate,
         ):
             mock_vvp.return_value = MagicMock(evd="http://example.com/dossier")
-            mock_passport.return_value = MagicMock(header=MagicMock(kid="EAbc123456789012345"))
+            mock_passport.return_value = MagicMock(header=MagicMock(kid="http://witness.example.com/oobi/EAbc123456789012345/witness/EXyz"))
             mock_binding.return_value = None
             mock_sig.return_value = None
             mock_fetch.return_value = b'[]'
-            mock_parse.return_value = []
+            mock_parse.return_value = ([], {})
             mock_dag = MagicMock()
             mock_dag.root_said = "SAID123"
             mock_build.return_value = mock_dag
@@ -556,22 +568,26 @@ class TestVerifyVVPIntegration:
             patch("app.vvp.verify.parse_vvp_identity") as mock_vvp,
             patch("app.vvp.verify.parse_passport") as mock_passport,
             patch("app.vvp.verify.validate_passport_binding") as mock_binding,
-            patch("app.vvp.verify.verify_passport_signature") as mock_sig,
+            patch("app.vvp.verify.verify_passport_signature_tier2") as mock_sig,
             patch("app.vvp.verify.fetch_dossier") as mock_fetch,
             patch("app.vvp.verify.parse_dossier") as mock_parse,
             patch("app.vvp.verify.build_dag") as mock_build,
             patch("app.vvp.verify.validate_dag") as mock_validate,
+            patch("app.vvp.verify._find_leaf_credentials") as mock_find_leaves,
+            patch("app.vvp.acdc.validate_credential_chain") as mock_chain,
         ):
             mock_vvp.return_value = MagicMock(evd="http://example.com/dossier")
-            mock_passport.return_value = MagicMock(header=MagicMock(kid="EAbc123456789012345678901234567890"))
+            mock_passport.return_value = MagicMock(header=MagicMock(kid="http://witness.example.com/oobi/EAbc123456789012345678901234567890/witness/EXyz"))
             mock_binding.return_value = None
             mock_sig.return_value = None
             mock_fetch.return_value = b'[]'
-            mock_parse.return_value = []
+            mock_parse.return_value = ([], {})
             mock_dag = MagicMock()
             mock_dag.root_said = "SAID123"
             mock_build.return_value = mock_dag
             mock_validate.return_value = None
+            mock_find_leaves.return_value = ["SAID123"]
+            mock_chain.return_value = True
 
             req = VerifyRequest(passport_jwt="test", context=valid_context)
             req_id, resp = await verify_vvp(req, "valid-header")
@@ -579,10 +595,10 @@ class TestVerifyVVPIntegration:
             passport_claim = resp.claims[0].children[0].node
             dossier_claim = resp.claims[0].children[1].node
 
-            # Passport evidence
+            # Passport evidence (Tier 2 uses signature_valid,tier2)
             assert any("kid=" in e for e in passport_claim.evidence)
             assert "binding_valid" in passport_claim.evidence
-            assert "signature_valid" in passport_claim.evidence
+            assert "signature_valid,tier2" in passport_claim.evidence
 
             # Dossier evidence
             assert any("fetched=" in e for e in dossier_claim.evidence)

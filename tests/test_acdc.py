@@ -207,23 +207,26 @@ class TestValidateCredentialChain:
         """Test credential chain that leads to trusted root."""
         root_aid = "D" + "R" * 43
         intermediate_said = "E" + "I" * 43
+        leaf_issuer = "D" + "M" * 43
         trusted_roots = {root_aid}
 
-        # Intermediate credential from root
+        # Intermediate credential from root (has issuee for leaf issuer)
         intermediate = ACDC(
             version="",
             said=intermediate_said,
             issuer_aid=root_aid,
             schema_said="",
+            attributes={"i": leaf_issuer},  # Issuee binding
             raw={}
         )
 
-        # Leaf credential from intermediate
+        # Leaf credential from intermediate (has issuee for downstream)
         leaf = ACDC(
             version="",
             said="E" + "L" * 43,
-            issuer_aid="D" + "M" * 43,  # Some other issuer
+            issuer_aid=leaf_issuer,
             schema_said="",
+            attributes={"i": "D" + "H" * 43},  # Issuee binding
             edges={"parent": {"n": intermediate_said}},
             raw={}
         )
@@ -246,6 +249,7 @@ class TestValidateCredentialChain:
             said="E" + "A" * 43,
             issuer_aid="D" + "U" * 43,  # Untrusted issuer
             schema_said="",
+            attributes={"i": "D" + "H" * 43},  # Has issuee but untrusted root
             raw={}
         )
 
@@ -262,6 +266,7 @@ class TestValidateCredentialChain:
             said="E" + "A" * 43,
             issuer_aid="D" + "X" * 43,
             schema_said="",
+            attributes={"i": "D" + "H" * 43},  # Has issuee
             edges={"parent": {"n": "E" + "M" * 43}},  # Missing from dossier
             raw={}
         )
@@ -283,6 +288,7 @@ class TestValidateCredentialChain:
             said=said1,
             issuer_aid="D" + "X" * 43,
             schema_said="",
+            attributes={"i": "D" + "H" * 43},  # Has issuee
             edges={"parent": {"n": said2}},
             raw={}
         )
@@ -292,6 +298,7 @@ class TestValidateCredentialChain:
             said=said2,
             issuer_aid="D" + "Y" * 43,
             schema_said="",
+            attributes={"i": "D" + "H" * 43},  # Has issuee
             edges={"parent": {"n": said1}},
             raw={}
         )
@@ -316,6 +323,7 @@ class TestValidateCredentialChain:
                 said=said,
                 issuer_aid="D" + "X" * 43,
                 schema_said="",
+                attributes={"i": "D" + "H" * 43},  # Has issuee
                 edges={"parent": {"n": prev_said}} if prev_said else None,
                 raw={}
             )
@@ -367,24 +375,26 @@ class TestCredentialTypeValidation:
         """Test that APE credentials are validated during chain walk."""
         root_aid = "D" + "R" * 43
         le_said = "E" + "L" * 43
+        ape_issuer = "D" + "I" * 43
         trusted_roots = {root_aid}
 
-        # LE (Legal Entity) credential from root
+        # LE (Legal Entity) credential from root (has issuee for APE issuer)
         le_cred = ACDC(
             version="",
             said=le_said,
             issuer_aid=root_aid,
             schema_said="",
-            attributes={"LEI": "1234567890"},
+            attributes={"LEI": "1234567890", "i": ape_issuer},  # Issuee binding
             raw={}
         )
 
-        # APE credential with vetting edge to LE
+        # APE credential with vetting edge to LE (has issuee)
         ape_cred = ACDC(
             version="",
             said="E" + "A" * 43,
-            issuer_aid="D" + "I" * 43,
+            issuer_aid=ape_issuer,
             schema_said="",
+            attributes={"i": "D" + "H" * 43},  # Issuee binding
             edges={"vetting": {"n": le_said}},
             raw={}
         )
@@ -628,25 +638,26 @@ class TestCredentialTypeValidation:
         """Test TNAlloc chain validates TN allocation against parent."""
         root_aid = "D" + "R" * 43
         parent_said = "E" + "P" * 43
+        child_issuer = "D" + "I" * 43
         trusted_roots = {root_aid}
 
-        # Parent TNAlloc
+        # Parent TNAlloc (has issuee for child issuer)
         parent = ACDC(
             version="",
             said=parent_said,
             issuer_aid=root_aid,
             schema_said="",
-            attributes={"tn": ["+1*"]},
+            attributes={"tn": ["+1*"], "i": child_issuer},  # Issuee binding
             raw={}
         )
 
-        # Child TNAlloc with subset allocation
+        # Child TNAlloc with subset allocation (has issuee)
         child = ACDC(
             version="",
             said="E" + "C" * 43,
-            issuer_aid="D" + "I" * 43,
+            issuer_aid=child_issuer,
             schema_said="",
-            attributes={"tn": ["+1555*"]},
+            attributes={"tn": ["+1555*"], "i": "D" + "H" * 43},  # Issuee binding
             edges={"jl": {"n": parent_said}},
             raw={}
         )
@@ -774,4 +785,193 @@ class TestSchemaValidation:
         with pytest.raises(ACDCChainInvalid, match="unknown schema SAID"):
             await validate_credential_chain(
                 acdc, trusted_roots, {}, validate_schemas=True
+            )
+
+
+# =============================================================================
+# Issuee Binding Validation Tests (Sprint 12)
+# =============================================================================
+
+class TestIssueeBinding:
+    """Tests for issuee binding validation per VVP §6.3.5."""
+
+    def test_credential_with_issuee_valid(self):
+        """Credential with 'i' field (issuee) passes validation."""
+        from app.vvp.acdc import validate_issuee_binding
+
+        acdc = ACDC(
+            version="",
+            said="E" + "A" * 43,
+            issuer_aid="D" + "I" * 43,
+            schema_said="E" + "S" * 43,
+            attributes={"i": "D" + "H" * 43, "name": "Test"},  # Has issuee
+            raw={}
+        )
+
+        # Should not raise
+        validate_issuee_binding(acdc, is_root_credential=False)
+
+    def test_credential_with_issuee_field_valid(self):
+        """Credential with 'issuee' field passes validation."""
+        from app.vvp.acdc import validate_issuee_binding
+
+        acdc = ACDC(
+            version="",
+            said="E" + "A" * 43,
+            issuer_aid="D" + "I" * 43,
+            schema_said="E" + "S" * 43,
+            attributes={"issuee": "D" + "H" * 43, "name": "Test"},
+            raw={}
+        )
+
+        # Should not raise
+        validate_issuee_binding(acdc, is_root_credential=False)
+
+    def test_credential_with_holder_field_valid(self):
+        """Credential with 'holder' field passes validation."""
+        from app.vvp.acdc import validate_issuee_binding
+
+        acdc = ACDC(
+            version="",
+            said="E" + "A" * 43,
+            issuer_aid="D" + "I" * 43,
+            schema_said="E" + "S" * 43,
+            attributes={"holder": "D" + "H" * 43, "name": "Test"},
+            raw={}
+        )
+
+        # Should not raise
+        validate_issuee_binding(acdc, is_root_credential=False)
+
+    def test_credential_without_issuee_raises(self):
+        """Credential without issuee field fails validation (bearer token)."""
+        from app.vvp.acdc import validate_issuee_binding
+
+        acdc = ACDC(
+            version="",
+            said="E" + "A" * 43,
+            issuer_aid="D" + "I" * 43,
+            schema_said="E" + "S" * 43,
+            attributes={"name": "Test"},  # No issuee field
+            raw={}
+        )
+
+        with pytest.raises(ACDCChainInvalid, match="bearer token"):
+            validate_issuee_binding(acdc, is_root_credential=False)
+
+    def test_root_credential_no_issuee_allowed(self):
+        """Root credentials (GLEIF/QVI) may lack issuee."""
+        from app.vvp.acdc import validate_issuee_binding
+
+        acdc = ACDC(
+            version="",
+            said="E" + "A" * 43,
+            issuer_aid="D" + "I" * 43,
+            schema_said="E" + "S" * 43,
+            attributes={"name": "Root Credential"},  # No issuee
+            raw={}
+        )
+
+        # Should not raise for root credentials
+        validate_issuee_binding(acdc, is_root_credential=True)
+
+    def test_credential_without_attributes_raises(self):
+        """Credential with no attributes fails (can't verify issuee)."""
+        from app.vvp.acdc import validate_issuee_binding
+
+        acdc = ACDC(
+            version="",
+            said="E" + "A" * 43,
+            issuer_aid="D" + "I" * 43,
+            schema_said="E" + "S" * 43,
+            attributes=None,  # No attributes at all
+            raw={}
+        )
+
+        with pytest.raises(ACDCChainInvalid, match="missing attributes"):
+            validate_issuee_binding(acdc, is_root_credential=False)
+
+    def test_issuee_mismatch_raises(self):
+        """Credential with wrong issuee AID fails validation."""
+        from app.vvp.acdc import validate_issuee_binding
+
+        expected_aid = "D" + "E" * 43
+        actual_aid = "D" + "F" * 43
+
+        acdc = ACDC(
+            version="",
+            said="E" + "A" * 43,
+            issuer_aid="D" + "I" * 43,
+            schema_said="E" + "S" * 43,
+            attributes={"i": actual_aid},
+            raw={}
+        )
+
+        with pytest.raises(ACDCChainInvalid, match="Issuee mismatch"):
+            validate_issuee_binding(
+                acdc,
+                is_root_credential=False,
+                expected_issuee_aid=expected_aid
+            )
+
+    def test_expected_issuee_matches(self):
+        """Credential with matching expected issuee passes."""
+        from app.vvp.acdc import validate_issuee_binding
+
+        expected_aid = "D" + "E" * 43
+
+        acdc = ACDC(
+            version="",
+            said="E" + "A" * 43,
+            issuer_aid="D" + "I" * 43,
+            schema_said="E" + "S" * 43,
+            attributes={"i": expected_aid},
+            raw={}
+        )
+
+        # Should not raise
+        validate_issuee_binding(
+            acdc,
+            is_root_credential=False,
+            expected_issuee_aid=expected_aid
+        )
+
+    @pytest.mark.asyncio
+    async def test_chain_validation_with_bearer_token_fails(self):
+        """Chain validation fails when non-root credential is bearer token."""
+        root_aid = "D" + "R" * 43
+        child_issuer = "D" + "C" * 43
+        trusted_roots = {root_aid}
+
+        # Root credential (issued by GLEIF) - has issuee as it's going to child
+        root_acdc = ACDC(
+            version="",
+            said="E" + "R" * 43,
+            issuer_aid=root_aid,
+            schema_said="E" + "S" * 43,
+            attributes={"LEI": "1234567890", "i": child_issuer},  # Has issuee
+            raw={}
+        )
+
+        # Leaf APE credential without issuee (bearer token)
+        leaf_acdc = ACDC(
+            version="",
+            said="E" + "A" * 43,
+            issuer_aid=child_issuer,
+            schema_said="E" + "S" * 43,
+            attributes={"name": "Test APE"},  # No 'i' or 'issuee' - bearer token!
+            edges={"vetting": {"n": "E" + "R" * 43}},
+            raw={}
+        )
+
+        dossier_acdcs = {
+            "E" + "R" * 43: root_acdc,
+            "E" + "A" * 43: leaf_acdc,
+        }
+
+        with pytest.raises(ACDCChainInvalid, match="bearer token"):
+            await validate_credential_chain(
+                leaf_acdc,
+                trusted_roots,
+                dossier_acdcs
             )

@@ -302,19 +302,21 @@ class TestWitnessValidation:
     """Test witness receipt validation."""
 
     def test_insufficient_witnesses_raises(self):
-        """Insufficient witness receipts raises error."""
+        """Insufficient witness receipts raises error in strict mode."""
         pk, _ = generate_keypair()
 
         events = [
             make_kel_event(EventType.ICP, 0, pk, toad=2),  # Requires 2 witnesses
         ]
 
-        with pytest.raises(ResolutionFailedError, match="Insufficient witness"):
+        # In strict_validation mode, missing receipts raises ResolutionFailedError
+        with pytest.raises(ResolutionFailedError, match="No witness receipts"):
             _find_key_state_at_time(
                 aid="BAID",
                 events=events,
                 reference_time=datetime(2024, 1, 15),
-                min_witnesses=None  # Will use toad=2
+                min_witnesses=None,  # Will use toad=2
+                strict_validation=True  # Strict mode validates witness receipts
             )
 
     def test_sufficient_witnesses_passes(self):

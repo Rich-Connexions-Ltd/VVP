@@ -16,8 +16,6 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-import pysodium
-
 from .cesr import CESRMessage, parse_cesr_stream as cesr_parse, is_cesr_stream
 from .exceptions import (
     DelegationNotSupportedError,
@@ -653,6 +651,8 @@ def _verify_signature(message: bytes, signature: bytes, public_key: bytes) -> bo
         return False
 
     try:
+        # Lazy import to avoid requiring pysodium for parsing-only operations
+        import pysodium
         pysodium.crypto_sign_verify_detached(signature, message, public_key)
         return True
     except Exception:

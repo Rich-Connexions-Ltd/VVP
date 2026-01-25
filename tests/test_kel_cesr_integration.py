@@ -16,6 +16,17 @@ from pathlib import Path
 
 import pytest
 
+# Check if pysodium/libsodium is available for actual signature verification
+try:
+    import pysodium
+    PYSODIUM_AVAILABLE = True
+except (ImportError, ValueError):
+    PYSODIUM_AVAILABLE = False
+
+requires_pysodium = pytest.mark.skipif(
+    not PYSODIUM_AVAILABLE, reason="requires pysodium/libsodium for cryptographic verification"
+)
+
 from app.vvp.keri.cesr import parse_cesr_stream, is_cesr_stream
 from app.vvp.keri.exceptions import KELChainInvalidError, ResolutionFailedError
 from app.vvp.keri.kel_parser import (
@@ -136,6 +147,7 @@ class TestCanonicalValidationIntegration:
 class TestWitnessValidationIntegration:
     """Integration tests for witness receipt validation."""
 
+    @requires_pysodium
     def test_witness_receipts_end_to_end(self):
         """Full witness validation from fixture."""
         fixture = load_fixture("witness_receipts_keripy.json")

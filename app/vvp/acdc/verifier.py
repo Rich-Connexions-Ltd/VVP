@@ -259,7 +259,13 @@ async def validate_credential_chain(
             validate_schema_said(current, strict=True)
 
         # Check if issuer is a trusted root
-        if current.issuer_aid in trusted_roots:
+        is_at_root = current.issuer_aid in trusted_roots
+
+        # Validate issuee binding per §6.3.5 (non-bearer token check)
+        # Root credentials may lack issuee, leaf credentials MUST have it
+        validate_issuee_binding(current, is_root_credential=is_at_root)
+
+        if is_at_root:
             return current.issuer_aid
 
         # If no edges and not trusted root, chain is invalid
@@ -320,6 +326,60 @@ async def validate_credential_chain(
         raise
     except Exception as e:
         raise ACDCChainInvalid(f"Chain validation failed: {e}")
+
+
+def validate_issuee_binding(
+    acdc: ACDC,
+    is_root_credential: bool = False,
+    expected_issuee_aid: Optional[str] = None
+) -> None:
+    """Validate ACDC has issuee binding (not a bearer token).
+
+    Per VVP §6.3.5, credentials MUST NOT be bearer tokens - they must have
+    explicit issuee binding. The issuee field identifies the entity to whom
+    the credential was issued.
+
+    Root credentials (from GLEIF/QVIs) may lack issuee as they establish
+    the trust anchor. Leaf credentials (APE/DE/TNAlloc) MUST have issuee.
+
+    Args:
+        acdc: The ACDC to validate.
+        is_root_credential: If True, allows missing issuee for trust anchor.
+        expected_issuee_aid: If provided, verifies issuee matches this AID.
+
+    Raises:
+        ACDCChainInvalid: If issuee binding is missing or mismatched.
+            Maps to ACDC_PROOF_MISSING error code.
+    """
+    # Root credentials may lack issuee (they establish the trust anchor)
+    if is_root_credential:
+        return
+
+    if not acdc.attributes:
+        raise ACDCChainInvalid(
+            f"Credential {acdc.said[:20]}... missing attributes - cannot verify issuee binding"
+        )
+
+    # Check for issuee in various field names
+    issuee = (
+        acdc.attributes.get("i") or
+        acdc.attributes.get("issuee") or
+        acdc.attributes.get("holder")
+    )
+
+    if not issuee:
+        cred_type = acdc.credential_type or "unknown"
+        raise ACDCChainInvalid(
+            f"{cred_type} credential {acdc.said[:20]}... is a bearer token "
+            f"(missing issuee binding per §6.3.5)"
+        )
+
+    # If expected issuee provided, verify match
+    if expected_issuee_aid and issuee != expected_issuee_aid:
+        raise ACDCChainInvalid(
+            f"Issuee mismatch: expected {expected_issuee_aid[:20]}..., "
+            f"got {issuee[:20]}..."
+        )
 
 
 def validate_ape_credential(acdc: ACDC) -> None:

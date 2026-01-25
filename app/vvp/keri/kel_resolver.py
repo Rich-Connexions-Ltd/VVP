@@ -160,7 +160,8 @@ async def resolve_key_state(
         aid=aid,
         events=events,
         reference_time=reference_time,
-        min_witnesses=min_witnesses
+        min_witnesses=min_witnesses,
+        strict_validation=not _allow_test_mode  # Strict mode validates witness sigs (§7.3)
     )
 
     # Cache the result with the query reference_time for future lookups
@@ -231,7 +232,7 @@ async def _fetch_and_validate_oobi(
         events,
         validate_saids=strict_validation,  # Strict mode validates SAIDs
         use_canonical=strict_validation,   # Strict mode uses canonical serialization
-        validate_witnesses=False  # Witness validation handled in _find_key_state_at_time
+        validate_witnesses=strict_validation  # Strict mode validates witness signatures (§7.3)
     )
 
     return oobi_result, events
@@ -296,7 +297,8 @@ def _find_key_state_at_time(
     aid: str,
     events: List[KELEvent],
     reference_time: datetime,
-    min_witnesses: Optional[int]
+    min_witnesses: Optional[int],
+    strict_validation: bool = False
 ) -> KeyState:
     """Find the key state that was valid at reference time T.
 
@@ -308,6 +310,7 @@ def _find_key_state_at_time(
         events: Parsed and validated KEL events.
         reference_time: The reference time T.
         min_witnesses: Minimum witness receipts required.
+        strict_validation: If True, validates witness signatures (production).
 
     Returns:
         KeyState representing keys valid at T.
@@ -315,6 +318,7 @@ def _find_key_state_at_time(
     Raises:
         KeyNotYetValidError: If T is before the first establishment event.
         ResolutionFailedError: If insufficient witness receipts.
+        StateInvalidError: If witness signature validation fails (strict mode).
     """
     # Find all establishment events
     establishment_events = [e for e in events if e.is_establishment]
@@ -366,8 +370,8 @@ def _find_key_state_at_time(
                 f"Reference time {reference_time.isoformat()} is before inception"
             )
 
-    # Validate witness receipts
-    _validate_witness_receipts(valid_event, min_witnesses)
+    # Validate witness receipts (§7.3)
+    _validate_witness_receipts(valid_event, min_witnesses, strict_validation)
 
     # Build KeyState
     return KeyState(
@@ -440,16 +444,27 @@ def _get_event_time(event: KELEvent) -> Optional[datetime]:
     return None
 
 
-def _validate_witness_receipts(event: KELEvent, min_witnesses: Optional[int]) -> None:
+def _validate_witness_receipts(
+    event: KELEvent,
+    min_witnesses: Optional[int],
+    strict_validation: bool = False
+) -> None:
     """Validate that an event has sufficient witness receipts.
+
+    Per VVP §7.3, witness receipts MUST be validated in production.
 
     Args:
         event: The event to validate.
         min_witnesses: Minimum receipts required (uses event's toad if None).
+        strict_validation: If True, validates signatures (production).
+            If False, only checks count (test mode).
 
     Raises:
-        ResolutionFailedError: If insufficient receipts.
+        ResolutionFailedError: If no receipts in strict mode.
+        StateInvalidError: If insufficient valid receipts in strict mode.
     """
+    from .exceptions import StateInvalidError
+
     # Determine threshold
     if min_witnesses is not None:
         threshold = min_witnesses
@@ -461,14 +476,45 @@ def _validate_witness_receipts(event: KELEvent, min_witnesses: Optional[int]) ->
     if threshold <= 0:
         return
 
-    # Count valid receipts
-    valid_receipts = len(event.witness_receipts)
+    # Check receipt count first
+    receipt_count = len(event.witness_receipts)
 
-    if valid_receipts < threshold:
-        raise ResolutionFailedError(
-            f"Insufficient witness receipts: got {valid_receipts}, "
-            f"need {threshold} (toad={event.toad})"
-        )
+    if receipt_count == 0:
+        if strict_validation:
+            # In strict mode, no receipts is a resolution failure (may be recoverable)
+            raise ResolutionFailedError(
+                f"No witness receipts for event (need {threshold} per toad)"
+            )
+        return  # In non-strict mode, allow missing receipts
+
+    if receipt_count < threshold:
+        if strict_validation:
+            # In strict mode, insufficient receipts is a state validity error
+            raise StateInvalidError(
+                f"Insufficient witness receipts: got {receipt_count}, "
+                f"need {threshold} (toad={event.toad})"
+            )
+        else:
+            # In non-strict mode, log warning but allow
+            raise ResolutionFailedError(
+                f"Insufficient witness receipts: got {receipt_count}, "
+                f"need {threshold} (toad={event.toad})"
+            )
+
+    # In strict mode, validate signatures using kel_parser
+    if strict_validation:
+        from .kel_parser import validate_witness_receipts as validate_witness_sigs
+        from .keri_canonical import canonical_serialize
+
+        # Compute signing input for signature verification
+        # Per KERI spec, witnesses sign the canonical serialization of the event
+        signing_input = canonical_serialize(event.raw)
+
+        # Validate signatures - this raises if validation fails
+        try:
+            validate_witness_sigs(event, signing_input, threshold)
+        except Exception as e:
+            raise StateInvalidError(f"Witness signature validation failed: {e}")
 
 
 async def resolve_key_state_tier1_fallback(kid: str) -> KeyState:

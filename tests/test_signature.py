@@ -185,7 +185,7 @@ class TestSignatureVerification:
         # Create JWT with D prefix kid
         kid = make_keri_aid(verkey, transferable=False)
         header = {"alg": "EdDSA", "ppt": "vvp", "kid": kid}
-        payload = {"iat": 1700000000, "orig": {"tn": "+1"}, "dest": {"tn": ["+2"]}, "evd": "x"}
+        payload = {"iat": 1700000000, "orig": {"tn": "+12025551234"}, "dest": {"tn": ["+12025555678"]}, "evd": "x"}
 
         h_b64 = base64.urlsafe_b64encode(json.dumps(header).encode()).rstrip(b"=").decode()
         p_b64 = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
@@ -238,9 +238,9 @@ class TestSignatureVerification:
         jwt = create_signed_jwt(seed, verkey)
         parts = jwt.split(".")
 
-        # Modify header (change ppt value)
+        # Modify header by adding a new field (doesn't affect parsing but breaks signature)
         header = json.loads(base64.urlsafe_b64decode(parts[0] + "=="))
-        header["typ"] = "modified"
+        header["x-modified"] = "true"  # Add field that won't affect parsing
         parts[0] = base64.urlsafe_b64encode(json.dumps(header).encode()).rstrip(b"=").decode()
 
         passport = parse_passport(".".join(parts))
