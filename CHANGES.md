@@ -3,7 +3,7 @@
 ## Sprint 14: Tier 2 Completion - Schema, Edge Semantics, TNAlloc
 
 **Date:** 2026-01-25
-**Commit:** `pending`
+**Commit:** `0b7fe93`
 
 ### Files Changed
 
