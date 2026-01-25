@@ -1,5 +1,53 @@
 # VVP Verifier Change Log
 
+## CESR Parsing & Provenant Witness Integration
+
+**Date:** 2026-01-25
+**Commit:** `565c8bf`
+
+### Files Changed
+
+| File | Action | Description |
+|------|--------|-------------|
+| `app/vvp/keri/cesr.py` | Created | CESR stream parser for `application/json+cesr` |
+| `app/vvp/keri/keri_canonical.py` | Created | KERI canonical field ordering per spec |
+| `app/vvp/keri/tel_client.py` | Created | TEL client with Provenant staging witnesses |
+| `app/vvp/keri/kel_parser.py` | Modified | Enhanced with CESR attachment parsing |
+| `app/vvp/keri/kel_resolver.py` | Modified | Pass content-type to parser |
+| `app/vvp/keri/oobi.py` | Modified | Improved OOBI URL handling |
+| `ROADMAP.md` | Created | Strategic roadmap with tier architecture |
+| `app/Documentation/VVP_Implementation_Checklist.md` | Modified | Updated to v3.2 (60% complete) |
+| `scripts/test_witness_resolution.py` | Created | Standalone witness test script |
+| `tests/test_cesr_parser.py` | Created | CESR parser unit tests |
+| `tests/test_canonicalization.py` | Created | Canonical ordering tests |
+| `tests/fixtures/keri/*.json` | Created | Test fixtures from keripy |
+
+### Summary
+
+Integrated with Provenant staging witnesses for live KERI ecosystem testing.
+
+**Key Changes:**
+- CESR stream parsing for witness OOBI responses
+- KERI-compliant field ordering for serialization
+- TEL client infrastructure for revocation checking
+- Provenant witness endpoints: witness4/5/6.stage.provenant.net:5631
+- Verified live resolution with test AID `EGay5ufBqAanbhFa_qe-KMFUPJHn8J0MFba96yyWRrLF`
+
+**Documentation:**
+- Created ROADMAP.md with tier architecture overview
+- Updated checklist to reflect implementation progress (60%)
+- Archived old spec versions (v1.1, v1.2, v1.3)
+
+### Normative Note: `kid` Field Semantics
+
+Per VVP draft and KERI specifications:
+
+> **`kid` is an OOBI reference to a KERI autonomous identifier whose historical key state, witness receipts, and delegations MUST be resolved and validated to determine which signing key was authorised at the PASSporT reference time.**
+
+This means `kid` is NOT a generic JWT key ID - resolution requires OOBI dereferencing and KEL validation at reference time T.
+
+---
+
 ## Phase 7: KERI Key State Resolution (Tier 2)
 
 **Date:** 2026-01-24
