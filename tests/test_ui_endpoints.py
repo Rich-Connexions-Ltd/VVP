@@ -220,6 +220,81 @@ class TestUIParseJWTPermissiveMode:
 
 
 # =============================================================================
+# Trial PASSporT Integration Test
+# =============================================================================
+
+# This is a real-world PASSporT from Provenant's demo system
+TRIAL_PASSPORT_JWT = (
+    "eyJhbGciOiJFZERTQSIsInR5cCI6InBhc3Nwb3J0IiwicHB0IjoidnZwIiwia2lkIjoiaHR0cDov"
+    "L3dpdG5lc3M1LnN0YWdlLnByb3ZlbmFudC5uZXQ6NTYzMS9vb2JpL0VHYXk1dWZCcUFhbmJoRmFf"
+    "cWUtS01GVVBKSG44SjBNRmJhOTZ5eVdSckxGL3dpdG5lc3MifQ."
+    "eyJvcmlnIjp7InRuIjpbIjQ0Nzg4NDY2NjIwMCJdfSwiZGVzdCI6eyJ0biI6WyI0NDc3Njk3MTAy"
+    "ODUiXX0sImlhdCI6MTc2OTE4MzMwMiwiY2FyZCI6WyJDQVRFR09SSUVTOiIsIkxPR087SEFTSD1z"
+    "aGEyNTYtNDBiYWM2ODZhM2YwYjQ4MjUzZGU1NWIzNGY1NTJjODA3MGJhZjIyZjgxMjU1YWFjNDQ5"
+    "NzIxYzg3OWM3MTZhNDtWQUxVRT1VUkk6aHR0cHM6Ly9vcmlnaW4tY2VsbC1mcmFua2Z1cnQuczMu"
+    "ZXUtY2VudHJhbC0xLmFtYXpvbmF3cy5jb20vYnJhbmQtYXNzZXRzL3JpY2gtY29ubmV4aW9ucy9s"
+    "b2dvLnBuZyIsIk5PVEU7TEVJOjk4NDUwMERFRTc1MzdBMDdZNjE1IiwiT1JHOlJpY2ggQ29ubmV4"
+    "aW9ucyJdLCJjYWxsX3JlYXNvbiI6bnVsbCwiZ29hbCI6bnVsbCwiZXZkIjoiaHR0cHM6Ly9vcmln"
+    "aW4uZGVtby5wcm92ZW5hbnQubmV0L3YxL2FnZW50L3B1YmxpYy9FSGxWWFVKLWRZS3F0UGR2enRk"
+    "Q0ZKRWJreXI2elgyZFgxMmh3ZEU5eDhleS9kb3NzaWVyLmNlc3IiLCJvcmlnSWQiOiIiLCJleHAi"
+    "OjE3NjkxODM2MDIsInJlcXVlc3RfaWQiOiIifQ."
+    "OvoaiAwt1dgPb6gLkK7ufWoL2qzdtmudyyiL38oqB0wfaicGSG4B_QFtHY2vS2w-PYZ6LhN9dWXp"
+    "sOHtpKAXCw"
+)
+
+
+class TestTrialPASSporT:
+    """Integration tests using the Provenant trial PASSporT."""
+
+    def test_trial_passport_decodes_successfully(self):
+        """Trial PASSporT should decode and show content."""
+        response = client.post("/ui/parse-jwt", data={"jwt": TRIAL_PASSPORT_JWT})
+
+        assert response.status_code == 200
+        # Should show decoded content
+        assert "EdDSA" in response.text  # Algorithm
+        assert "vvp" in response.text  # ppt
+        assert "447884666200" in response.text  # orig.tn
+        assert "447769710285" in response.text  # dest.tn
+
+    def test_trial_passport_shows_validation_error(self):
+        """Trial PASSporT has orig.tn as array, should show validation error."""
+        response = client.post("/ui/parse-jwt", data={"jwt": TRIAL_PASSPORT_JWT})
+
+        assert response.status_code == 200
+        # Should show validation warning for orig.tn being an array
+        assert "Validation Warning" in response.text
+        # Should flag the orig.tn issue
+        assert "orig.tn" in response.text.lower() or "array" in response.text.lower()
+
+    def test_trial_passport_shows_spec_reference(self):
+        """Trial PASSporT validation error should include spec reference."""
+        response = client.post("/ui/parse-jwt", data={"jwt": TRIAL_PASSPORT_JWT})
+
+        assert response.status_code == 200
+        # Should show §4.2 spec reference for phone number validation
+        assert "§4.2" in response.text
+
+    def test_trial_passport_shows_vcard(self):
+        """Trial PASSporT contains vCard data that should be displayed."""
+        response = client.post("/ui/parse-jwt", data={"jwt": TRIAL_PASSPORT_JWT})
+
+        assert response.status_code == 200
+        # Should show vCard organization
+        assert "Rich Connexions" in response.text
+        # Should show LEI
+        assert "984500DEE7537A07Y615" in response.text
+
+    def test_trial_passport_shows_evd_url(self):
+        """Trial PASSporT contains evd URL that should be displayed."""
+        response = client.post("/ui/parse-jwt", data={"jwt": TRIAL_PASSPORT_JWT})
+
+        assert response.status_code == 200
+        # Should show the evidence URL
+        assert "dossier.cesr" in response.text
+
+
+# =============================================================================
 # /ui/fetch-dossier Tests
 # =============================================================================
 

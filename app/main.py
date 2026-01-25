@@ -1,4 +1,5 @@
 import base64
+import html
 import json
 import logging
 import os
@@ -637,7 +638,8 @@ async def ui_check_revocation(
     from app.vvp.keri.tel_client import get_tel_client
 
     try:
-        acdc_list = json.loads(acdcs)
+        # Unescape HTML entities (form value may have &quot; etc. from template escaping)
+        acdc_list = json.loads(html.unescape(acdcs))
         client = get_tel_client()
         results = []
 
@@ -696,7 +698,8 @@ async def ui_credential_graph(
     )
 
     try:
-        acdc_list = json.loads(dossier_data)
+        # Unescape HTML entities (form value may have &quot; etc. from template escaping)
+        acdc_list = json.loads(html.unescape(dossier_data))
         dossier_acdcs: dict[str, ACDC] = {}
 
         for acdc_data in acdc_list:
