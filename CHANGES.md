@@ -3,7 +3,7 @@
 ## Phase 9.4: TEL Resolution Architecture Fix
 
 **Date:** 2026-01-25
-**Commit:** `f900fa7`
+**Commit:** `4de5855`
 
 ### Files Changed
 
