@@ -634,8 +634,13 @@ async def ui_check_revocation(
     kid_url: str = Form(""),
     dossier_stream: str = Form(""),
 ):
-    """Check revocation status for credentials and return HTML fragment."""
-    from app.vvp.keri.tel_client import get_tel_client
+    """Check revocation status for credentials and return HTML fragment.
+
+    Extracts TEL events from the dossier stream (instant, no network).
+    If no inline TEL data found, returns UNKNOWN - witness TEL endpoints
+    are typically not publicly accessible.
+    """
+    from app.vvp.keri.tel_client import TELClient, CredentialStatus
 
     try:
         # Unescape HTML entities (form value may have &quot; etc. from template escaping)
@@ -643,36 +648,45 @@ async def ui_check_revocation(
         log.debug(f"check-revocation received acdcs (first 200 chars): {acdcs[:200]}")
         log.debug(f"check-revocation unescaped (first 200 chars): {unescaped[:200]}")
         acdc_list = json.loads(unescaped)
-        client = get_tel_client()
+
+        # Use TEL client for parsing dossier TEL data
+        client = TELClient(timeout=2.0)
         results = []
+
+        # Unescape dossier stream if provided
+        dossier_data = html.unescape(dossier_stream) if dossier_stream else ""
 
         for acdc in acdc_list:
             said = acdc.get("d", "")
             registry_said = acdc.get("ri")
 
-            try:
-                result = await client.check_revocation(
-                    credential_said=said,
-                    registry_said=registry_said,
-                    oobi_url=kid_url if kid_url else None,
-                )
-                results.append(
-                    {
-                        "said": said,
-                        "status": result.status.value,
-                        "source": result.source,
-                        "error": result.error,
-                    }
-                )
-            except Exception as e:
-                results.append(
-                    {
-                        "said": said,
-                        "status": "ERROR",
-                        "source": None,
-                        "error": str(e),
-                    }
-                )
+            # Try to parse TEL from inline dossier data (instant, no network)
+            if dossier_data:
+                try:
+                    result = client.parse_dossier_tel(
+                        dossier_data=dossier_data,
+                        credential_said=said,
+                        registry_said=registry_said,
+                    )
+                    if result.status != CredentialStatus.UNKNOWN:
+                        results.append({
+                            "said": said,
+                            "status": result.status.value,
+                            "source": result.source,
+                            "error": result.error,
+                        })
+                        continue  # Found status from dossier
+                except Exception as e:
+                    log.debug(f"Dossier TEL parse failed for {said[:20]}: {e}")
+
+            # No inline TEL data found - return UNKNOWN
+            # (Witness TEL endpoints are typically not publicly accessible)
+            results.append({
+                "said": said,
+                "status": "UNKNOWN",
+                "source": None,
+                "error": "TEL data not in dossier (live witness query disabled)",
+            })
 
         return templates.TemplateResponse(
             "partials/revocation.html",

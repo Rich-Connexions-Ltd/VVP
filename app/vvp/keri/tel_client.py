@@ -326,6 +326,14 @@ class TELClient:
         # Try JSON first
         try:
             parsed = json.loads(data)
+
+            # Handle Provenant wrapper format: {"details": "...CESR content..."}
+            if isinstance(parsed, dict) and "details" in parsed:
+                details = parsed["details"]
+                if isinstance(details, str):
+                    # Recursively extract from the details string
+                    return self._extract_tel_events(details)
+
             if isinstance(parsed, list):
                 for item in parsed:
                     event = self._parse_tel_event(item)
