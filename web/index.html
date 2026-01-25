@@ -267,100 +267,44 @@
         return claims;
       }
 
-      // Format ACDC claims for display
+      // Format ACDC claims for display - now uses unified card renderer
       function formatACDC(acdc, index, revocationStatus, allAcdcs) {
-        // Determine border/background color based on revocation status
-        let borderColor = '#ccc';
-        let bgColor = '#fafafa';
-        let statusBadge = '';
-
+        // Convert inline TEL revocation status to unified format
+        let unifiedStatus = null;
         if (revocationStatus) {
-          if (revocationStatus.status === 'revoked') {
-            borderColor = '#dc3545';
-            bgColor = '#fff5f5';
-            statusBadge = `<span style="background:#dc3545;color:white;padding:2px 8px;border-radius:12px;font-size:0.75em;margin-left:8px;">🚫 REVOKED</span>`;
-          } else if (revocationStatus.status === 'issued') {
-            borderColor = '#28a745';
-            bgColor = '#f5fff5';
-            statusBadge = `<span style="background:#28a745;color:white;padding:2px 8px;border-radius:12px;font-size:0.75em;margin-left:8px;">✓ ACTIVE</span>`;
-          }
-        } else {
-          // No TEL data - show warning
-          statusBadge = `<span style="background:#ffc107;color:#000;padding:2px 8px;border-radius:12px;font-size:0.75em;margin-left:8px;">⚠ TEL NOT FOUND</span>`;
+          unifiedStatus = {
+            status: revocationStatus.status === 'revoked' ? 'REVOKED' : (revocationStatus.status === 'issued' ? 'ACTIVE' : 'UNKNOWN'),
+            issuance: revocationStatus.issuanceEvent,
+            revocation: revocationStatus.revocationEvent
+          };
         }
 
-        let html = `<div style="border:2px solid ${borderColor};padding:1rem;margin-bottom:1rem;border-radius:4px;background:${bgColor};">`;
+        // Use unified card renderer
+        let html = renderCredentialCard(acdc, {
+          compact: false,
+          showFullDetails: true,
+          revocationStatus: unifiedStatus,
+          allAcdcs: allAcdcs
+        });
 
-        // Header with SAID and status badge
-        const shortSaid = acdc.d ? acdc.d.substring(0, 16) + '...' : 'Unknown';
-        html += `<h4 style="margin-top:0;margin-bottom:0.5rem;">ACDC #${index + 1} <span style="font-weight:normal;font-size:0.8em;color:#666;">(${shortSaid})</span>${statusBadge}</h4>`;
+        // Add action buttons after the card
+        html = html.replace('</div>$', '');  // Remove last closing div temporarily
 
-        // Extract and show key claims prominently
-        const keyClaims = acdc.a ? extractKeyClaims(acdc.a) : [];
-        if (keyClaims.length > 0) {
-          html += `<div style="background:#e8f4e8;padding:0.5rem;border-radius:4px;margin-bottom:0.5rem;">`;
-          for (const claim of keyClaims) {
-            if (claim.isUrl) {
-              html += `<div style="margin:2px 0;"><strong>${claim.icon} ${claim.label}:</strong> <a href="${claim.value}" target="_blank" style="word-break:break-all;">${claim.value.substring(0, 60)}...</a></div>`;
-            } else {
-              html += `<div style="margin:2px 0;"><strong>${claim.icon} ${claim.label}:</strong> ${claim.value}</div>`;
-            }
-          }
-          html += `</div>`;
+        // Find position to insert buttons (before the last </div>)
+        const insertPos = html.lastIndexOf('</div>');
+        const beforeButtons = html.substring(0, insertPos);
+        const afterButtons = html.substring(insertPos);
+
+        let buttonsHtml = `<div style="margin-top:0.5rem;display:flex;gap:0.5rem;flex-wrap:wrap;border-top:1px solid rgba(0,0,0,0.1);padding-top:0.5rem;">`;
+
+        // View Chain button (only for non-root credentials with edges)
+        if (acdc.e && Object.keys(acdc.e).filter(k => k !== 'd' && k !== 'n').length > 0) {
+          buttonsHtml += `<button onclick="showCredentialGraph('${acdc.d}')" style="font-size:0.85em;padding:4px 8px;cursor:pointer;background:#0066cc;color:white;border:none;border-radius:4px;">🔗 View Chain</button>`;
         }
 
-        html += `<table style="width:100%;border-collapse:collapse;font-size:0.9em;">`;
+        buttonsHtml += `</div>`;
 
-        // Issuer (i field) - with expanded details
-        if (acdc.i) {
-          html += `<tr><td style="padding:4px;border-bottom:1px solid #eee;width:100px;vertical-align:top;"><strong>Issuer</strong></td><td style="padding:4px;border-bottom:1px solid #eee;">${formatIssuerDisplay(acdc.i, allAcdcs || [])}</td></tr>`;
-        }
-
-        // Schema (s field)
-        if (acdc.s) {
-          html += `<tr><td style="padding:4px;border-bottom:1px solid #eee;"><strong>Schema</strong></td><td style="padding:4px;border-bottom:1px solid #eee;font-family:monospace;font-size:0.85em;word-break:break-all;">${acdc.s.substring(0, 24)}...</td></tr>`;
-        }
-
-        // Registry identifier (ri field) - for TEL lookup
-        if (acdc.ri) {
-          html += `<tr><td style="padding:4px;border-bottom:1px solid #eee;"><strong>Registry</strong></td><td style="padding:4px;border-bottom:1px solid #eee;font-family:monospace;font-size:0.85em;word-break:break-all;">${acdc.ri.substring(0, 24)}...</td></tr>`;
-        }
-
-        // Show revocation details if available
-        if (revocationStatus) {
-          if (revocationStatus.issuanceEvent) {
-            const issDate = revocationStatus.issuanceEvent.dt || 'Unknown';
-            html += `<tr><td style="padding:4px;border-bottom:1px solid #eee;"><strong>Issued</strong></td><td style="padding:4px;border-bottom:1px solid #eee;">${issDate}</td></tr>`;
-          }
-          if (revocationStatus.revocationEvent) {
-            const revDate = revocationStatus.revocationEvent.dt || 'Unknown';
-            html += `<tr><td style="padding:4px;border-bottom:1px solid #eee;color:#dc3545;"><strong>Revoked</strong></td><td style="padding:4px;border-bottom:1px solid #eee;color:#dc3545;">${revDate}</td></tr>`;
-          }
-        }
-
-        // Edges (e field) - show as chain links
-        if (acdc.e && typeof acdc.e === 'object') {
-          const edgeNames = Object.keys(acdc.e).filter(k => k !== 'd');
-          if (edgeNames.length > 0) {
-            html += `<tr><td style="padding:4px;border-bottom:1px solid #eee;vertical-align:top;"><strong>Links to</strong></td><td style="padding:4px;border-bottom:1px solid #eee;">`;
-            for (const name of edgeNames) {
-              const edge = acdc.e[name];
-              if (edge && edge.n) {
-                html += `<div style="margin:2px 0;">🔗 <em>${name}</em>: ${edge.n.substring(0, 20)}...</div>`;
-              }
-            }
-            html += `</td></tr>`;
-          }
-        }
-
-        // Collapsible details
-        html += `</table>`;
-        html += `<details style="margin-top:0.5rem;"><summary style="cursor:pointer;font-size:0.85em;color:#666;">Full Details</summary>`;
-        html += `<pre style="background:#fff;padding:0.5rem;overflow:auto;font-size:0.75em;max-height:200px;">${JSON.stringify(acdc, null, 2)}</pre>`;
-        html += `</details>`;
-
-        html += `</div>`;
-        return html;
+        return beforeButtons + buttonsHtml + afterButtons;
       }
 
       // Parse JWT button
@@ -534,7 +478,7 @@
       }
 
       // Helper to display dossier data
-      function displayDossier(data, contentType) {
+      async function displayDossier(data, contentType, autoCheckRevocation = true) {
         const output = document.getElementById("dossierOutput");
 
         let acdcs = [];
@@ -565,6 +509,39 @@
         const duplicateCount = acdcs.length - uniqueAcdcs.length;
         acdcs = uniqueAcdcs;
 
+        // Store ACDCs globally
+        currentAcdcs = acdcs;
+        currentOobiUrl = currentEvdUrl;
+
+        // Convert inline TEL revocation map to unified format and store globally
+        currentRevocationStatus = {};
+        for (const [said, status] of Object.entries(revocationMap)) {
+          currentRevocationStatus[said] = {
+            status: status.status === 'revoked' ? 'REVOKED' : (status.status === 'issued' ? 'ACTIVE' : 'UNKNOWN'),
+            issuance: status.issuanceEvent,
+            revocation: status.revocationEvent,
+            source: 'inline_tel'
+          };
+        }
+
+        // Render initial display
+        renderDossierView(acdcs, telEvents, revocationMap, contentType, duplicateCount, data);
+
+        // Auto-check revocation for ACDCs without inline TEL status
+        if (autoCheckRevocation && acdcs.length > 0) {
+          const acdcsNeedingCheck = acdcs.filter(acdc => !revocationMap[acdc.d]);
+          if (acdcsNeedingCheck.length > 0) {
+            console.log(`Auto-checking revocation for ${acdcsNeedingCheck.length} ACDCs...`);
+            await autoCheckRevocationStatus(acdcsNeedingCheck);
+            // Re-render with updated status
+            renderDossierView(acdcs, telEvents, revocationMap, contentType, duplicateCount, data);
+          }
+        }
+      }
+
+      // Render the dossier view (separated for re-rendering after revocation check)
+      function renderDossierView(acdcs, telEvents, revocationMap, contentType, duplicateCount, rawData) {
+        const output = document.getElementById("dossierOutput");
         let html = `<p><strong>Content-Type:</strong> ${contentType || 'application/json'}</p>`;
 
         // Show TEL summary
@@ -572,12 +549,25 @@
           const issCount = telEvents.filter(e => e.t === 'iss' || e.t === 'bis').length;
           const revCount = telEvents.filter(e => e.t === 'rev' || e.t === 'brv').length;
           html += `<p style="background:#e8e8ff;padding:0.5rem;border-radius:4px;font-size:0.9em;">`;
-          html += `<strong>📋 TEL Events:</strong> ${telEvents.length} total (${issCount} issuance, ${revCount} revocation)`;
+          html += `<strong>📋 Inline TEL Events:</strong> ${telEvents.length} total (${issCount} issuance, ${revCount} revocation)`;
           html += `</p>`;
-        } else if (acdcs.length > 0) {
-          html += `<p style="background:#fff3cd;padding:0.5rem;border-radius:4px;font-size:0.9em;">`;
-          html += `<strong>⚠️ No TEL events found in dossier.</strong> Revocation status cannot be verified. `;
-          html += `This may indicate the dossier is incomplete or TEL data is served separately.`;
+        }
+
+        // Show live revocation check summary
+        const liveChecks = Object.values(currentRevocationStatus).filter(s => s.source === 'live_witness');
+        if (liveChecks.length > 0) {
+          const activeCount = liveChecks.filter(s => s.status === 'ACTIVE').length;
+          const revokedCount = liveChecks.filter(s => s.status === 'REVOKED').length;
+          const unknownCount = liveChecks.filter(s => s.status === 'UNKNOWN').length;
+          html += `<p style="background:#d4edda;padding:0.5rem;border-radius:4px;font-size:0.9em;">`;
+          html += `<strong>🔍 Live Revocation Check:</strong> `;
+          if (activeCount > 0) html += `<span style="color:#28a745;">${activeCount} active</span> `;
+          if (revokedCount > 0) html += `<span style="color:#dc3545;">${revokedCount} revoked</span> `;
+          if (unknownCount > 0) html += `<span style="color:#ffc107;">${unknownCount} unknown</span>`;
+          html += `</p>`;
+        } else if (acdcs.length > 0 && telEvents.length === 0) {
+          html += `<p style="background:#fff3cd;padding:0.5rem;border-radius:4px;font-size:0.9em;" id="revocationCheckStatus">`;
+          html += `<strong>⏳ Checking revocation status...</strong> Querying KERI witnesses...`;
           html += `</p>`;
         }
 
@@ -589,14 +579,16 @@
           html += `<p style="color:orange;">No ACDCs found in dossier. Raw data shown below.</p>`;
           document.getElementById("checkRevocationBtn").disabled = true;
         } else {
-          // Store ACDCs for live revocation check
-          currentAcdcs = acdcs;
-          currentOobiUrl = currentEvdUrl;
           document.getElementById("checkRevocationBtn").disabled = false;
 
-          html += `<p><strong>Found ${acdcs.length} ACDC(s) in dossier:</strong></p>`;
+          html += `<div style="display:flex;align-items:center;gap:1rem;margin-bottom:0.5rem;flex-wrap:wrap;">`;
+          html += `<p style="margin:0;"><strong>Found ${acdcs.length} ACDC(s) in dossier:</strong></p>`;
+          html += `<button onclick="showCredentialGraph(null)" style="font-size:0.85em;padding:4px 12px;cursor:pointer;background:#0066cc;color:white;border:none;border-radius:4px;">🔗 View Full Chain Graph</button>`;
+          html += `</div>`;
+
           for (let i = 0; i < acdcs.length; i++) {
-            const revStatus = getRevocationStatus(acdcs[i], revocationMap);
+            // Prefer live status, fall back to inline TEL
+            const revStatus = currentRevocationStatus[acdcs[i].d] || getRevocationStatus(acdcs[i], revocationMap);
             html += formatACDC(acdcs[i], i, revStatus, acdcs);
           }
         }
@@ -622,10 +614,54 @@
         }
 
         // Show raw data
-        const rawDisplay = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+        const rawDisplay = typeof rawData === 'string' ? rawData : JSON.stringify(rawData, null, 2);
         html += `<details style="margin-top:1rem;"><summary>Raw Data</summary><pre style="background:#fff;padding:0.5rem;overflow:auto;max-height:400px;font-size:0.75em;">${rawDisplay.substring(0, 50000)}${rawDisplay.length > 50000 ? '...(truncated)' : ''}</pre></details>`;
 
         output.innerHTML = html;
+      }
+
+      // Automatically check revocation status for ACDCs
+      async function autoCheckRevocationStatus(acdcs) {
+        const results = [];
+
+        for (const acdc of acdcs) {
+          try {
+            const res = await fetch("/check-revocation", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                credential_said: acdc.d,
+                registry_said: acdc.ri || null,
+                oobi_url: currentOobiUrl,
+                kid_url: currentKidUrl,
+                dossier_stream: currentDossierStream
+              })
+            });
+
+            const result = await res.json();
+
+            // Store result in global status map
+            currentRevocationStatus[acdc.d] = {
+              status: result.status || 'UNKNOWN',
+              issuance: result.issuance,
+              revocation: result.revocation,
+              source: 'live_witness',
+              error: result.error
+            };
+
+            results.push({ acdc, result });
+          } catch (e) {
+            currentRevocationStatus[acdc.d] = {
+              status: 'UNKNOWN',
+              source: 'live_witness',
+              error: e.message
+            };
+            results.push({ acdc, result: { success: false, status: 'ERROR', error: e.message } });
+          }
+        }
+
+        console.log('Auto revocation check complete:', results);
+        return results;
       }
 
       // Load mock dossier
@@ -636,7 +672,7 @@
         try {
           const res = await fetch("/mock-dossier");
           const data = await res.json();
-          displayDossier(data, "application/json (mock)");
+          await displayDossier(data, "application/json (mock)");
         } catch (e) {
           output.innerHTML = `<span style="color:red;">Error loading mock: ${e.message}</span>`;
         }
@@ -669,7 +705,7 @@
 
           // Store raw dossier for inline TEL parsing (Phase 9.4)
           currentDossierStream = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
-          displayDossier(result.data, result.content_type);
+          await displayDossier(result.data, result.content_type);
 
         } catch (e) {
           output.innerHTML = `<span style="color:orange;">Could not fetch dossier: ${e.message}</span><br><br>` +
@@ -722,6 +758,507 @@
         btn.textContent = originalText;
         btn.disabled = false;
       });
+
+      // Show credential graph for a specific ACDC
+      async function showCredentialGraph(startingSaid) {
+        console.log("Building graph with", currentAcdcs?.length, "ACDCs");
+        console.log("First ACDC:", currentAcdcs?.[0]);
+
+        // Build dossier data from current ACDCs
+        const dossierData = {
+          dossier: {
+            acdcs: currentAcdcs
+          }
+        };
+
+        // Show loading modal
+        showGraphModal('<div style="text-align:center;padding:2rem;"><em>Building credential graph...</em></div>');
+
+        try {
+          const res = await fetch("/credential-graph", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(dossierData)
+          });
+
+          if (!res.ok) {
+            throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+          }
+
+          const response = await res.json();
+          console.log("Credential graph response:", response);
+
+          // Handle both direct graph response and wrapped {success, graph} response
+          const graph = response.graph || response;
+          console.log("Nodes:", graph.nodes?.length, "Layers:", graph.layers?.length);
+          renderCredentialGraph(graph, startingSaid);
+        } catch (e) {
+          showGraphModal(`<div style="color:red;padding:1rem;">Error building graph: ${e.message}</div>`);
+        }
+      }
+
+      // Show the graph modal
+      function showGraphModal(content) {
+        // Remove existing modal if any
+        const existing = document.getElementById('graphModal');
+        if (existing) existing.remove();
+
+        const modal = document.createElement('div');
+        modal.id = 'graphModal';
+        modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);display:flex;justify-content:center;align-items:center;z-index:1000;';
+        modal.innerHTML = `
+          <div style="background:white;border-radius:8px;max-width:90%;max-height:90%;overflow:auto;position:relative;">
+            <button onclick="document.getElementById('graphModal').remove()" style="position:absolute;top:8px;right:8px;background:#dc3545;color:white;border:none;border-radius:50%;width:28px;height:28px;cursor:pointer;font-size:16px;">×</button>
+            <div id="graphContent" style="padding:1rem;">${content}</div>
+          </div>
+        `;
+        document.body.appendChild(modal);
+
+        // Close on background click
+        modal.addEventListener('click', (e) => {
+          if (e.target === modal) modal.remove();
+        });
+      }
+
+      // Render the credential graph using unified credential cards
+      function renderCredentialGraph(graph, highlightSaid) {
+        let html = `<div style="min-width:600px;">`;
+        html += `<h3 style="margin-top:0;">🔗 Credential Chain Graph</h3>`;
+
+        // Trust path indicator
+        if (graph.trustPathValid) {
+          html += `<div style="background:#d4edda;color:#155724;padding:0.5rem;border-radius:4px;margin-bottom:1rem;">✅ Valid trust path to root</div>`;
+        } else {
+          html += `<div style="background:#f8d7da;color:#721c24;padding:0.5rem;border-radius:4px;margin-bottom:1rem;">⚠️ No valid trust path to root (issuer not in trusted roots list)</div>`;
+        }
+
+        // Render layers (root first, then children)
+        if (!graph.layers || graph.layers.length === 0) {
+          if (graph.nodes && graph.nodes.length > 0) {
+            html += `<div style="background:#fff3cd;padding:0.5rem;border-radius:4px;">No layers computed, but ${graph.nodes.length} nodes exist.</div>`;
+          } else {
+            html += `<div style="background:#f8d7da;padding:0.5rem;border-radius:4px;">No credentials found in graph.</div>`;
+          }
+        }
+
+        if (graph.layers && graph.layers.length > 0) {
+          html += `<div style="display:flex;flex-direction:column;gap:1rem;">`;
+
+          for (let layerIdx = 0; layerIdx < graph.layers.length; layerIdx++) {
+            const layer = graph.layers[layerIdx];
+            // Determine layer label based on contents
+            let layerLabel;
+            if (layerIdx === 0) {
+              const hasRoot = layer.some(id => graph.nodes.find(n => n.id === id)?.isRoot);
+              layerLabel = hasRoot ? '🏛️ Root of Trust' : '🔓 Chain Terminus (Untrusted Issuer)';
+            } else {
+              layerLabel = `Layer ${layerIdx} - Issued Credentials`;
+            }
+
+            html += `<div style="border-left:3px solid #0066cc;padding-left:1rem;">`;
+            html += `<div style="font-size:0.85em;color:#555;margin-bottom:0.5rem;font-weight:bold;">${layerLabel}</div>`;
+            html += `<div style="display:flex;flex-wrap:wrap;gap:0.75rem;">`;
+
+            for (const nodeId of layer) {
+              const node = graph.nodes.find(n => n.id === nodeId);
+              if (!node) continue;
+
+              // Find the original ACDC for this node to get full attributes
+              const originalAcdc = currentAcdcs.find(a => a.d === node.id);
+
+              // Build credential object for unified card renderer
+              const credential = {
+                d: node.id,
+                i: node.issuer,
+                s: node.schemaSaid,
+                type: node.type,
+                displayName: node.displayName,
+                status: currentRevocationStatus[node.id]?.status || node.status,
+                isRoot: node.isRoot,
+                // Include original ACDC data if available
+                a: originalAcdc?.a || node.attributes || {},
+                // Use original edges, or node edges from graph, or convert edgesTo array
+                e: originalAcdc?.e || node.edges || {},
+              };
+
+              // Convert edgesTo array to edges object format if no edges object
+              if ((!credential.e || Object.keys(credential.e).length === 0) && node.edgesTo && node.edgesTo.length > 0) {
+                credential.e = {};
+                for (let i = 0; i < node.edgesTo.length; i++) {
+                  credential.e[`link${i}`] = { n: node.edgesTo[i] };
+                }
+              }
+
+              // Get revocation status from our cache
+              const revStatus = currentRevocationStatus[node.id] || null;
+
+              // Use unified card renderer in compact mode
+              html += renderCredentialCard(credential, {
+                compact: true,
+                showFullDetails: false,
+                highlightId: highlightSaid,
+                revocationStatus: revStatus,
+                allAcdcs: currentAcdcs
+              });
+            }
+
+            html += `</div></div>`;
+
+            // Draw connector arrows between layers
+            if (layerIdx < graph.layers.length - 1) {
+              html += `<div style="text-align:center;color:#999;font-size:1.5em;">↓</div>`;
+            }
+          }
+
+          html += `</div>`;
+        }
+
+        // Show any errors
+        if (graph.errors && graph.errors.length > 0) {
+          html += `<div style="background:#fff3cd;padding:0.5rem;border-radius:4px;margin-top:1rem;">`;
+          html += `<strong>⚠️ Warnings:</strong><ul style="margin:0.5rem 0 0 1rem;padding:0;">`;
+          for (const err of graph.errors) {
+            html += `<li style="font-size:0.85em;">${err}</li>`;
+          }
+          html += `</ul></div>`;
+        }
+
+        // Legend
+        html += `<div style="margin-top:1rem;padding-top:1rem;border-top:1px solid #eee;font-size:0.8em;color:#666;">`;
+        html += `<strong>Legend:</strong> `;
+        html += `<span style="display:inline-block;width:12px;height:12px;background:#e8f4ff;border:2px solid #0066cc;margin-right:4px;"></span>Trusted Root `;
+        html += `<span style="display:inline-block;width:12px;height:12px;background:#f8f9fa;border:2px solid #6c757d;margin-right:4px;margin-left:8px;"></span>Untrusted Issuer `;
+        html += `<span style="display:inline-block;width:12px;height:12px;background:#f5fff5;border:2px solid #28a745;margin-right:4px;margin-left:8px;"></span>Active `;
+        html += `<span style="display:inline-block;width:12px;height:12px;background:#fff5f5;border:2px solid #dc3545;margin-right:4px;margin-left:8px;"></span>Revoked `;
+        html += `<span style="display:inline-block;width:12px;height:12px;background:#fff;border:2px solid #ffc107;margin-right:4px;margin-left:8px;"></span>Unknown Status `;
+        html += `</div>`;
+
+        html += `</div>`;
+
+        showGraphModal(html);
+      }
+
+      // Get type badge HTML
+      function getTypeBadge(type) {
+        const badges = {
+          'ROOT': '<span style="background:#0066cc;color:white;padding:2px 6px;border-radius:4px;font-size:0.75em;">🏛️ TRUSTED ROOT</span>',
+          'ISSUER': '<span style="background:#6c757d;color:white;padding:2px 6px;border-radius:4px;font-size:0.75em;">🔓 ISSUER (Untrusted)</span>',
+          'LE': '<span style="background:#28a745;color:white;padding:2px 6px;border-radius:4px;font-size:0.75em;">🏢 Legal Entity</span>',
+          'APE': '<span style="background:#17a2b8;color:white;padding:2px 6px;border-radius:4px;font-size:0.75em;">📱 Auth Phone</span>',
+          'DE': '<span style="background:#fd7e14;color:white;padding:2px 6px;border-radius:4px;font-size:0.75em;">👤 Delegate</span>',
+          'TNAlloc': '<span style="background:#6f42c1;color:white;padding:2px 6px;border-radius:4px;font-size:0.75em;">📞 TN Alloc</span>',
+        };
+        return badges[type] || `<span style="background:#999;color:white;padding:2px 6px;border-radius:4px;font-size:0.75em;">${type}</span>`;
+      }
+
+      // Unified credential card renderer
+      // Used in both dossier view and graph view
+      // revocationStatus: { status: 'ACTIVE'|'REVOKED'|'UNKNOWN', issuance?: {...}, revocation?: {...} }
+      function renderCredentialCard(credential, options = {}) {
+        const {
+          compact = false,           // Compact view for graph
+          showFullDetails = true,    // Show expandable full details
+          highlightId = null,        // Highlight if matches this ID
+          onLinkClick = null,        // Callback when clicking credential link
+          revocationStatus = null,   // Revocation status object
+          allAcdcs = []              // All ACDCs for issuer lookup
+        } = options;
+
+        // Determine credential type from various sources
+        let credType = credential.type || credential.credential_type || 'unknown';
+        const attrs = credential.a || credential.attributes || {};
+        const edges = credential.e || credential.edges || {};
+
+        // Better type detection
+        if (credType === 'unknown') {
+          // Check attributes for type hints
+          if (attrs.LEI || attrs.lids) credType = 'LE';
+          else if (attrs.phone || attrs.tn || attrs.numbers) credType = 'TNAlloc';
+          // Check edges for type hints
+          else if (edges.vetting || edges.le) credType = 'APE';
+          else if (edges.delegation) credType = 'DE';
+        }
+
+        // Get key identifiers
+        const said = credential.d || credential.id || credential.said || '';
+        const issuerAid = credential.i || credential.issuer || credential.issuer_aid || '';
+        const schemaSaid = credential.s || credential.schema_said || credential.schemaSaid || '';
+        const registrySaid = credential.ri || credential.registry_said || '';
+
+        // Determine styling based on status
+        let borderColor = '#ccc';
+        let bgColor = '#fafafa';
+        const isHighlighted = highlightId && said === highlightId;
+
+        // Status from revocation check or from graph node
+        const status = revocationStatus?.status || credential.status || 'UNKNOWN';
+
+        if (credential.isRoot) {
+          borderColor = '#0066cc';
+          bgColor = '#e8f4ff';
+        } else if (credType === 'ISSUER') {
+          borderColor = '#6c757d';
+          bgColor = '#f8f9fa';
+        } else if (status === 'REVOKED') {
+          borderColor = '#dc3545';
+          bgColor = '#fff5f5';
+        } else if (status === 'ACTIVE') {
+          borderColor = '#28a745';
+          bgColor = '#f5fff5';
+        }
+
+        if (isHighlighted) {
+          borderColor = '#ffc107';
+        }
+
+        // Build card HTML
+        const padding = compact ? '0.5rem' : '1rem';
+        const minWidth = compact ? '220px' : '100%';
+        const maxWidth = compact ? '320px' : '100%';
+
+        let html = `<div class="credential-card" data-said="${said}" style="border:2px solid ${borderColor};background:${bgColor};padding:${padding};border-radius:4px;${compact ? `min-width:${minWidth};max-width:${maxWidth};` : 'margin-bottom:1rem;'}">`;
+
+        // Header: Type badge + Status
+        html += `<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:0.5rem;flex-wrap:wrap;gap:0.25rem;">`;
+        html += getTypeBadge(credType);
+
+        // Status badge
+        if (status === 'REVOKED') {
+          html += `<span style="background:#dc3545;color:white;padding:2px 8px;border-radius:12px;font-size:0.75em;">🚫 REVOKED</span>`;
+        } else if (status === 'ACTIVE') {
+          html += `<span style="background:#28a745;color:white;padding:2px 8px;border-radius:12px;font-size:0.75em;">✓ ACTIVE</span>`;
+        } else {
+          html += `<span style="background:#ffc107;color:#000;padding:2px 8px;border-radius:12px;font-size:0.75em;">⚠ UNKNOWN</span>`;
+        }
+        html += `</div>`;
+
+        // Display name / Title
+        let displayName = credential.displayName || '';
+        if (!displayName) {
+          displayName = generateDisplayName(credType, attrs);
+        }
+        html += `<div style="font-weight:bold;font-size:${compact ? '0.9em' : '1em'};margin-bottom:0.5rem;word-break:break-word;">${displayName}</div>`;
+
+        // Key attributes section
+        const keyAttrs = extractAllAttributes(attrs, credential);
+        if (keyAttrs.length > 0 && !compact) {
+          html += `<div style="background:rgba(255,255,255,0.7);padding:0.5rem;border-radius:4px;margin-bottom:0.5rem;font-size:0.9em;">`;
+          for (const attr of keyAttrs) {
+            if (attr.isUrl) {
+              html += `<div style="margin:2px 0;"><strong>${attr.label}:</strong> <a href="${attr.value}" target="_blank" style="word-break:break-all;color:#0066cc;">${truncate(attr.value, 50)}</a></div>`;
+            } else {
+              html += `<div style="margin:2px 0;"><strong>${attr.label}:</strong> ${attr.value}</div>`;
+            }
+          }
+          html += `</div>`;
+        } else if (keyAttrs.length > 0 && compact) {
+          // Show just top 2 attributes in compact mode
+          html += `<div style="font-size:0.8em;color:#555;margin-bottom:0.5rem;">`;
+          for (let i = 0; i < Math.min(2, keyAttrs.length); i++) {
+            html += `<div>${keyAttrs[i].label}: ${truncate(keyAttrs[i].value, 30)}</div>`;
+          }
+          html += `</div>`;
+        }
+
+        // Revocation event details (if available)
+        if (revocationStatus && !compact) {
+          if (revocationStatus.issuance) {
+            const dt = revocationStatus.issuance.datetime || revocationStatus.issuance.dt || 'Unknown';
+            html += `<div style="font-size:0.85em;color:#28a745;">📅 Issued: ${dt}</div>`;
+          }
+          if (revocationStatus.revocation) {
+            const dt = revocationStatus.revocation.datetime || revocationStatus.revocation.dt || 'Unknown';
+            html += `<div style="font-size:0.85em;color:#dc3545;">🚫 Revoked: ${dt}</div>`;
+          }
+        }
+
+        // Issuer info
+        if (issuerAid && !credential.isRoot && !compact) {
+          const issuerDetails = findIssuerDetails(issuerAid, allAcdcs);
+          html += `<div style="font-size:0.85em;margin-top:0.5rem;">`;
+          html += `<strong>Issuer:</strong> `;
+          if (issuerDetails.name) {
+            html += `${issuerDetails.name} `;
+          }
+          html += `<code style="font-size:0.85em;">${truncate(issuerAid, 20)}</code>`;
+          html += `</div>`;
+        }
+
+        // Credential links (edges)
+        const edgeKeys = Object.keys(edges).filter(k => k !== 'd' && k !== 'n');
+        if (edgeKeys.length > 0) {
+          html += `<div style="margin-top:0.5rem;font-size:${compact ? '0.8em' : '0.9em'};">`;
+          html += `<strong>Links to:</strong>`;
+          html += `<div style="margin-left:0.5rem;">`;
+          for (const edgeName of edgeKeys) {
+            const edge = edges[edgeName];
+            const targetSaid = typeof edge === 'string' ? edge : (edge?.n || edge?.d || '');
+            if (targetSaid) {
+              const linkStyle = onLinkClick
+                ? 'cursor:pointer;color:#0066cc;text-decoration:underline;'
+                : '';
+              html += `<div style="margin:2px 0;" class="credential-link" data-target="${targetSaid}">`;
+              html += `🔗 <em>${edgeName}</em>: `;
+              html += `<span style="${linkStyle}" onclick="handleCredentialLinkClick('${targetSaid}')">${truncate(targetSaid, 16)}</span>`;
+              html += `</div>`;
+            }
+          }
+          html += `</div></div>`;
+        }
+
+        // SAID footer
+        if (!credential.isRoot) {
+          html += `<div style="font-size:0.7em;color:#999;font-family:monospace;margin-top:0.5rem;border-top:1px solid rgba(0,0,0,0.1);padding-top:0.25rem;">`;
+          html += `SAID: ${truncate(said, compact ? 12 : 24)}`;
+          if (!compact) {
+            html += ` <button onclick="navigator.clipboard.writeText('${said}');this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)" style="font-size:0.9em;padding:1px 4px;cursor:pointer;">Copy</button>`;
+          }
+          html += `</div>`;
+        }
+
+        // Full details expandable (non-compact only)
+        if (showFullDetails && !compact) {
+          html += `<details style="margin-top:0.5rem;"><summary style="cursor:pointer;font-size:0.85em;color:#666;">Full Details</summary>`;
+          html += `<pre style="background:#fff;padding:0.5rem;overflow:auto;font-size:0.75em;max-height:200px;margin-top:0.25rem;">${JSON.stringify(credential, null, 2)}</pre>`;
+          html += `</details>`;
+        }
+
+        html += `</div>`;
+        return html;
+      }
+
+      // Generate display name from type and attributes
+      function generateDisplayName(credType, attrs) {
+        if (credType === 'LE') {
+          const lei = attrs.LEI || (attrs.lids && attrs.lids[0]) || '';
+          if (lei) return `Legal Entity: ${truncate(lei, 20)}`;
+          return 'Legal Entity Credential';
+        }
+        if (credType === 'APE') return 'Auth Phone Entity';
+        if (credType === 'DE') return 'Delegate Entity';
+        if (credType === 'TNAlloc') {
+          const tn = attrs.tn || attrs.phone || (attrs.numbers && attrs.numbers.rangeStart);
+          if (tn) return `TN Allocation: ${tn}`;
+          return 'TN Allocation';
+        }
+        if (credType === 'ROOT') return 'Trusted Root';
+        if (credType === 'ISSUER') return 'Chain Terminus (Issuer)';
+        return `Credential (${credType})`;
+      }
+
+      // Extract all displayable attributes from an ACDC
+      function extractAllAttributes(attrs, credential) {
+        if (!attrs || typeof attrs !== 'object') return [];
+        const results = [];
+
+        // LEI
+        if (attrs.LEI) results.push({ label: 'LEI', value: attrs.LEI });
+        if (attrs.lids && Array.isArray(attrs.lids)) {
+          for (const lei of attrs.lids) {
+            if (!results.find(r => r.value === lei)) {
+              results.push({ label: 'LEI', value: lei });
+            }
+          }
+        }
+
+        // Phone numbers
+        if (attrs.phone) {
+          results.push({ label: 'Phone', value: Array.isArray(attrs.phone) ? attrs.phone.join(', ') : attrs.phone });
+        }
+        if (attrs.tn) {
+          results.push({ label: 'TN', value: Array.isArray(attrs.tn) ? attrs.tn.join(', ') : attrs.tn });
+        }
+        if (attrs.numbers) {
+          const range = attrs.numbers.rangeStart === attrs.numbers.rangeEnd
+            ? attrs.numbers.rangeStart
+            : `${attrs.numbers.rangeStart} - ${attrs.numbers.rangeEnd}`;
+          results.push({ label: 'Number Range', value: range });
+        }
+
+        // Role
+        if (attrs.role) results.push({ label: 'Role', value: attrs.role });
+
+        // Organization from vCard
+        if (attrs.vcard && Array.isArray(attrs.vcard)) {
+          for (const line of attrs.vcard) {
+            if (line.startsWith('ORG:')) {
+              results.push({ label: 'Organization', value: line.substring(4) });
+            }
+            if (line.includes('LOGO;') && line.includes('VALUE=URI:')) {
+              const url = line.match(/VALUE=URI:(.+)$/);
+              if (url) results.push({ label: 'Logo', value: url[1], isUrl: true });
+            }
+          }
+        }
+
+        // Dates
+        if (attrs.startDate) results.push({ label: 'Start Date', value: attrs.startDate });
+        if (attrs.endDate) results.push({ label: 'End Date', value: attrs.endDate });
+        if (attrs.dt) results.push({ label: 'Date', value: attrs.dt });
+
+        // Geographic constraints
+        if (attrs.c_pgeo) {
+          results.push({ label: 'Permitted Geo', value: Array.isArray(attrs.c_pgeo) ? attrs.c_pgeo.join(', ') : attrs.c_pgeo });
+        }
+
+        // Level of assurance
+        if (attrs.loa) results.push({ label: 'LoA', value: attrs.loa });
+
+        // Legal name
+        if (attrs.legalName) results.push({ label: 'Legal Name', value: attrs.legalName });
+        if (attrs.organizationName) results.push({ label: 'Org Name', value: attrs.organizationName });
+
+        // Subject AID (issuee)
+        if (attrs.i && attrs.i !== credential.i) {
+          results.push({ label: 'Subject', value: truncate(attrs.i, 24) });
+        }
+
+        return results;
+      }
+
+      // Truncate string helper
+      function truncate(str, len) {
+        if (!str) return '';
+        str = String(str);
+        return str.length > len ? str.substring(0, len) + '...' : str;
+      }
+
+      // Handle credential link click - scroll to or highlight credential
+      function handleCredentialLinkClick(targetSaid) {
+        console.log('Credential link clicked:', targetSaid);
+
+        // First check if we're in a modal (graph view)
+        const modal = document.getElementById('graphModal');
+        if (modal) {
+          // Highlight the target in the graph
+          const targetCard = modal.querySelector(`.credential-card[data-said="${targetSaid}"]`);
+          if (targetCard) {
+            targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            targetCard.style.boxShadow = '0 0 10px 3px #ffc107';
+            setTimeout(() => targetCard.style.boxShadow = '', 2000);
+            return;
+          }
+        }
+
+        // Otherwise, scroll to credential in main dossier view
+        const targetCard = document.querySelector(`.credential-card[data-said="${targetSaid}"]`);
+        if (targetCard) {
+          targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          targetCard.style.boxShadow = '0 0 10px 3px #ffc107';
+          setTimeout(() => targetCard.style.boxShadow = '', 2000);
+        } else {
+          // Credential not in current view - search in all ACDCs
+          const acdc = currentAcdcs.find(a => a.d === targetSaid);
+          if (acdc) {
+            alert(`Credential ${truncate(targetSaid, 16)} found but not currently displayed. Check the full dossier.`);
+          } else {
+            alert(`Credential ${truncate(targetSaid, 16)} not found in this dossier.`);
+          }
+        }
+      }
+
+      // Store revocation status map for credentials
+      let currentRevocationStatus = {};
 
       // Display live revocation check results
       function displayLiveRevocationResults(results) {

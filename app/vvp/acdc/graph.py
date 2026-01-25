@@ -204,38 +204,61 @@ def _add_issuer_nodes(
     dossier_acdcs: Dict[str, ACDC],
     trusted_roots: Set[str]
 ) -> None:
-    """Add synthetic nodes for issuers and trusted roots."""
+    """Add synthetic nodes for issuers (trusted roots and chain terminators)."""
 
-    # Find all issuer AIDs
-    issuer_aids = {acdc.issuer_aid for acdc in dossier_acdcs.values()}
-
-    # Add edges from credentials to their issuers
+    # Find credentials that don't have parents in the dossier (terminal credentials)
+    # These need issuer nodes to show the chain terminus
     for said, acdc in dossier_acdcs.items():
         issuer_aid = acdc.issuer_aid
 
-        # Check if issuer is a trusted root
-        if issuer_aid in trusted_roots:
-            # Add synthetic root node if not exists
-            root_node_id = f"root:{issuer_aid}"
-            if root_node_id not in graph.nodes:
-                graph.nodes[root_node_id] = CredentialNode(
-                    said=root_node_id,
+        # Skip if issuer is another credential in the dossier
+        # (the edge will be handled by the credential's edges field)
+        issuer_is_credential = any(
+            other.said == issuer_aid or other.issuer_aid == issuer_aid
+            for other_said, other in dossier_acdcs.items()
+            if other_said != said
+        )
+
+        # Check if this credential has no edges to other dossier credentials
+        has_parent_in_dossier = False
+        if acdc.edges:
+            for edge_name, edge_ref in acdc.edges.items():
+                if edge_name in ('d', 'n'):
+                    continue
+                target_said = None
+                if isinstance(edge_ref, str):
+                    target_said = edge_ref
+                elif isinstance(edge_ref, dict):
+                    target_said = edge_ref.get('n') or edge_ref.get('d')
+                if target_said and target_said in dossier_acdcs:
+                    has_parent_in_dossier = True
+                    break
+
+        # Add issuer node for credentials without parents in dossier
+        if not has_parent_in_dossier:
+            is_trusted = issuer_aid in trusted_roots
+            issuer_node_id = f"root:{issuer_aid}" if is_trusted else f"issuer:{issuer_aid}"
+
+            if issuer_node_id not in graph.nodes:
+                graph.nodes[issuer_node_id] = CredentialNode(
+                    said=issuer_node_id,
                     issuer_aid=issuer_aid,
-                    credential_type="ROOT",
-                    display_name=_get_root_display_name(issuer_aid),
-                    is_root=True,
-                    status=CredentialStatus.ACTIVE,
+                    credential_type="ROOT" if is_trusted else "ISSUER",
+                    display_name=_get_root_display_name(issuer_aid) if is_trusted else _get_issuer_display_name(issuer_aid),
+                    is_root=is_trusted,
+                    status=CredentialStatus.ACTIVE if is_trusted else CredentialStatus.UNKNOWN,
                     resolution_source=ResolutionSource.SYNTHETIC,
                 )
-                graph.root_aid = issuer_aid
+                if is_trusted:
+                    graph.root_aid = issuer_aid
 
             # Add issued_by edge
             graph.edges.append(CredentialEdge(
                 from_said=said,
-                to_said=root_node_id,
+                to_said=issuer_node_id,
                 edge_type="issued_by"
             ))
-            graph.nodes[said].edges_to.append(root_node_id)
+            graph.nodes[said].edges_to.append(issuer_node_id)
 
 
 def _get_root_display_name(aid: str) -> str:
@@ -247,22 +270,32 @@ def _get_root_display_name(aid: str) -> str:
     return known_roots.get(aid, f"Trusted Root: {aid[:16]}...")
 
 
+def _get_issuer_display_name(aid: str) -> str:
+    """Get display name for an untrusted issuer AID."""
+    # Known issuers (staging/demo environments)
+    known_issuers = {
+        # Add known staging QVIs here as they're discovered
+    }
+    return known_issuers.get(aid, f"Issuer: {aid[:16]}...")
+
+
 def _compute_layers(graph: CredentialGraph, trusted_roots: Set[str]) -> None:
     """Compute layers for hierarchical visualization.
 
-    Layer 0 = root, increasing layers toward leaf credentials.
+    Layer 0 = root/issuer nodes, increasing layers toward leaf credentials.
     """
     if not graph.nodes:
         return
 
-    # Find root nodes
+    # Find root nodes (trusted roots) and issuer nodes (untrusted chain terminators)
+    # Both serve as starting points for layer computation
     root_nodes = [
         said for said, node in graph.nodes.items()
-        if node.is_root
+        if node.is_root or node.credential_type == "ISSUER"
     ]
 
     if not root_nodes:
-        # No root found - just return nodes in order
+        # No root/issuer found - just return nodes in order
         graph.layers = [list(graph.nodes.keys())]
         return
 
@@ -310,6 +343,12 @@ def credential_graph_to_dict(graph: CredentialGraph) -> Dict[str, Any]:
                 "isRoot": node.is_root,
                 "schemaSaid": node.schema_said,
                 "edgesTo": node.edges_to,
+                # Include edges with their types for UI rendering
+                "edges": {
+                    edge.edge_type: edge.to_said
+                    for edge in graph.edges
+                    if edge.from_said == node.said
+                },
             }
             for node in graph.nodes.values()
         ],
