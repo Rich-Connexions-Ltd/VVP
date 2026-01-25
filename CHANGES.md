@@ -1,5 +1,45 @@
 # VVP Verifier Change Log
 
+## Phase 9.4: TEL Resolution Architecture Fix
+
+**Date:** 2026-01-25
+**Commit:** `f900fa7`
+
+### Files Changed
+
+| File | Action | Description |
+|------|--------|-------------|
+| `app/vvp/verify.py` | Modified | Added `_query_registry_tel()` helper, inline TEL parsing with latin-1 decoding, registry OOBI discovery |
+| `app/vvp/keri/tel_client.py` | Modified | Added detailed logging to `parse_dossier_tel()` |
+| `tests/test_revocation_checker.py` | Modified | Added 7 new tests for inline TEL, registry OOBI, binary-safe parsing |
+| `app/main.py` | Modified | Added `POST /admin/log-level` endpoint for runtime log level changes |
+| `tests/test_admin.py` | Modified | Added 6 tests for log level endpoint |
+| `app/Documentation/PLAN_Phase9.4.md` | Created | Archived implementation plan |
+
+### Summary
+
+Fixed TEL resolution architecture so revocation checking works correctly instead of always returning INDETERMINATE.
+
+**Problem:** The previous implementation queried the wrong endpoints (PASSporT signer's KERIA agent instead of registry witnesses), causing all TEL queries to return 404.
+
+**Solution:**
+1. **Inline TEL Parsing**: Check if TEL events are embedded in the raw dossier using binary-safe latin-1 decoding
+2. **Registry OOBI Discovery**: Derive registry OOBI URL from base OOBI pattern (`{scheme}://{netloc}/oobi/{registry_said}`)
+3. **Fallback Chain**: Inline TEL → Registry OOBI witnesses → Default witnesses
+
+**Key Changes:**
+- `check_dossier_revocations()` now accepts `raw_dossier` parameter for inline TEL parsing
+- Latin-1 decoding preserves all byte values (byte-transparent) for CESR streams
+- Evidence format standardized: `revocation_source:{dossier|witness}` with summary counts
+- Runtime log level endpoint: `POST /admin/log-level` with `{"level": "DEBUG"}` body
+- 440 tests passing (20 revocation tests)
+
+**Spec Compliance:**
+- §5.1.1-2.9: Revocation status checking via correct TEL sources
+- §6.1B: Inline TEL events in CESR dossier format supported
+
+---
+
 ## Phase 9.3: Revocation Integration & Admin Endpoint
 
 **Date:** 2026-01-25

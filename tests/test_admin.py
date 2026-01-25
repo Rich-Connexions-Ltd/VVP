@@ -158,3 +158,78 @@ class TestAdminEndpointDisabled:
         monkeypatch.setenv("ADMIN_ENDPOINT_ENABLED", "true")
         importlib.reload(app.core.config)
         importlib.reload(app.main)
+
+
+class TestLogLevelEndpoint:
+    """Tests for POST /admin/log-level endpoint."""
+
+    def test_set_log_level_debug(self):
+        """Can set log level to DEBUG."""
+        from app.main import app
+        client = TestClient(app)
+
+        response = client.post("/admin/log-level", json={"level": "DEBUG"})
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["success"] is True
+        assert data["log_level"] == "DEBUG"
+
+    def test_set_log_level_info(self):
+        """Can set log level to INFO."""
+        from app.main import app
+        client = TestClient(app)
+
+        response = client.post("/admin/log-level", json={"level": "info"})
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["success"] is True
+        assert data["log_level"] == "INFO"
+
+    def test_set_log_level_warning(self):
+        """Can set log level to WARNING."""
+        from app.main import app
+        client = TestClient(app)
+
+        response = client.post("/admin/log-level", json={"level": "WARNING"})
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["log_level"] == "WARNING"
+
+    def test_set_log_level_error(self):
+        """Can set log level to ERROR."""
+        from app.main import app
+        client = TestClient(app)
+
+        response = client.post("/admin/log-level", json={"level": "error"})
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["log_level"] == "ERROR"
+
+    def test_set_log_level_invalid_returns_400(self):
+        """Invalid log level returns 400."""
+        from app.main import app
+        client = TestClient(app)
+
+        response = client.post("/admin/log-level", json={"level": "INVALID"})
+        assert response.status_code == 400
+        assert "Invalid log level" in response.json()["detail"]
+
+    def test_log_level_reflected_in_admin(self):
+        """Changed log level is reflected in /admin response."""
+        from app.main import app
+        client = TestClient(app)
+
+        # Set to DEBUG
+        client.post("/admin/log-level", json={"level": "DEBUG"})
+
+        # Check /admin shows DEBUG
+        response = client.get("/admin")
+        data = response.json()
+        assert data["environment"]["log_level_name"] == "DEBUG"
+
+        # Reset to INFO
+        client.post("/admin/log-level", json={"level": "INFO"})

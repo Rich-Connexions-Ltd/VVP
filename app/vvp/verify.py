@@ -13,7 +13,8 @@ claim is a REQUIRED child of dossier_verified per §3.3B.
 import logging
 import uuid
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 log = logging.getLogger(__name__)
 
@@ -112,8 +113,72 @@ def to_error_detail(exc: Exception) -> ErrorDetail:
 # =============================================================================
 
 
+async def _query_registry_tel(
+    client,
+    credential_said: str,
+    registry_said: Optional[str],
+    base_oobi_url: Optional[str]
+):
+    """Query TEL via registry OOBI resolution.
+
+    Strategy:
+    1. If registry_said available, construct registry OOBI URL from base OOBI pattern
+    2. Resolve registry OOBI to get registry controller's witnesses
+    3. Query those witnesses for TEL events
+    4. If no registry_said, fall back to default witness queries
+
+    Args:
+        client: TEL client instance
+        credential_said: Credential SAID to check
+        registry_said: Registry SAID (from ACDC 'ri' field)
+        base_oobi_url: Base OOBI URL to derive registry OOBI pattern
+
+    Returns:
+        RevocationResult from registry witnesses
+    """
+    from .keri.tel_client import CredentialStatus, RevocationResult
+
+    if not registry_said:
+        log.info(f"    no registry SAID for {credential_said[:20]}..., using default witnesses")
+        # Fall back to default witness queries without registry OOBI
+        return await client.check_revocation(
+            credential_said=credential_said,
+            registry_said=None,
+            oobi_url=None
+        )
+
+    # Derive registry OOBI URL from base OOBI pattern
+    # Pattern: replace AID in OOBI path with registry SAID
+    registry_oobi_url = None
+    if base_oobi_url:
+        parsed = urlparse(base_oobi_url)
+        # Construct registry OOBI: {scheme}://{netloc}/oobi/{registry_said}
+        registry_oobi_url = f"{parsed.scheme}://{parsed.netloc}/oobi/{registry_said}"
+        log.info(f"    constructed registry OOBI: {registry_oobi_url}")
+
+    # Query via registry OOBI
+    if registry_oobi_url:
+        result = await client.check_revocation(
+            credential_said=credential_said,
+            registry_said=registry_said,
+            oobi_url=registry_oobi_url
+        )
+        if result.status != CredentialStatus.ERROR:
+            return result
+        log.info(f"    registry OOBI query failed: {result.error}")
+
+    # Fallback: try direct witness queries (existing behavior)
+    log.info(f"    falling back to default witness queries")
+    return await client.check_revocation(
+        credential_said=credential_said,
+        registry_said=registry_said,
+        oobi_url=None  # Use default witnesses
+    )
+
+
 async def check_dossier_revocations(
     dag: DossierDAG,
+    raw_dossier: Optional[bytes] = None,
     oobi_url: Optional[str] = None
 ) -> Tuple[ClaimBuilder, List[str]]:
     """Check revocation status for all credentials in a dossier DAG.
@@ -124,12 +189,20 @@ async def check_dossier_revocations(
     - If ANY credential status unknown/error → INDETERMINATE
     - If ALL credentials active → VALID
 
-    Revocation checking is REQUIRED - never skipped. If TEL is unavailable,
-    the claim becomes INDETERMINATE (not skipped).
+    Strategy (Phase 9.4):
+    1. First check if TEL events are included inline in raw_dossier
+    2. If found, use inline TEL to determine status (no network required)
+    3. If not found, resolve registry OOBI to discover TEL-serving witnesses
+    4. Query registry witnesses for TEL events
+
+    The PASSporT signer's OOBI (oobi_url) is NOT used directly for TEL queries
+    because it points to the signer's agent, not the credential registry controller.
+    Instead, it's used to derive the registry OOBI pattern.
 
     Args:
         dag: Parsed and validated DossierDAG
-        oobi_url: Optional OOBI URL for witness queries
+        raw_dossier: Raw dossier bytes for inline TEL parsing
+        oobi_url: Base OOBI URL for registry OOBI derivation
 
     Returns:
         Tuple of (ClaimBuilder for `revocation_clear` claim, list of revoked SAIDs)
@@ -142,22 +215,51 @@ async def check_dossier_revocations(
 
     log.info(f"check_dossier_revocations: checking {len(dag.nodes)} credential(s)")
 
+    # Step 1: Try to extract TEL events from inline dossier (binary-safe)
+    inline_tel_results: Dict[str, any] = {}
+    if raw_dossier:
+        log.info("  Step 1: checking for inline TEL events")
+        # Use latin-1 for byte-transparent decoding (preserves all bytes)
+        # CESR JSON portions are ASCII-safe, binary attachments are Base64 (also ASCII-safe)
+        dossier_text = raw_dossier.decode("latin-1")
+        for said, node in dag.nodes.items():
+            registry_said = node.raw.get("ri")
+            result = client.parse_dossier_tel(
+                dossier_text,
+                credential_said=said,
+                registry_said=registry_said
+            )
+            if result.status != CredentialStatus.UNKNOWN:
+                inline_tel_results[said] = result
+                log.info(f"    found inline TEL for {said[:20]}...: {result.status.value}")
+
+    if not inline_tel_results:
+        log.info("  Step 1: no inline TEL events found")
+
+    # Step 2: Check each credential
     revoked_count = 0
     unknown_count = 0
     active_count = 0
+    inline_count = len(inline_tel_results)
 
     for said, node in dag.nodes.items():
-        # Extract registry SAID if present (from raw ACDC data)
         registry_said = node.raw.get("ri")
 
-        log.info(f"  checking credential: said={said[:20]}... issuer={node.issuer[:16]}...")
+        # Use inline result if available
+        if said in inline_tel_results:
+            result = inline_tel_results[said]
+            log.info(f"  using inline TEL for {said[:20]}...: {result.status.value}")
+        else:
+            # Step 3: Resolve registry OOBI and query its witnesses
+            log.info(f"  no inline TEL for {said[:20]}..., resolving registry OOBI")
+            result = await _query_registry_tel(
+                client,
+                credential_said=said,
+                registry_said=registry_said,
+                base_oobi_url=oobi_url
+            )
 
-        result = await client.check_revocation(
-            credential_said=said,
-            registry_said=registry_said,
-            oobi_url=oobi_url
-        )
-
+        # Process result with consistent evidence format
         if result.status == CredentialStatus.REVOKED:
             revoked_count += 1
             revoked_saids.append(said)
@@ -165,6 +267,7 @@ async def check_dossier_revocations(
                 ClaimStatus.INVALID,
                 f"Credential {said[:20]}... is revoked"
             )
+            claim.add_evidence(f"revocation_source:{result.source}")
             log.info(f"  credential REVOKED: {said[:20]}...")
 
         elif result.status in (CredentialStatus.UNKNOWN, CredentialStatus.ERROR):
@@ -173,19 +276,21 @@ async def check_dossier_revocations(
             if claim.status != ClaimStatus.INVALID:
                 claim.fail(
                     ClaimStatus.INDETERMINATE,
-                    f"Could not determine revocation status for {said[:20]}...: {result.error or result.status.value}"
+                    f"Could not determine revocation status for {said[:20]}...: {result.error or 'unknown'}"
                 )
+            claim.add_evidence(f"unknown:{said[:16]}...|revocation_source:{result.source}")
             log.info(f"  credential status UNKNOWN: {said[:20]}... error={result.error}")
 
         else:
             # ACTIVE - credential is valid
             active_count += 1
-            claim.add_evidence(f"active:{said[:16]}...")
+            claim.add_evidence(f"active:{said[:16]}...|revocation_source:{result.source}")
             log.info(f"  credential ACTIVE: {said[:20]}...")
 
     # Summary evidence
     total = len(dag.nodes)
-    claim.add_evidence(f"checked:{total},active:{active_count},revoked:{revoked_count},unknown:{unknown_count}")
+    queried_count = total - inline_count
+    claim.add_evidence(f"checked:{total},inline:{inline_count},queried:{queried_count}")
 
     return claim, revoked_saids
 
@@ -370,8 +475,10 @@ async def verify_vvp(
 
     if dag is not None:
         # Check revocation for all credentials in dossier
+        # Pass raw_dossier for inline TEL parsing (Phase 9.4)
         revocation_claim, revoked_saids = await check_dossier_revocations(
             dag,
+            raw_dossier=raw_dossier,
             oobi_url=passport.header.kid if passport else None
         )
         # Emit CREDENTIAL_REVOKED errors for each revoked credential

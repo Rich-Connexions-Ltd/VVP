@@ -1,14 +1,14 @@
-Code Review: Phase 9.3 + Admin - Revocation Integration (Revision 2)
+Code Review: Phase 9.4 - TEL Resolution Architecture Fix
 Verdict: APPROVED
 
 Implementation Assessment
-The dossier status now correctly propagates from `revocation_clear`, and revoked credentials emit `CREDENTIAL_REVOKED` errors. The claim tree matches §3.3B and the revocation semantics are unambiguous.
+Inline TEL parsing, registry OOBI derivation, and fallback chain are implemented as planned. `revocation_clear` uses inline TEL first, then registry OOBI, then default witnesses. Evidence formatting and summary counts are present.
 
 Code Quality
-Changes are localized and consistent with existing patterns. Error emission uses the existing `ErrorDetail`/`ERROR_RECOVERABILITY` structure and maintains clarity.
+Changes are clear and well‑logged. Helper `_query_registry_tel()` isolates the registry OOBI logic and keeps the main flow readable. Latin‑1 decoding is documented and applied consistently.
 
 Test Coverage
-New tests cover dossier status propagation and revoked SAID collection for error emission. Existing revocation and admin tests still cover the core paths.
+Added tests cover inline TEL success, registry OOBI derivation, fallback behavior, and binary‑safe parsing. Coverage looks adequate for the new paths.
 
 Findings
-[Low]: Admin endpoint env leakage note remains; not addressed in this revision but also not required for approval.
+[Low]: Evidence tags for UNKNOWN/ERROR don’t include `revocation_source`, which can make debugging mixed results harder; consider adding a source tag even on indeterminate outcomes. `app/vvp/verify.py:197`

@@ -384,9 +384,30 @@ class TELClient:
         Parse TEL events from a dossier CESR stream (no network request).
         Use this when TEL events are included in the dossier response.
         """
-        return self._parse_tel_response(
+        log.info(
+            f"parse_dossier_tel: cred={credential_said[:20]}... "
+            f"reg={registry_said[:20] if registry_said else 'None'}... "
+            f"data_len={len(dossier_data)}"
+        )
+
+        # Extract events to log what we found
+        events = self._extract_tel_events(dossier_data)
+        log.info(f"  inline_tel_events_found: {len(events)}")
+        for i, evt in enumerate(events):
+            log.info(
+                f"  event[{i}]: type={evt.event_type} seq={evt.sequence} "
+                f"cred={evt.credential_said[:20]}..."
+            )
+
+        result = self._parse_tel_response(
             credential_said, registry_said, dossier_data, "dossier"
         )
+        log.info(
+            f"  inline_tel_result: status={result.status.value} "
+            f"has_iss={result.issuance_event is not None} "
+            f"has_rev={result.revocation_event is not None}"
+        )
+        return result
 
     def clear_cache(self):
         """Clear the revocation status cache."""

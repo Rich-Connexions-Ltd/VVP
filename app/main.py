@@ -101,8 +101,53 @@ def admin():
             "default_witness_urls": TELClient.DEFAULT_WITNESSES,
         },
         "environment": {
-            "log_level": os.getenv("VVP_LOG_LEVEL", "INFO"),
+            "log_level": logging.getLogger().getEffectiveLevel(),
+            "log_level_name": logging.getLevelName(logging.getLogger().getEffectiveLevel()),
         }
+    }
+
+
+class LogLevelRequest(BaseModel):
+    level: str
+
+
+@app.post("/admin/log-level")
+def set_log_level(req: LogLevelRequest):
+    """Change log level at runtime (DEBUG, INFO, WARNING, ERROR, CRITICAL).
+
+    Gated by ADMIN_ENDPOINT_ENABLED.
+    """
+    from app.core.config import ADMIN_ENDPOINT_ENABLED
+
+    if not ADMIN_ENDPOINT_ENABLED:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": "Admin endpoint disabled"}
+        )
+
+    valid_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+    level_upper = req.level.upper()
+
+    if level_upper not in valid_levels:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": f"Invalid log level. Must be one of: {valid_levels}"}
+        )
+
+    # Set level on root logger and all vvp loggers
+    root_logger = logging.getLogger()
+    root_logger.setLevel(getattr(logging, level_upper))
+
+    # Also update the vvp logger explicitly
+    vvp_logger = logging.getLogger("vvp")
+    vvp_logger.setLevel(getattr(logging, level_upper))
+
+    log.info(f"Log level changed to {level_upper}")
+
+    return {
+        "success": True,
+        "log_level": level_upper,
+        "message": f"Log level set to {level_upper}"
     }
 
 
