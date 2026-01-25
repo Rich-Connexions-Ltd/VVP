@@ -75,6 +75,63 @@ def parse_acdc(data: dict) -> ACDCNode:
     )
 
 
+def _extract_json_events_permissive(data: bytes) -> List[dict]:
+    """Extract JSON objects from a CESR stream without strict attachment parsing.
+
+    This is a fallback for when the strict CESR parser fails due to unsupported
+    attachment codes. It extracts JSON events by finding balanced braces.
+
+    Args:
+        data: Raw bytes that may contain JSON events with CESR attachments
+
+    Returns:
+        List of parsed JSON dictionaries
+    """
+    events = []
+    text = data.decode("utf-8", errors="replace")
+    i = 0
+    while i < len(text):
+        # Find start of JSON object
+        if text[i] == "{":
+            depth = 0
+            in_string = False
+            escape = False
+            start = i
+            for j in range(i, len(text)):
+                char = text[j]
+                if escape:
+                    escape = False
+                    continue
+                if char == "\\":
+                    escape = True
+                    continue
+                if char == '"':
+                    in_string = not in_string
+                    continue
+                if in_string:
+                    continue
+                if char == "{":
+                    depth += 1
+                elif char == "}":
+                    depth -= 1
+                    if depth == 0:
+                        # Found complete JSON object
+                        json_str = text[start : j + 1]
+                        try:
+                            obj = json.loads(json_str)
+                            events.append(obj)
+                        except json.JSONDecodeError:
+                            pass  # Skip malformed JSON
+                        i = j + 1
+                        break
+            else:
+                # Couldn't find closing brace
+                i += 1
+        else:
+            i += 1
+    return events
+
+
 def _is_cesr_stream(data: bytes) -> bool:
     """Check if data appears to be a CESR stream (without heavy imports).
 
@@ -155,34 +212,84 @@ def parse_dossier(raw: bytes) -> Tuple[List[ACDCNode], Dict[str, bytes]]:
 
         try:
             messages = cesr.parse_cesr_stream(raw)
-        except Exception as e:
-            raise ParseError(f"Failed to parse CESR stream: {e}")
+            nodes = []
+            for msg in messages:
+                event = msg.event_dict
+                # Check if this is an ACDC (has 'd' and 'i' fields)
+                if "d" in event and "i" in event:
+                    try:
+                        node = parse_acdc(event)
+                        nodes.append(node)
+                        # Extract first controller signature if present
+                        if msg.controller_sigs:
+                            signatures[node.said] = msg.controller_sigs[0]
+                    except ParseError:
+                        # Skip non-ACDC events in the stream
+                        continue
 
-        nodes = []
-        for msg in messages:
-            event = msg.event_dict
-            # Check if this is an ACDC (has 'd' and 'i' fields)
-            if "d" in event and "i" in event:
+            if not nodes:
+                raise ParseError("No ACDCs found in CESR stream")
+
+            return nodes, signatures
+        except Exception:
+            # Strict CESR parsing failed - fall back to permissive extraction
+            # This extracts JSON events without validating attachments
+            # Signatures will not be available in permissive mode
+            events = _extract_json_events_permissive(raw)
+            nodes = []
+            seen_saids: set = set()  # Deduplicate by SAID
+            for event in events:
+                # Filter for ACDCs vs KEL events:
+                # - KEL events have "t" (type: icp, ixn, rot, etc.) and numeric "s" (sequence)
+                # - ACDCs don't have "t" and have SAID-format "s" (schema SAID)
+                if "t" in event:
+                    continue  # This is a KEL event, not an ACDC
+                if "d" not in event or "i" not in event or "s" not in event:
+                    continue
+                # Schema SAID should start with 'E' (KERI prefix for Blake3-256)
+                schema = event.get("s", "")
+                if not isinstance(schema, str) or not schema.startswith("E"):
+                    continue  # Likely a KEL sequence number, not schema SAID
+                # Deduplicate
+                said = event.get("d", "")
+                if said in seen_saids:
+                    continue
+                seen_saids.add(said)
                 try:
                     node = parse_acdc(event)
                     nodes.append(node)
-                    # Extract first controller signature if present
-                    if msg.controller_sigs:
-                        signatures[node.said] = msg.controller_sigs[0]
                 except ParseError:
-                    # Skip non-ACDC events in the stream
                     continue
 
-        if not nodes:
-            raise ParseError("No ACDCs found in CESR stream")
+            if not nodes:
+                raise ParseError("No ACDCs found in CESR stream (permissive mode)")
 
-        return nodes, signatures
+            return nodes, signatures  # signatures empty in permissive mode
 
     # Plain JSON format - no signatures
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as e:
         raise ParseError(f"Invalid JSON: {e}")
+
+    # Handle Provenant wrapper format: {"details": "...CESR content..."}
+    if isinstance(data, dict) and "details" in data and isinstance(data["details"], str):
+        details_content = data["details"].encode("utf-8")
+        # The details field contains CESR stream content
+        if _is_cesr_stream(details_content):
+            return parse_dossier(details_content)
+        # Try parsing as plain JSON
+        try:
+            inner_data = json.loads(details_content)
+            if isinstance(inner_data, dict):
+                return [parse_acdc(inner_data)], signatures
+            elif isinstance(inner_data, list):
+                if not inner_data:
+                    raise ParseError("Empty ACDC array in details")
+                return [parse_acdc(item) for item in inner_data], signatures
+        except json.JSONDecodeError:
+            # Not valid JSON inside details, treat as CESR
+            return parse_dossier(details_content)
 
     if isinstance(data, dict):
         return [parse_acdc(data)], signatures

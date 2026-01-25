@@ -1,0 +1,6 @@
+{# Toast notification partial #}
+{# Expects: message, type (success, error, warning, info) #}
+
+<div class="toast toast-{{ type or 'info' }}" role="alert">
+    {{ message }}
+</div>

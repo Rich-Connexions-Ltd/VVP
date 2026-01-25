@@ -1,5 +1,62 @@
 # VVP Verifier Change Log
 
+## Phase 13B: Separation of Concerns Refactoring
+
+**Date:** 2026-01-25
+**Commit:** `TBD`
+
+### Files Changed
+
+| File | Action | Description |
+|------|--------|-------------|
+| `app/main.py` | Modified | Refactored `/ui/parse-jwt` to use domain layer `parse_passport()`, added permissive decode mode with spec reference mapping, removed dead code (`_base64url_decode`, `_parse_jwt_logic`, `_extract_acdcs_from_dossier`) |
+| `app/vvp/dossier/parser.py` | Modified | Added Provenant wrapper format support (`{"details": "..."}`) and permissive CESR extraction fallback |
+| `app/templates/partials/jwt_result.html` | Modified | Added validation warning display with spec section references in table format |
+| `tests/test_ui_endpoints.py` | Created | 14 integration tests for UI endpoint behavior and domain layer alignment |
+| `tests/test_dossier.py` | Modified | Added 2 tests for Provenant wrapper format parsing |
+| `CLAUDE.md` | Modified | Added pre-authorization for pytest with DYLD_LIBRARY_PATH |
+
+### Summary
+
+Phase 13B refactors the HTMX UI layer to properly delegate to the domain layer, fixing separation of concerns violations introduced in Phase 13.
+
+**Key Changes:**
+
+1. **Domain Layer Delegation (§5.0-5.2):**
+   - `/ui/parse-jwt` now uses `parse_passport()` from `app/vvp/passport.py`
+   - Removed duplicate base64url decoding and JWT parsing logic
+   - Domain layer validation errors properly propagated to UI
+
+2. **Permissive Decode Mode:**
+   - JWT content shown even when validation fails
+   - Validation errors displayed separately with "Validation Warning" banner
+   - Spec section references mapped to error messages (20+ patterns)
+   - Users can see decoded content and understand why validation failed
+
+3. **Spec Reference Mapping:**
+   - `SPEC_SECTION_MAP` dictionary maps error patterns to spec sections
+   - Examples: `forbidden algorithm` → `§5.0, §5.1`, `orig.tn must be a single phone number` → `§4.2`
+   - Template displays spec section and description alongside error message
+
+4. **Provenant Dossier Format Support:**
+   - Added handling for `{"details": "...CESR content..."}` wrapper format
+   - Permissive CESR extraction when strict parsing fails (unknown attachment codes)
+   - Filters KEL events from ACDCs using schema SAID format check
+   - Deduplicates credentials by SAID
+
+5. **Dead Code Removal:**
+   - Deleted `_base64url_decode()` - replaced by domain layer
+   - Deleted `_parse_jwt_logic()` - replaced by `parse_passport()`
+   - Deleted `_extract_acdcs_from_dossier()` - no longer used
+
+### Test Coverage
+
+- 14 new UI endpoint integration tests
+- 2 new Provenant wrapper format tests
+- 621 total tests passing
+
+---
+
 ## Sprint 12: Tier 2 Completion - PASSporT & ACDC Validation
 
 **Date:** 2026-01-25

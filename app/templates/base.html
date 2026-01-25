@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}VVP Verifier{% endblock %}</title>
+
+    <!-- PicoCSS for minimal, semantic styling -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+
+    <!-- HTMX for dynamic updates -->
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+
+    <style>
+        /* Custom styles for VVP Verifier */
+        :root {
+            --vvp-success: #28a745;
+            --vvp-danger: #dc3545;
+            --vvp-warning: #ffc107;
+            --vvp-info: #0066cc;
+            --vvp-muted: #6c757d;
+        }
+
+        /* Status badges */
+        .badge {
+            display: inline-block;
+            padding: 0.25em 0.5em;
+            font-size: 0.75em;
+            font-weight: 600;
+            border-radius: 0.25em;
+            text-transform: uppercase;
+        }
+        .badge-success { background: var(--vvp-success); color: white; }
+        .badge-danger { background: var(--vvp-danger); color: white; }
+        .badge-warning { background: var(--vvp-warning); color: black; }
+        .badge-info { background: var(--vvp-info); color: white; }
+        .badge-muted { background: var(--vvp-muted); color: white; }
+
+        /* Credential type badges */
+        .badge-root { background: #6f42c1; color: white; }
+        .badge-issuer { background: #17a2b8; color: white; }
+        .badge-le { background: #20c997; color: white; }
+        .badge-ape { background: #fd7e14; color: white; }
+        .badge-de { background: #e83e8c; color: white; }
+        .badge-tnalloc { background: #007bff; color: white; }
+
+        /* Code/pre styling */
+        .code-block {
+            background: #f6f6f6;
+            padding: 1em;
+            border-radius: 0.25em;
+            overflow-x: auto;
+            font-family: monospace;
+            font-size: 0.875em;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        /* Credential cards */
+        .credential-card {
+            border: 2px solid #dee2e6;
+            border-radius: 0.5em;
+            padding: 1em;
+            margin-bottom: 1em;
+        }
+        .credential-card.valid {
+            border-color: var(--vvp-success);
+        }
+        .credential-card.invalid {
+            border-color: var(--vvp-danger);
+        }
+        .credential-card.unknown {
+            border-color: var(--vvp-warning);
+        }
+
+        /* Credential graph layers */
+        .credential-layer {
+            margin-left: 1.5em;
+            padding-left: 1em;
+            border-left: 2px solid #dee2e6;
+        }
+        .credential-layer-root {
+            margin-left: 0;
+            padding-left: 0;
+            border-left: none;
+        }
+
+        /* Toast notifications */
+        .toast-container {
+            position: fixed;
+            top: 1em;
+            right: 1em;
+            z-index: 1000;
+        }
+        .toast {
+            padding: 1em;
+            margin-bottom: 0.5em;
+            border-radius: 0.25em;
+            animation: fadeIn 0.3s ease-in;
+        }
+        .toast-success { background: var(--vvp-success); color: white; }
+        .toast-error { background: var(--vvp-danger); color: white; }
+        .toast-warning { background: var(--vvp-warning); color: black; }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateX(1em); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        /* Loading indicator */
+        .htmx-request .htmx-indicator {
+            display: inline-block;
+        }
+        .htmx-indicator {
+            display: none;
+        }
+
+        /* Section spacing */
+        section {
+            margin-bottom: 2em;
+        }
+
+        /* Details/summary styling for collapsible sections */
+        details > summary {
+            cursor: pointer;
+            font-weight: 600;
+        }
+        details[open] > summary {
+            margin-bottom: 0.5em;
+        }
+    </style>
+
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <main class="container">
+        <header>
+            <h1>{% block header %}VVP Verifier{% endblock %}</h1>
+        </header>
+
+        <!-- Toast notification container -->
+        <div id="toast-container" class="toast-container"></div>
+
+        {% block content %}{% endblock %}
+
+        <footer>
+            <small>VVP Verifier - Verifiable Voice Protocol verification tool</small>
+        </footer>
+    </main>
+
+    <script>
+        // HTMX toast event handler
+        document.body.addEventListener('showToast', function(evt) {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = 'toast toast-' + (evt.detail.type || 'info');
+            toast.textContent = evt.detail.message;
+            container.appendChild(toast);
+            setTimeout(() => toast.remove(), 5000);
+        });
+
+        // Handle HTMX errors
+        document.body.addEventListener('htmx:responseError', function(evt) {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = 'toast toast-error';
+            toast.textContent = 'Request failed: ' + evt.detail.xhr.status;
+            container.appendChild(toast);
+            setTimeout(() => toast.remove(), 5000);
+        });
+    </script>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

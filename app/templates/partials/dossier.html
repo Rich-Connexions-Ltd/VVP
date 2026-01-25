@@ -1,0 +1,51 @@
+{# Dossier display partial #}
+
+{% if error %}
+<article aria-invalid="true">
+    <header>Fetch Error</header>
+    <p>{{ error }}</p>
+    {% if evd_url %}
+    <p><strong>Manual fetch:</strong></p>
+    <code>curl "{{ evd_url }}"</code>
+    {% endif %}
+</article>
+{% else %}
+{# Hidden data element for graph building #}
+{% if acdcs %}
+<span data-graph-available="true" data-acdcs="{{ acdcs | tojson | e }}" style="display:none;"></span>
+{% endif %}
+
+<h3>Dossier Contents</h3>
+<p><small>{{ acdcs | length }} credential(s) found</small></p>
+
+{% if acdcs %}
+<div style="display:flex;flex-wrap:wrap;gap:1rem;">
+    {% for acdc in acdcs %}
+    {% include "partials/credential_card.html" %}
+    {% endfor %}
+</div>
+
+{# Revocation check form #}
+<form hx-post="/ui/check-revocation" hx-target="#revocation-result" hx-swap="innerHTML" style="margin-top:1rem;">
+    <input type="hidden" name="acdcs" value="{{ acdcs | tojson | e }}">
+    <input type="hidden" name="kid_url" value="{{ kid_url or '' }}">
+    <input type="hidden" name="dossier_stream" value="{{ dossier_stream or '' }}">
+    <button type="submit" class="secondary">
+        <span class="htmx-indicator">Checking...</span>
+        <span>Check Live Revocation Status</span>
+    </button>
+</form>
+<div id="revocation-result"></div>
+{% else %}
+<article aria-invalid="true">
+    <p>No credentials found in dossier.</p>
+</article>
+{% endif %}
+
+{% if raw_data %}
+<details>
+    <summary>Raw Dossier Data</summary>
+    <div class="code-block">{{ raw_data }}</div>
+</details>
+{% endif %}
+{% endif %}

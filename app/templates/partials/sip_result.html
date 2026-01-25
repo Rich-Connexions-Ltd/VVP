@@ -1,0 +1,45 @@
+{# SIP INVITE parsing result partial #}
+
+{% if error %}
+<article aria-invalid="true">
+    <header>Parse Error</header>
+    <p>{{ error }}</p>
+</article>
+{% else %}
+
+<h4>Extracted Headers</h4>
+
+{% if identity_header %}
+<article>
+    <header>Identity Header Found</header>
+    <p>PASSporT JWT extracted from Identity header:</p>
+    <div class="code-block" style="max-height:200px;overflow:auto;">{{ identity_header }}</div>
+
+    {# Form to parse the extracted JWT #}
+    <form hx-post="/ui/parse-jwt" hx-target="#jwt-result" hx-swap="innerHTML" style="margin-top:1rem;">
+        <input type="hidden" name="jwt" value="{{ identity_header }}">
+        <button type="submit">
+            <span class="htmx-indicator">Parsing...</span>
+            <span>Parse Extracted JWT</span>
+        </button>
+    </form>
+</article>
+{% else %}
+<article aria-invalid="true">
+    <p>No Identity header found in the SIP INVITE message.</p>
+</article>
+{% endif %}
+
+{% if other_headers %}
+<details>
+    <summary>Other Headers</summary>
+    <dl>
+        {% for header, value in other_headers.items() %}
+        <dt>{{ header }}</dt>
+        <dd><code>{{ value }}</code></dd>
+        {% endfor %}
+    </dl>
+</details>
+{% endif %}
+
+{% endif %}

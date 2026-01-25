@@ -1,8 +1,26 @@
 #!/usr/bin/env python3
 """
+DEPRECATED: This standalone server is deprecated as of Phase 13.
+
+Use the main FastAPI application instead:
+    uvicorn app.main:app --reload
+
+The main application now serves HTMX templates with all features
+previously provided by this server.
+
+This file is kept for reference only and will be removed in a future release.
+
+---
+Original description:
 Lightweight server for the VVP Parser UI.
 Does not require pysodium/libsodium - just serves the UI and proxies dossier fetches.
 """
+import warnings
+warnings.warn(
+    "web/server.py is deprecated. Use 'uvicorn app.main:app --reload' instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
 import json
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 import urllib.request

@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+
+{% block title %}VVP Verifier{% endblock %}
+
+{% block content %}
+<section id="jwt-section">
+    <h2>Parse PASSporT JWT</h2>
+    <p>Paste a VVP PASSporT JWT to decode and view its contents.</p>
+
+    <form hx-post="/ui/parse-jwt" hx-target="#jwt-result" hx-swap="innerHTML">
+        <label for="jwt">PASSporT JWT</label>
+        <textarea
+            id="jwt"
+            name="jwt"
+            rows="5"
+            placeholder="eyJhbGciOiJFZERTQSIsInR5cCI6InBhc3Nwb3J0Ii..."
+        >eyJhbGciOiJFZERTQSIsInR5cCI6InBhc3Nwb3J0IiwicHB0IjoidnZwIiwia2lkIjoiaHR0cDovL3dpdG5lc3M1LnN0YWdlLnByb3ZlbmFudC5uZXQ6NTYzMS9vb2JpL0VHYXk1dWZCcUFhbmJoRmFfcWUtS01GVVBKSG44SjBNRmJhOTZ5eVdSckxGL3dpdG5lc3MifQ.eyJvcmlnIjp7InRuIjpbIjQ0Nzg4NDY2NjIwMCJdfSwiZGVzdCI6eyJ0biI6WyI0NDc3Njk3MTAyODUiXX0sImlhdCI6MTc2OTE4MzMwMiwiY2FyZCI6WyJDQVRFR09SSUVTOiIsIkxPR087SEFTSD1zaGEyNTYtNDBiYWM2ODZhM2YwYjQ4MjUzZGU1NWIzNGY1NTJjODA3MGJhZjIyZjgxMjU1YWFjNDQ5NzIxYzg3OWM3MTZhNDtWQUxVRT1VUkk6aHR0cHM6Ly9vcmlnaW4tY2VsbC1mcmFua2Z1cnQuczMuZXUtY2VudHJhbC0xLmFtYXpvbmF3cy5jb20vYnJhbmQtYXNzZXRzL3JpY2gtY29ubmV4aW9ucy9sb2dvLnBuZyIsIk5PVEU7TEVJOjk4NDUwMERFRTc1MzdBMDdZNjE1IiwiT1JHOlJpY2ggQ29ubmV4aW9ucyJdLCJjYWxsX3JlYXNvbiI6bnVsbCwiZ29hbCI6bnVsbCwiZXZkIjoiaHR0cHM6Ly9vcmlnaW4uZGVtby5wcm92ZW5hbnQubmV0L3YxL2FnZW50L3B1YmxpYy9FSGxWWFVKLWRZS3F0UGR2enRkQ0ZKRWJreXI2elgyZFgxMmh3ZEU5eDhleS9kb3NzaWVyLmNlc3IiLCJvcmlnSWQiOiIiLCJleHAiOjE3NjkxODM2MDIsInJlcXVlc3RfaWQiOiIifQ.OvoaiAwt1dgPb6gLkK7ufWoL2qzdtmudyyiL38oqB0wfaicGSG4B_QFtHY2vS2w-PYZ6LhN9dWXpsOHtpKAXCw</textarea>
+        <button type="submit">
+            <span class="htmx-indicator">Parsing...</span>
+            <span>Parse JWT</span>
+        </button>
+    </form>
+
+    <div id="jwt-result">
+        <p><em>Paste a JWT above and click "Parse JWT" to see decoded contents.</em></p>
+    </div>
+</section>
+
+<section id="dossier-section">
+    <h2>Dossier (Evidence)</h2>
+    <div id="dossier-result">
+        <p><em>Parse a JWT first to see the evidence URL, then fetch the dossier.</em></p>
+    </div>
+</section>
+
+<hr>
+
+<details>
+    <summary>Parse from SIP INVITE</summary>
+    <section id="sip-section">
+        <p>Paste a raw SIP INVITE message to extract the Identity header.</p>
+
+        <form hx-post="/ui/parse-sip" hx-target="#sip-result" hx-swap="innerHTML">
+            <label for="sip_invite">Raw SIP INVITE</label>
+            <textarea
+                id="sip_invite"
+                name="sip_invite"
+                rows="8"
+                placeholder="INVITE sip:+441onal@example.com SIP/2.0&#10;Via: ...&#10;Identity: ..."
+            ></textarea>
+            <button type="submit">
+                <span class="htmx-indicator">Parsing...</span>
+                <span>Parse SIP INVITE</span>
+            </button>
+        </form>
+
+        <div id="sip-result">
+            <p><em>Paste a SIP INVITE message above to extract the Identity header.</em></p>
+        </div>
+    </section>
+</details>
+
+<hr>
+
+<details>
+    <summary>Credential Chain Graph</summary>
+    <section id="graph-section">
+        <p>View the credential chain graph showing the trust hierarchy from root to leaf credentials.</p>
+        <div id="graph-result">
+            <p><em>Fetch a dossier first to view the credential chain graph.</em></p>
+        </div>
+    </section>
+</details>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Handle JWT parsing result - update dossier section if evd URL is found
+    document.body.addEventListener('htmx:afterSwap', function(evt) {
+        if (evt.detail.target.id === 'jwt-result') {
+            // Check for evd URL in the response
+            const evdUrlElement = evt.detail.target.querySelector('[data-evd-url]');
+            if (evdUrlElement) {
+                const evdUrl = evdUrlElement.dataset.evdUrl;
+                const kidUrl = evdUrlElement.dataset.kidUrl || '';
+
+                // Update dossier section with fetch form
+                const dossierResult = document.getElementById('dossier-result');
+                dossierResult.innerHTML = `
+                    <p>Evidence URL: <code style="word-break:break-all;">${evdUrl}</code></p>
+                    <form hx-post="/ui/fetch-dossier" hx-target="#dossier-result" hx-swap="innerHTML">
+                        <input type="hidden" name="evd_url" value="${evdUrl}">
+                        <input type="hidden" name="kid_url" value="${kidUrl}">
+                        <button type="submit">
+                            <span class="htmx-indicator">Fetching...</span>
+                            <span>Fetch Dossier</span>
+                        </button>
+                    </form>
+                `;
+                // Re-process HTMX on new content
+                htmx.process(dossierResult);
+            }
+        }
+
+        // Handle dossier fetch result - enable graph section
+        if (evt.detail.target.id === 'dossier-result') {
+            const graphData = evt.detail.target.querySelector('[data-graph-available]');
+            if (graphData) {
+                const graphResult = document.getElementById('graph-result');
+                graphResult.innerHTML = `
+                    <form hx-post="/ui/credential-graph" hx-target="#graph-result" hx-swap="innerHTML">
+                        <input type="hidden" name="dossier_data" value='${graphData.dataset.acdcs}'>
+                        <button type="submit">
+                            <span class="htmx-indicator">Building graph...</span>
+                            <span>Show Credential Graph</span>
+                        </button>
+                    </form>
+                `;
+                htmx.process(graphResult);
+            }
+        }
+    });
+</script>
+{% endblock %}

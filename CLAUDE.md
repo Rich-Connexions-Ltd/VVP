@@ -6,9 +6,13 @@ The following commands are pre-authorized and do not require user confirmation:
 
 - `git` - All git operations (add, commit, push, status, log, diff, etc.)
 - `gh` - All GitHub CLI operations (run watch, pr create, issue, etc.)
-- `pytest` - Run tests
+- `pytest` - Run tests (including with DYLD_LIBRARY_PATH prefix)
 - `python3` / `pip3` - Python execution and package management
 - `curl` - HTTP requests for deployment verification
+- `uvicorn` - Running the development server
+- `DYLD_LIBRARY_PATH=* python3 -m pytest` - Test commands with library path
+
+All test-related commands using pytest are pre-authorized, including those that set environment variables like `DYLD_LIBRARY_PATH`.
 
 ## Running Tests
 

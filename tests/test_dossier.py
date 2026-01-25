@@ -281,6 +281,28 @@ class TestDossierParser:
         nodes, _ = parse_dossier(json.dumps(VALID_ACDC).encode())
         assert nodes[0].raw == VALID_ACDC
 
+    def test_parse_provenant_wrapper_format(self):
+        """Parse Provenant wrapper format: {"details": "...CESR/JSON content..."}."""
+        # Inner content is a valid ACDC
+        inner_acdc = {"d": "SAID_INNER", "i": "ISSUER", "s": "SCHEMA"}
+        wrapper = {"details": json.dumps(inner_acdc)}
+        nodes, sigs = parse_dossier(json.dumps(wrapper).encode())
+        assert len(nodes) == 1
+        assert nodes[0].said == "SAID_INNER"
+        assert sigs == {}
+
+    def test_parse_provenant_wrapper_array(self):
+        """Parse Provenant wrapper containing array of ACDCs."""
+        inner_acdcs = [
+            {"d": "SAID_1", "i": "I1", "s": "S1"},
+            {"d": "SAID_2", "i": "I2", "s": "S2"},
+        ]
+        wrapper = {"details": json.dumps(inner_acdcs)}
+        nodes, sigs = parse_dossier(json.dumps(wrapper).encode())
+        assert len(nodes) == 2
+        saids = {n.said for n in nodes}
+        assert saids == {"SAID_1", "SAID_2"}
+
 
 # =============================================================================
 # Edge Extraction Tests

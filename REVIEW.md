@@ -244,6 +244,64 @@ Findings
 Required Changes (if not APPROVED)
 1. Treat missing witness receipts as invalid in strict mode (`StateInvalidError`) and add a test asserting this behavior.
 
+## Plan Review: Phase 13 - HTMX Frontend Migration
+
+**Verdict:** CHANGES_REQUESTED
+
+### Architecture Assessment
+Hybrid HTMX + JSON API is reasonable and backward compatible. However, the plan doesn’t define how server‑rendered `/ui/*` endpoints will share logic with existing JSON endpoints, risking duplication and divergence.
+
+### Template Design
+The template/partials layout is fine for HTMX swaps, but the credential graph replacement is underspecified; a purely HTML/CSS version may not preserve current interactive behavior (path highlighting, toggling).
+
+### Findings
+- [High]: No strategy to avoid business‑logic duplication between `/ui/*` and existing JSON endpoints. Without shared service functions, you risk inconsistent verification behavior between UI and API. Add a shared service layer or reuse existing handlers internally. `~/.claude/plans/graceful-inventing-petal.md`.
+- [Medium]: Credential graph visualization fallback is too vague. Define the minimal acceptable feature set (e.g., tree depth, highlighting rules) and how it maps to HTML/HTMX. Otherwise, scope is unbounded.
+- [Low]: Deprecating `web/server.py` is fine, but the plan doesn’t specify how static assets (if any) will be served under `app/main.py`; add a short note on static mounting.
+
+### Required Changes (if CHANGES_REQUESTED)
+1. Specify how `/ui/*` endpoints reuse existing verification logic to prevent drift.
+2. Define acceptance criteria for the HTMX credential graph replacement (what features are retained vs dropped).
+
+### Recommendations
+- Keep `web/index.html` as a regression reference and add a minimal smoke test that renders `GET /` HTML to catch template regressions.
+
+## Code Review: Phase 13 - HTMX Frontend Migration
+Verdict: CHANGES_REQUESTED
+
+Implementation Assessment
+The HTMX templates and `/ui/*` endpoints are present and functional, but the shared logic story is only partially realized and JWT parsing has a padding bug that can break valid tokens.
+
+Code Quality
+Template organization and macro reuse are solid. Endpoint logic is readable, but `/proxy-fetch` and `/credential-graph` do not reuse the new helper functions, which undercuts the “shared service layer” decision.
+
+Test Coverage
+No tests cover HTML endpoints or template rendering. A minimal smoke test for `GET /` and one `/ui/*` endpoint would reduce regression risk.
+
+Findings
+[High]: `_base64url_decode()` pads with `4 - len(data) % 4`, which adds 4 padding characters when the input length is already a multiple of 4. This corrupts valid JWTs. Use `(-len(data) % 4)` instead. `app/main.py`.
+[Medium]: Shared logic is not applied to JSON endpoints (`/proxy-fetch`, `/credential-graph`), so UI and API can diverge. Reuse `_fetch_dossier_logic()` and the graph parsing helpers in JSON handlers or document the intentional split. `app/main.py`.
+[Low]: UI JWT parsing bypasses `parse_passport()` and therefore won’t surface validation errors (typ/ppt/phone). If the UI is intended to mirror verifier behavior, consider using the real parser. `app/main.py`.
+
+Required Changes (if not APPROVED)
+1. Fix `_base64url_decode()` padding logic.
+2. Align JSON endpoints with shared helper functions or explicitly document why they differ.
+
+## Code Review: Phase 13B - Separation of Concerns Refactoring
+Verdict: APPROVED
+
+Implementation Assessment
+UI endpoints now delegate to the domain layer for PASSporT parsing and dossier parsing, which aligns behavior between UI and API and removes duplicate parsing code.
+
+Code Quality
+Refactor is clean and the remaining UI‑specific helper (`_parse_sip_invite_logic`) is appropriately scoped. Dead code removal reduces drift risk.
+
+Test Coverage
+`tests/test_ui_endpoints.py` adds good integration coverage for `/ui/parse-jwt`, `/ui/fetch-dossier`, and `/ui/parse-sip`, including domain alignment checks and error paths.
+
+Findings
+[Low]: None.
+
 ## Code Review: Phase 10 - Tier 2 Completion
 Verdict: CHANGES_REQUESTED
 

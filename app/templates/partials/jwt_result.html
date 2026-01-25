@@ -1,0 +1,116 @@
+{# JWT parsing result partial #}
+
+{% if error %}
+<article aria-invalid="true">
+    <header>Parse Error</header>
+    <p>{{ error }}</p>
+</article>
+{% else %}
+{# Hidden data element for JavaScript to read #}
+{% if payload.evd %}
+<span data-evd-url="{{ payload.evd }}" data-kid-url="{{ header.kid or '' }}" style="display:none;"></span>
+{% endif %}
+
+{% if validation_errors %}
+<article aria-invalid="true" style="border-color: #d97706; background-color: #fef3c7;">
+    <header style="color: #92400e;">Validation Warning</header>
+    <p>JWT decoded successfully but failed VVP spec validation:</p>
+    <table style="width: 100%; border-collapse: collapse; margin-top: 0.5rem;">
+        <thead>
+            <tr style="background-color: #fef3c7;">
+                <th style="text-align: left; padding: 0.5rem; border-bottom: 1px solid #d97706;">Spec</th>
+                <th style="text-align: left; padding: 0.5rem; border-bottom: 1px solid #d97706;">Error</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for err in validation_errors %}
+            <tr>
+                <td style="padding: 0.5rem; vertical-align: top; white-space: nowrap;">
+                    {% if err.spec_section %}
+                    <strong>{{ err.spec_section }}</strong>
+                    {% if err.spec_description %}
+                    <br><small style="color: #92400e;">{{ err.spec_description }}</small>
+                    {% endif %}
+                    {% else %}
+                    <em>Unknown</em>
+                    {% endif %}
+                </td>
+                <td style="padding: 0.5rem;">{{ err.message }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</article>
+{% endif %}
+
+<h3>Parsed PASSporT</h3>
+
+<details open>
+    <summary>Header</summary>
+    <div class="code-block">{{ header | tojson(indent=2) }}</div>
+</details>
+
+<details open>
+    <summary>Payload</summary>
+    <div class="code-block">{{ payload | tojson(indent=2) }}</div>
+</details>
+
+<details>
+    <summary>Signature</summary>
+    <p><code style="word-break:break-all;">{{ signature }}</code></p>
+    <small>{{ signature | length }} characters (base64url-encoded)</small>
+</details>
+
+{% if payload.orig and payload.orig.tn %}
+<article>
+    <header>Call Information</header>
+    <dl>
+        <dt>Originating Number(s)</dt>
+        <dd>
+            {% if payload.orig.tn is string %}
+                {{ payload.orig.tn }}
+            {% else %}
+                {{ payload.orig.tn | join(', ') }}
+            {% endif %}
+        </dd>
+        {% if payload.dest and payload.dest.tn %}
+        <dt>Destination Number(s)</dt>
+        <dd>
+            {% if payload.dest.tn is string %}
+                {{ payload.dest.tn }}
+            {% else %}
+                {{ payload.dest.tn | join(', ') }}
+            {% endif %}
+        </dd>
+        {% endif %}
+        {% if payload.iat %}
+        <dt>Issued At</dt>
+        <dd>{{ payload.iat }} ({{ iat_formatted }})</dd>
+        {% endif %}
+        {% if payload.exp %}
+        <dt>Expires</dt>
+        <dd>{{ payload.exp }} ({{ exp_formatted }})</dd>
+        {% endif %}
+    </dl>
+</article>
+{% endif %}
+
+{% if payload.evd %}
+<article>
+    <header>Evidence (Dossier)</header>
+    <p>Evidence URL found. Use the Dossier section below to fetch credentials.</p>
+    <code style="word-break:break-all;">{{ payload.evd }}</code>
+</article>
+{% endif %}
+
+{% if payload.card %}
+<article>
+    <header>vCard Information</header>
+    <ul>
+    {% for line in payload.card %}
+        <li><code>{{ line }}</code></li>
+    {% endfor %}
+    </ul>
+</article>
+{% endif %}
+{% endif %}

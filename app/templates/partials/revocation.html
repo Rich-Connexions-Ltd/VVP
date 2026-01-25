@@ -1,0 +1,51 @@
+{# Revocation status results partial #}
+
+{% if error %}
+<article aria-invalid="true">
+    <header>Revocation Check Error</header>
+    <p>{{ error }}</p>
+</article>
+{% else %}
+
+<h4>Revocation Status</h4>
+
+{% if results %}
+<table>
+    <thead>
+        <tr>
+            <th>Credential SAID</th>
+            <th>Status</th>
+            <th>Details</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for result in results %}
+        <tr>
+            <td><code style="font-size:0.8em;">{{ result.said[:16] }}...</code></td>
+            <td>
+                {% if result.status == 'ACTIVE' %}
+                <span class="badge badge-success">ACTIVE</span>
+                {% elif result.status == 'REVOKED' %}
+                <span class="badge badge-danger">REVOKED</span>
+                {% elif result.status == 'UNKNOWN' %}
+                <span class="badge badge-warning">UNKNOWN</span>
+                {% else %}
+                <span class="badge badge-muted">{{ result.status }}</span>
+                {% endif %}
+            </td>
+            <td>
+                {% if result.error %}
+                <small style="color:var(--vvp-danger);">{{ result.error }}</small>
+                {% elif result.source %}
+                <small>Source: {{ result.source }}</small>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p><em>No revocation results available.</em></p>
+{% endif %}
+
+{% endif %}
