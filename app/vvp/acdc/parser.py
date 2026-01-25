@@ -10,20 +10,82 @@ from .exceptions import ACDCParseError, ACDCSAIDMismatch
 from .models import ACDC
 
 
-def parse_acdc(data: Dict[str, Any]) -> ACDC:
+def detect_acdc_variant(acdc_data: Dict[str, Any]) -> str:
+    """Detect ACDC variant type.
+
+    Per VVP §1.4, verifiers MUST support valid ACDC variants:
+    - full: Complete ACDC with all fields expanded
+    - compact: Minimal ACDC with only essential fields
+    - partial: ACDC with selective disclosure (contains "_" placeholders)
+
+    This implementation currently only supports "full" variant.
+    Other variants are detected for explicit error handling.
+
+    Args:
+        acdc_data: The ACDC dictionary to analyze.
+
+    Returns:
+        Variant type: "full", "compact", or "partial".
+    """
+    # Check for partial disclosure (underscore placeholders)
+    # Per ACDC spec, "_" is used for redacted/selective disclosure
+    def has_placeholders(obj: Any) -> bool:
+        if isinstance(obj, str):
+            return obj == "_" or obj.startswith("_:")
+        elif isinstance(obj, dict):
+            return any(has_placeholders(v) for v in obj.values())
+        elif isinstance(obj, list):
+            return any(has_placeholders(v) for v in obj)
+        return False
+
+    if has_placeholders(acdc_data):
+        return "partial"
+
+    # Check for compact form (missing expanded attributes)
+    # In compact form, 'a' field may be a SAID reference instead of expanded dict
+    attributes = acdc_data.get("a")
+    if attributes is None:
+        # No attributes at all - could be compact or minimal
+        return "compact"
+    elif isinstance(attributes, str):
+        # Attributes is a SAID reference, not expanded - this is compact form
+        return "compact"
+
+    return "full"
+
+
+def parse_acdc(data: Dict[str, Any], allow_variants: bool = False) -> ACDC:
     """Parse and validate ACDC structure.
 
     Validates required fields are present and creates an ACDC object.
 
+    Per VVP §1.4, verifiers MUST support ACDC variants. However, this
+    implementation currently only supports fully-expanded ACDCs. Compact
+    and partial variants are detected and rejected with explicit errors.
+
     Args:
         data: ACDC dictionary (parsed from JSON or dossier).
+        allow_variants: If True, allows compact/partial ACDCs (for future use).
+            Default False - rejects non-full variants with DossierParseError.
 
     Returns:
         Parsed ACDC object.
 
     Raises:
         ACDCParseError: If required fields are missing or invalid.
+        DossierParseError: If ACDC is a non-supported variant (compact/partial).
     """
+    # Detect ACDC variant
+    variant = detect_acdc_variant(data)
+
+    if variant != "full" and not allow_variants:
+        # Import here to avoid circular import
+        from ..dossier.exceptions import ParseError
+        raise ParseError(
+            f"ACDC variant '{variant}' not yet supported (§1.4 compliance pending). "
+            f"Only fully-expanded ACDCs are accepted in this version."
+        )
+
     # Validate required fields
     required_fields = ["d", "i"]  # SAID and issuer are always required
     for field in required_fields:

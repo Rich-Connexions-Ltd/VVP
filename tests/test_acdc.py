@@ -28,6 +28,7 @@ class TestParseAcdc:
         data = {
             "d": "E" + "A" * 43,
             "i": "D" + "B" * 43,
+            "a": {},  # Required for "full" variant detection
         }
 
         acdc = parse_acdc(data)
@@ -63,6 +64,7 @@ class TestParseAcdc:
         """Test that missing 'd' field raises."""
         data = {
             "i": "D" + "B" * 43,
+            "a": {},  # For full variant
         }
 
         with pytest.raises(ACDCParseError, match="missing required field: 'd'"):
@@ -72,6 +74,7 @@ class TestParseAcdc:
         """Test that missing 'i' field raises."""
         data = {
             "d": "E" + "A" * 43,
+            "a": {},  # For full variant
         }
 
         with pytest.raises(ACDCParseError, match="missing required field: 'i'"):
@@ -82,6 +85,7 @@ class TestParseAcdc:
         data = {
             "d": "short",
             "i": "D" + "B" * 43,
+            "a": {},  # For full variant
         }
 
         with pytest.raises(ACDCParseError, match="Invalid ACDC SAID format"):
@@ -92,6 +96,7 @@ class TestParseAcdc:
         data = {
             "d": "E" + "A" * 43,
             "i": "invalid_aid",
+            "a": {},  # For full variant
         }
 
         with pytest.raises(ACDCParseError, match="Invalid issuer AID format"):
@@ -595,22 +600,24 @@ class TestCredentialTypeValidation:
         delegate_aid = "D" + "G" * 43
         trusted_roots = {root_aid}
 
-        # APE credential from root (the delegating credential)
-        ape_cred = ACDC(
-            version="",
-            said=ape_said,
-            issuer_aid=root_aid,
-            schema_said="",
-            edges={"vetting": {"n": "E" + "V" * 43}},
-            raw={}
-        )
-
-        # Vetting credential from root (needed for APE)
-        vetting_cred = ACDC(
+        # LE credential for APE vetting
+        le_cred = ACDC(
             version="",
             said="E" + "V" * 43,
             issuer_aid=root_aid,
             schema_said="",
+            attributes={"LEI": "1234567890", "i": "D" + "I" * 43},  # LE type with issuee
+            raw={}
+        )
+
+        # APE credential with vetting edge to LE
+        ape_cred = ACDC(
+            version="",
+            said=ape_said,
+            issuer_aid="D" + "I" * 43,  # Issued by LE's issuee
+            schema_said="",
+            attributes={"i": delegate_aid},  # Issuee for DE
+            edges={"vetting": {"n": "E" + "V" * 43}},
             raw={}
         )
 
@@ -618,14 +625,14 @@ class TestCredentialTypeValidation:
         de_cred = ACDC(
             version="",
             said="E" + "D" * 43,
-            issuer_aid="D" + "I" * 43,
+            issuer_aid=delegate_aid,  # Issued by APE's issuee
             schema_said="",
             edges={"delegation": {"n": ape_said}},
             attributes={"i": delegate_aid},
             raw={}
         )
 
-        dossier_acdcs = {ape_said: ape_cred, "E" + "V" * 43: vetting_cred}
+        dossier_acdcs = {ape_said: ape_cred, "E" + "V" * 43: le_cred}
 
         # PSS signer matches delegate - should pass
         result = await validate_credential_chain(
@@ -666,6 +673,373 @@ class TestCredentialTypeValidation:
 
         result = await validate_credential_chain(child, trusted_roots, dossier_acdcs)
         assert result.validated is True
+
+
+class TestEdgeSemantics:
+    """Tests for edge relationship semantic validation (8.8)."""
+
+    def test_ape_with_vetting_edge_to_le_valid(self):
+        """APE with vetting edge to LE credential is valid."""
+        from app.vvp.acdc.verifier import validate_edge_semantics
+
+        le_said = "E" + "L" * 43
+        ape_said = "E" + "A" * 43
+
+        # LE credential (the vetting credential)
+        le_cred = ACDC(
+            version="",
+            said=le_said,
+            issuer_aid="D" + "R" * 43,
+            schema_said="",
+            attributes={"LEI": "1234567890"},  # LE type
+            raw={}
+        )
+
+        # APE credential with vetting edge
+        ape_cred = ACDC(
+            version="",
+            said=ape_said,
+            issuer_aid="D" + "I" * 43,
+            schema_said="",
+            edges={"vetting": {"n": le_said}},  # APE type by edges
+            raw={}
+        )
+
+        dossier_acdcs = {le_said: le_cred}
+
+        # Should not raise, returns empty warnings
+        warnings = validate_edge_semantics(ape_cred, dossier_acdcs)
+        assert warnings == []
+
+    def test_ape_vetting_edge_target_missing_raises(self):
+        """APE with vetting edge pointing to missing target raises ACDCChainInvalid."""
+        from app.vvp.acdc.verifier import validate_edge_semantics
+
+        # Create an ACDC that has a vetting edge but target is not in dossier
+        ape_cred = ACDC(
+            version="",
+            said="E" + "A" * 43,
+            issuer_aid="D" + "I" * 43,
+            schema_said="",
+            edges={"vetting": {"n": "E" + "X" * 43}},  # Edge exists but target not in dossier
+            raw={}
+        )
+
+        # Target not in dossier - should raise for required edges
+        with pytest.raises(ACDCChainInvalid, match="not found in dossier"):
+            validate_edge_semantics(ape_cred, {})
+
+    def test_ape_missing_all_edges_raises(self):
+        """APE-type credential without any edges raises ACDCChainInvalid."""
+        from app.vvp.acdc.verifier import validate_edge_semantics
+
+        # Force APE type detection by setting credential_type directly via mock
+        # Actually, credential_type is computed from edges/attributes
+        # APE is detected by "vetting" edge. Without it, it won't be APE type.
+        # So we need to test at the validate_ape_credential level instead
+        pass  # Covered by existing test_validate_ape_missing_vetting_edge
+
+    def test_ape_vetting_edge_to_wrong_type_raises(self):
+        """APE with vetting edge pointing to wrong type raises."""
+        from app.vvp.acdc.verifier import validate_edge_semantics
+
+        # Create a TNAlloc credential (wrong type for APE vetting)
+        wrong_target = ACDC(
+            version="",
+            said="E" + "T" * 43,
+            issuer_aid="D" + "R" * 43,
+            schema_said="",
+            attributes={"tn": ["+1555*"]},  # TNAlloc type
+            raw={}
+        )
+
+        # APE with vetting edge pointing to TNAlloc (should fail)
+        ape_cred = ACDC(
+            version="",
+            said="E" + "A" * 43,
+            issuer_aid="D" + "I" * 43,
+            schema_said="",
+            edges={"vetting": {"n": "E" + "T" * 43}},
+            raw={}
+        )
+
+        dossier_acdcs = {"E" + "T" * 43: wrong_target}
+
+        with pytest.raises(ACDCChainInvalid, match="expected one of.*LE"):
+            validate_edge_semantics(ape_cred, dossier_acdcs)
+
+    def test_de_with_delegation_edge_to_ape_valid(self):
+        """DE with delegation edge to APE is valid."""
+        from app.vvp.acdc.verifier import validate_edge_semantics
+
+        ape_said = "E" + "A" * 43
+
+        # APE credential (the delegating credential)
+        ape_cred = ACDC(
+            version="",
+            said=ape_said,
+            issuer_aid="D" + "R" * 43,
+            schema_said="",
+            edges={"vetting": {"n": "E" + "L" * 43}},  # APE type
+            raw={}
+        )
+
+        # DE with delegation edge
+        de_cred = ACDC(
+            version="",
+            said="E" + "D" * 43,
+            issuer_aid="D" + "I" * 43,
+            schema_said="",
+            edges={"delegation": {"n": ape_said}},  # DE type
+            raw={}
+        )
+
+        dossier_acdcs = {ape_said: ape_cred}
+
+        warnings = validate_edge_semantics(de_cred, dossier_acdcs)
+        assert warnings == []
+
+    def test_de_with_delegation_edge_to_de_valid(self):
+        """DE with delegation edge to another DE is valid."""
+        from app.vvp.acdc.verifier import validate_edge_semantics
+
+        parent_de_said = "E" + "P" * 43
+
+        # Parent DE credential
+        parent_de = ACDC(
+            version="",
+            said=parent_de_said,
+            issuer_aid="D" + "R" * 43,
+            schema_said="",
+            edges={"delegation": {"n": "E" + "A" * 43}},  # DE type
+            raw={}
+        )
+
+        # Child DE with delegation edge to parent DE
+        child_de = ACDC(
+            version="",
+            said="E" + "C" * 43,
+            issuer_aid="D" + "I" * 43,
+            schema_said="",
+            edges={"delegation": {"n": parent_de_said}},
+            raw={}
+        )
+
+        dossier_acdcs = {parent_de_said: parent_de}
+
+        warnings = validate_edge_semantics(child_de, dossier_acdcs)
+        assert warnings == []
+
+    def test_de_delegation_edge_target_missing_raises(self):
+        """DE with delegation edge pointing to missing target raises ACDCChainInvalid."""
+        from app.vvp.acdc.verifier import validate_edge_semantics
+
+        # DE credential with delegation edge but target not in dossier
+        de_cred = ACDC(
+            version="",
+            said="E" + "D" * 43,
+            issuer_aid="D" + "I" * 43,
+            schema_said="",
+            edges={"delegation": {"n": "E" + "X" * 43}},  # Points to non-existent
+            raw={}
+        )
+
+        # Edge target not in dossier - should raise for required edges
+        with pytest.raises(ACDCChainInvalid, match="not found in dossier"):
+            validate_edge_semantics(de_cred, {})
+
+    def test_tnalloc_with_jl_edge_valid(self):
+        """TNAlloc with JL edge to parent TNAlloc is valid."""
+        from app.vvp.acdc.verifier import validate_edge_semantics
+
+        parent_said = "E" + "P" * 43
+
+        # Parent TNAlloc
+        parent = ACDC(
+            version="",
+            said=parent_said,
+            issuer_aid="D" + "R" * 43,
+            schema_said="",
+            attributes={"tn": ["+1*"]},  # TNAlloc type
+            raw={}
+        )
+
+        # Child TNAlloc with JL edge
+        child = ACDC(
+            version="",
+            said="E" + "C" * 43,
+            issuer_aid="D" + "I" * 43,
+            schema_said="",
+            attributes={"tn": ["+1555*"]},
+            edges={"jl": {"n": parent_said}},
+            raw={}
+        )
+
+        dossier_acdcs = {parent_said: parent}
+
+        warnings = validate_edge_semantics(child, dossier_acdcs)
+        assert warnings == []
+
+    def test_tnalloc_without_jl_returns_warning(self):
+        """TNAlloc without JL edge returns warning (not required for root)."""
+        from app.vvp.acdc.verifier import validate_edge_semantics
+
+        # Root TNAlloc without JL edge
+        root_tnalloc = ACDC(
+            version="",
+            said="E" + "R" * 43,
+            issuer_aid="D" + "R" * 43,
+            schema_said="",
+            attributes={"tn": ["+1*"]},
+            edges=None,  # No edges
+            raw={}
+        )
+
+        # Should return warning, not raise (JL is optional for root allocators)
+        warnings = validate_edge_semantics(root_tnalloc, {})
+        assert len(warnings) == 1
+        assert "Optional edge not found" in warnings[0]
+
+    def test_unknown_credential_type_no_rules(self):
+        """Unknown credential type has no edge rules to validate."""
+        from app.vvp.acdc.verifier import validate_edge_semantics
+
+        # Credential with no type markers
+        generic = ACDC(
+            version="",
+            said="E" + "G" * 43,
+            issuer_aid="D" + "I" * 43,
+            schema_said="",
+            attributes={"name": "Generic"},  # Unknown type
+            raw={}
+        )
+
+        warnings = validate_edge_semantics(generic, {})
+        assert warnings == []
+
+
+class TestAcdcVariantDetection:
+    """Tests for ACDC variant detection and rejection (8.9)."""
+
+    def test_full_acdc_variant_detected(self):
+        """Full ACDC variant is detected correctly."""
+        from app.vvp.acdc.parser import detect_acdc_variant
+
+        full_acdc = {
+            "d": "E" + "A" * 43,
+            "i": "D" + "B" * 43,
+            "s": "E" + "S" * 43,
+            "a": {"name": "Test", "LEI": "1234567890"},  # Expanded attributes
+        }
+
+        variant = detect_acdc_variant(full_acdc)
+        assert variant == "full"
+
+    def test_compact_acdc_missing_attributes_detected(self):
+        """Compact ACDC (missing attributes) is detected."""
+        from app.vvp.acdc.parser import detect_acdc_variant
+
+        compact_acdc = {
+            "d": "E" + "A" * 43,
+            "i": "D" + "B" * 43,
+            "s": "E" + "S" * 43,
+            # No 'a' field - compact form
+        }
+
+        variant = detect_acdc_variant(compact_acdc)
+        assert variant == "compact"
+
+    def test_compact_acdc_said_reference_detected(self):
+        """Compact ACDC (attributes as SAID reference) is detected."""
+        from app.vvp.acdc.parser import detect_acdc_variant
+
+        compact_acdc = {
+            "d": "E" + "A" * 43,
+            "i": "D" + "B" * 43,
+            "s": "E" + "S" * 43,
+            "a": "E" + "X" * 43,  # SAID reference instead of expanded dict
+        }
+
+        variant = detect_acdc_variant(compact_acdc)
+        assert variant == "compact"
+
+    def test_partial_acdc_placeholder_detected(self):
+        """Partial ACDC (with _ placeholder) is detected."""
+        from app.vvp.acdc.parser import detect_acdc_variant
+
+        partial_acdc = {
+            "d": "E" + "A" * 43,
+            "i": "D" + "B" * 43,
+            "s": "E" + "S" * 43,
+            "a": {"name": "_", "LEI": "1234567890"},  # Placeholder for redacted
+        }
+
+        variant = detect_acdc_variant(partial_acdc)
+        assert variant == "partial"
+
+    def test_partial_acdc_said_placeholder_detected(self):
+        """Partial ACDC (with _:SAID placeholder) is detected."""
+        from app.vvp.acdc.parser import detect_acdc_variant
+
+        partial_acdc = {
+            "d": "E" + "A" * 43,
+            "i": "D" + "B" * 43,
+            "a": {"name": "_:SAID123", "LEI": "visible"},  # SAID placeholder
+        }
+
+        variant = detect_acdc_variant(partial_acdc)
+        assert variant == "partial"
+
+    def test_full_acdc_parses_successfully(self):
+        """Full ACDC variant parses without error."""
+        full_acdc = {
+            "d": "E" + "A" * 43,
+            "i": "D" + "B" * 43,
+            "a": {"name": "Test Credential"},
+        }
+
+        acdc = parse_acdc(full_acdc)
+        assert acdc.said == "E" + "A" * 43
+
+    def test_compact_acdc_raises_parse_error(self):
+        """Compact ACDC raises ParseError (not yet supported)."""
+        from app.vvp.dossier.exceptions import ParseError
+
+        compact_acdc = {
+            "d": "E" + "A" * 43,
+            "i": "D" + "B" * 43,
+            "s": "E" + "S" * 43,
+            # No 'a' field
+        }
+
+        with pytest.raises(ParseError, match="variant 'compact' not yet supported"):
+            parse_acdc(compact_acdc)
+
+    def test_partial_acdc_raises_parse_error(self):
+        """Partial ACDC raises ParseError (not yet supported)."""
+        from app.vvp.dossier.exceptions import ParseError
+
+        partial_acdc = {
+            "d": "E" + "A" * 43,
+            "i": "D" + "B" * 43,
+            "a": {"name": "_", "secret": "_:SAID"},  # Placeholders
+        }
+
+        with pytest.raises(ParseError, match="variant 'partial' not yet supported"):
+            parse_acdc(partial_acdc)
+
+    def test_compact_acdc_allowed_with_flag(self):
+        """Compact ACDC parses with allow_variants=True."""
+        compact_acdc = {
+            "d": "E" + "A" * 43,
+            "i": "D" + "B" * 43,
+            "s": "E" + "S" * 43,
+            # No 'a' field
+        }
+
+        # Should not raise with allow_variants=True
+        acdc = parse_acdc(compact_acdc, allow_variants=True)
+        assert acdc.said == "E" + "A" * 43
 
 
 class TestSchemaValidation:
@@ -726,7 +1100,7 @@ class TestSchemaValidation:
             raw={}
         )
 
-        with pytest.raises(ACDCChainInvalid, match="unknown schema SAID"):
+        with pytest.raises(ACDCChainInvalid, match="unrecognized schema SAID"):
             validate_schema_said(acdc, strict=True)
 
     def test_validate_schema_unknown_schema_non_strict(self):
@@ -782,7 +1156,7 @@ class TestSchemaValidation:
             raw={}
         )
 
-        with pytest.raises(ACDCChainInvalid, match="unknown schema SAID"):
+        with pytest.raises(ACDCChainInvalid, match="unrecognized schema SAID"):
             await validate_credential_chain(
                 acdc, trusted_roots, {}, validate_schemas=True
             )

@@ -3,76 +3,197 @@
 Per VVP §6.3.x credential verification requirements.
 """
 
+import logging
 from typing import Dict, FrozenSet, List, Optional, Set
 
 from .exceptions import ACDCChainInvalid, ACDCSignatureInvalid
 from .models import ACDC, ACDCChainResult
 from .parser import _acdc_canonical_serialize
+from .schema_registry import (
+    KNOWN_SCHEMA_SAIDS,
+    get_known_schemas,
+    has_governance_schemas,
+)
 
-
-# Known vLEI governance schema SAIDs
-# These are the official schema SAIDs from the vLEI ecosystem
-# Per VVP spec, credentials must use these schemas for validation
-KNOWN_SCHEMA_SAIDS: Dict[str, FrozenSet[str]] = {
-    # Legal Entity credentials (LE/QVI vetting)
-    "LE": frozenset({
-        "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao",  # vLEI QVI LE schema
-    }),
-    # Auth Phone Entity (APE)
-    "APE": frozenset({
-        # APE schema SAID - placeholder until official schema defined
-    }),
-    # Delegate Entity (DE)
-    "DE": frozenset({
-        # DE schema SAID - placeholder until official schema defined
-    }),
-    # TN Allocation
-    "TNAlloc": frozenset({
-        # TNAlloc schema SAID - placeholder until official schema defined
-    }),
-}
+log = logging.getLogger(__name__)
 
 
 def validate_schema_said(
     acdc: ACDC,
-    strict: bool = False
+    strict: bool = True
 ) -> None:
-    """Validate ACDC schema SAID matches known governance schemas.
+    """Validate ACDC schema SAID per §6.3.x requirements.
 
-    Per VVP §6.3.x, credentials must use recognized schema SAIDs
+    Per VVP §6.3.x, credentials MUST use recognized schema SAIDs
     from the vLEI governance framework.
 
     Args:
         acdc: The ACDC to validate.
-        strict: If True, raises on unknown schema. If False, allows unknown.
+        strict: Default True per §6.3.x MUSTs. False is a policy deviation.
 
     Raises:
-        ACDCChainInvalid: If schema SAID is invalid (strict mode only).
+        ACDCChainInvalid: If schema validation fails in strict mode.
     """
     if not acdc.schema_said:
-        # No schema SAID - allow in non-strict mode
         if strict:
             raise ACDCChainInvalid(
-                f"ACDC {acdc.said[:20]}... missing schema SAID"
+                f"ACDC {acdc.said[:20]}... missing schema SAID (§6.3.x requires schema)"
             )
+        log.warning(f"ACDC {acdc.said[:20]}... missing schema SAID (non-strict mode)")
         return
 
     cred_type = acdc.credential_type
-    known_schemas = KNOWN_SCHEMA_SAIDS.get(cred_type, frozenset())
+    known_schemas = get_known_schemas(cred_type)
 
-    # If no known schemas for this type and non-strict, allow
-    if not known_schemas and not strict:
+    # If no known schemas for this type, accept any (pending governance)
+    # This is a documented policy deviation until vLEI governance publishes official SAIDs
+    if not known_schemas:
+        log.debug(
+            f"ACDC {acdc.said[:20]}... has schema {acdc.schema_said[:20]}... "
+            f"for type {cred_type} (accepting any - governance pending)"
+        )
         return
 
-    # If known schemas exist, validate
-    if known_schemas and acdc.schema_said not in known_schemas:
+    # If known schemas exist, validate strictly
+    if acdc.schema_said not in known_schemas:
         if strict:
             raise ACDCChainInvalid(
-                f"ACDC {acdc.said[:20]}... has unknown schema SAID "
-                f"{acdc.schema_said[:20]}... for credential type {cred_type}"
+                f"ACDC {acdc.said[:20]}... has unrecognized schema SAID "
+                f"{acdc.schema_said[:20]}... for type {cred_type}"
             )
-        # In non-strict mode, log warning but allow
-        # TODO: Add logging when logger is available
+        log.warning(
+            f"ACDC {acdc.said[:20]}... has unknown schema SAID "
+            f"{acdc.schema_said[:20]}... for type {cred_type} (non-strict mode)"
+        )
+
+
+# Edge rules per credential type for semantic validation
+# Per VVP §6.3.x, credentials must have specific edge relationships
+EDGE_RULES: Dict[str, List[Dict]] = {
+    # APE (Auth Phone Entity) - §6.3.3
+    # MUST reference vetting LE credential
+    "APE": [
+        {
+            "name_patterns": ["vetting", "le", "legalentity", "vlei", "qvi"],
+            "target_types": ["LE"],
+            "required": True,
+            "description": "APE must reference vetting LE credential (§6.3.3)",
+        }
+    ],
+    # DE (Delegate Entity) - §6.3.4
+    # MUST reference delegating credential (APE or another DE)
+    "DE": [
+        {
+            "name_patterns": ["delegation", "d", "delegate", "delegator"],
+            "target_types": ["APE", "DE"],
+            "required": True,
+            "description": "DE must reference delegating credential (§6.3.4)",
+        }
+    ],
+    # TNAlloc (TN Allocation) - §6.3.6
+    # SHOULD have JL to parent TNAlloc (except root allocator/regulator)
+    "TNAlloc": [
+        {
+            "name_patterns": ["jl", "jurisdiction", "parent", "allocator"],
+            "target_types": ["TNAlloc"],
+            "required": False,  # Root allocators have no parent
+            "description": "TNAlloc should reference parent allocation (§6.3.6)",
+        }
+    ],
+}
+
+
+def validate_edge_semantics(
+    acdc: ACDC,
+    dossier_acdcs: Dict[str, ACDC],
+    is_root: bool = False
+) -> List[str]:
+    """Validate edge relationships match credential type rules.
+
+    Per VVP §6.3.x, different credential types have specific edge requirements:
+    - APE: MUST have vetting edge to LE credential
+    - DE: MUST have delegation edge to APE or DE
+    - TNAlloc: SHOULD have JL edge to parent TNAlloc
+
+    Args:
+        acdc: The ACDC to validate.
+        dossier_acdcs: Map of SAID -> ACDC for edge target lookup.
+        is_root: If True, relaxes required edge checks for root credentials.
+
+    Returns:
+        List of warning messages (empty if valid).
+
+    Raises:
+        ACDCChainInvalid: If required edge is missing or points to wrong type.
+    """
+    warnings = []
+    cred_type = acdc.credential_type
+
+    if cred_type not in EDGE_RULES:
+        # No rules defined for this credential type
+        return warnings
+
+    rules = EDGE_RULES[cred_type]
+
+    for rule in rules:
+        name_patterns = rule["name_patterns"]
+        target_types = rule["target_types"]
+        required = rule["required"]
+        description = rule["description"]
+
+        # Find matching edge
+        found_edge = None
+        found_target = None
+
+        if acdc.edges:
+            for edge_name, edge_ref in acdc.edges.items():
+                # Skip metadata fields
+                if edge_name in ('d', 'n'):
+                    continue
+
+                # Check if edge name matches any pattern
+                if edge_name.lower() in name_patterns:
+                    found_edge = edge_name
+
+                    # Extract target SAID
+                    target_said = None
+                    if isinstance(edge_ref, str):
+                        target_said = edge_ref
+                    elif isinstance(edge_ref, dict):
+                        target_said = edge_ref.get('n') or edge_ref.get('d')
+
+                    if target_said and target_said in dossier_acdcs:
+                        found_target = dossier_acdcs[target_said]
+                    break
+
+        # Validate edge presence and target type
+        if found_edge is None:
+            if required and not is_root:
+                raise ACDCChainInvalid(
+                    f"{cred_type} credential {acdc.said[:20]}... missing required edge: "
+                    f"{description}"
+                )
+            else:
+                warnings.append(f"Optional edge not found: {description}")
+        elif found_target is None:
+            # Edge exists but target is not in dossier
+            if required and not is_root:
+                raise ACDCChainInvalid(
+                    f"{cred_type} credential {acdc.said[:20]}... edge '{found_edge}' "
+                    f"references credential not found in dossier"
+                )
+            else:
+                warnings.append(f"Optional edge target not found in dossier: {found_edge}")
+        else:
+            # Validate target credential type
+            if found_target.credential_type not in target_types:
+                raise ACDCChainInvalid(
+                    f"{cred_type} credential {acdc.said[:20]}... edge '{found_edge}' "
+                    f"points to {found_target.credential_type} but expected one of: "
+                    f"{target_types}"
+                )
+
+    return warnings
 
 
 async def resolve_issuer_key_state(issuer_aid: str, oobi_url: Optional[str] = None):
@@ -260,6 +381,10 @@ async def validate_credential_chain(
 
         # Check if issuer is a trusted root
         is_at_root = current.issuer_aid in trusted_roots
+
+        # Validate edge semantics per §6.3.3/§6.3.4/§6.3.6
+        # This validates that APE has vetting edge to LE, DE has delegation edge, etc.
+        validate_edge_semantics(current, dossier_acdcs, is_root=is_at_root)
 
         # Validate issuee binding per §6.3.5 (non-bearer token check)
         # Root credentials may lack issuee, leaf credentials MUST have it
@@ -455,6 +580,13 @@ def validate_tnalloc_credential(
     Raises:
         ACDCChainInvalid: If TNAlloc structure is invalid.
     """
+    from ..tn_utils import (
+        TNParseError,
+        find_uncovered_ranges,
+        is_subset,
+        parse_tn_allocation,
+    )
+
     # Extract TN allocation from attributes
     if not acdc.attributes:
         raise ACDCChainInvalid("TNAlloc credential must have attributes with TN allocation")
@@ -464,6 +596,14 @@ def validate_tnalloc_credential(
     if not tn_data:
         raise ACDCChainInvalid("TNAlloc credential must specify telephone number allocation")
 
+    # Parse child TN allocation
+    try:
+        child_ranges = parse_tn_allocation(tn_data)
+    except TNParseError as e:
+        raise ACDCChainInvalid(
+            f"TNAlloc {acdc.said[:20]}... has invalid TN allocation: {e}"
+        )
+
     # If parent provided, validate TN is subset
     if parent_acdc and parent_acdc.attributes:
         parent_tn = (
@@ -471,9 +611,27 @@ def validate_tnalloc_credential(
             parent_acdc.attributes.get("phone") or
             parent_acdc.attributes.get("allocation")
         )
-        # TODO: Implement proper TN range subset validation
-        # For now, just check parent has allocation
+
         if not parent_tn:
             raise ACDCChainInvalid(
                 "Parent TNAlloc credential has no TN allocation to validate against"
+            )
+
+        # Parse parent TN allocation
+        try:
+            parent_ranges = parse_tn_allocation(parent_tn)
+        except TNParseError as e:
+            raise ACDCChainInvalid(
+                f"Parent TNAlloc has invalid TN allocation: {e}"
+            )
+
+        # Validate child is subset of parent per §6.3.6
+        if not is_subset(child_ranges, parent_ranges):
+            uncovered = find_uncovered_ranges(child_ranges, parent_ranges)
+            uncovered_str = ", ".join(str(r) for r in uncovered[:3])
+            if len(uncovered) > 3:
+                uncovered_str += f", ... ({len(uncovered)} total)"
+            raise ACDCChainInvalid(
+                f"TNAlloc {acdc.said[:20]}... allocation is not subset of parent: "
+                f"uncovered ranges: {uncovered_str}"
             )

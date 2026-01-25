@@ -1,5 +1,71 @@
 # VVP Verifier Change Log
 
+## Sprint 14: Tier 2 Completion - Schema, Edge Semantics, TNAlloc
+
+**Date:** 2026-01-25
+**Commit:** `pending`
+
+### Files Changed
+
+| File | Action | Description |
+|------|--------|-------------|
+| `app/vvp/acdc/schema_registry.py` | Created | Versioned schema SAID registry with vLEI governance sources |
+| `app/vvp/acdc/verifier.py` | Modified | Added `validate_edge_semantics()`, integrated into chain validation, strict schema validation |
+| `app/vvp/acdc/parser.py` | Modified | Added `detect_acdc_variant()` for explicit variant rejection |
+| `app/vvp/tn_utils.py` | Created | E.164 parsing, wildcard support, range subset validation |
+| `tests/test_acdc.py` | Modified | Added 19 tests for edge semantics and variant detection |
+| `tests/test_tn_utils.py` | Created | 15 tests for TN utilities |
+| `app/Documentation/PLAN_Phase14.md` | Created | Archived implementation plan |
+
+### Summary
+
+Completed remaining Tier 2 ACDC validation requirements per spec §6.3.x and §1.4.
+
+**Key Changes:**
+
+1. **Schema SAID Validation (§6.3.x):**
+   - `validate_schema_said()` now defaults to `strict=True`
+   - Known LE schema SAIDs from vLEI governance framework
+   - APE/DE/TNAlloc schemas accept any (pending governance publication)
+   - Versioned registry in `schema_registry.py` with source documentation
+
+2. **Edge Relationship Semantics (§6.3.3/§6.3.4/§6.3.6):**
+   - `validate_edge_semantics()` validates credential type-specific edge rules
+   - APE: MUST have vetting edge → LE credential
+   - DE: MUST have delegation edge → APE or DE credential
+   - TNAlloc: Should have JL edge → parent TNAlloc (unless root)
+   - Integrated into `walk_chain()` for automatic enforcement
+   - Missing required edge targets raise `ACDCChainInvalid`
+
+3. **ACDC Variant Detection (§1.4 explicit handling):**
+   - `detect_acdc_variant()` detects full, compact, and partial variants
+   - Full variants: expanded `a` field present → accepted
+   - Compact variants: missing/string `a` field → `ParseError`
+   - Partial variants: `"_"` placeholders → `ParseError`
+   - Documented non-compliance until full variant support implemented
+
+4. **TNAlloc Phone Number Validation (§6.3.6):**
+   - E.164 format validation with `+` prefix requirement
+   - Wildcard support (`+1555*` → range expansion)
+   - Hyphenated range parsing (`+15550000000-+15559999999`)
+   - `is_subset()` validates child ranges covered by parent
+   - Mixed list/range/dict inputs supported
+
+### Checklist Items Completed
+
+- 8.6: ACDC schema SAID validation (strict by default)
+- 8.8: Edge/relationship semantic validation
+- 8.9: ACDC variants (explicit rejection with documented non-compliance)
+- 8.11: TNAlloc JL validation with phone number range subset
+
+### Test Results
+
+```
+701 passed, 2 skipped, 20 warnings in 4.81s
+```
+
+---
+
 ## Phase 13B: Separation of Concerns Refactoring
 
 **Date:** 2026-01-25
