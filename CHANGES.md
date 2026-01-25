@@ -1,5 +1,70 @@
 # VVP Verifier Change Log
 
+## Sprint 16: Delegation Authorization (Case B)
+
+**Date:** 2026-01-25
+**Commit:** (pending)
+
+### Files Changed
+
+| File | Action | Description |
+|------|--------|-------------|
+| `app/vvp/authorization.py` | Modified | Added `_find_delegation_target()`, `_verify_delegation_chain()` for Case B delegation |
+| `tests/test_authorization.py` | Modified | Added 9 new tests for Case B delegation scenarios (45 total) |
+
+### Summary
+
+Implemented VVP Specification §5A Step 10 Case B: Delegation chain validation.
+
+**Key Changes:**
+
+1. **Delegation Chain Validation (Case B):**
+   - `_find_delegation_target()`: Finds credential referenced by DE's delegation edge
+   - `_verify_delegation_chain()`: Walks DE → APE chain to identify accountable party
+   - DE issuee must match PASSporT signer (OP is delegate)
+   - Chain terminates when APE credential reached
+   - APE issuee is the accountable party (used for TN rights binding)
+
+2. **Multi-Level Delegation:**
+   - Supports nested delegation: DE → DE → ... → APE
+   - Maximum chain depth of 10 (configurable)
+   - Cycle detection prevents infinite loops
+
+3. **Error Handling:**
+   - No DE for signer → INVALID
+   - Missing delegation target → INVALID
+   - Circular delegation → INVALID
+   - Chain too deep → INVALID
+
+4. **TN Rights Binding:**
+   - TNAlloc must be bound to accountable party (APE issuee), not delegate
+   - Ensures proper authorization chain even with delegation
+
+### Checklist Items Completed
+
+- 10.5: Case B - verify delegation credential chain
+- 10.14: If delegation, verify DE includes delegated signer credential
+- 10.17: Verify OP is issuee of delegated signer credential
+
+### Revision 1 (Review Fixes)
+
+**Issues Addressed:**
+- [High]: Case B selection now only uses delegation when DE issuee matches signer
+- [Medium]: All matching DEs are tried; first valid chain wins
+
+**Changes:**
+- Refactored `_verify_delegation_chain()` into `_walk_de_chain()` + `_verify_delegation_chain()`
+- `verify_party_authorization()` now filters DEs by issuee == signer before deciding Case B
+- Unrelated DEs (issuee != signer) no longer force Case B; falls back to Case A
+
+### Test Results
+
+```
+748 passed, 2 skipped in 4.77s
+```
+
+---
+
 ## Sprint 15: Authorization Verification (§5A Steps 10-11)
 
 **Date:** 2026-01-25

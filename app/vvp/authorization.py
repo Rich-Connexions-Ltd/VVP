@@ -4,8 +4,9 @@ Per VVP Specification §5A Steps 10-11:
 - Step 10: Verify originating party is authorized to sign PASSporT
 - Step 11: Verify accountable party has TN rights for orig.tn
 
-Sprint 15 implements Case A (no delegation). Case B (delegation chains)
-returns INDETERMINATE and is deferred to a future sprint.
+Implementation:
+- Case A (no delegation): OP == AP, verified via APE issuee match
+- Case B (with delegation): DE issuee == OP, DE chain terminates at APE
 """
 
 from dataclasses import dataclass
@@ -98,22 +99,187 @@ def _find_credentials_by_type(
     return [acdc for acdc in dossier_acdcs.values() if acdc.credential_type == cred_type]
 
 
+def _find_delegation_target(
+    de: ACDC,
+    dossier_acdcs: Dict[str, ACDC]
+) -> Optional[ACDC]:
+    """Find the credential referenced by a DE's delegation edge.
+
+    Per §6.3.4, DE credentials must have a delegation edge pointing to
+    either an APE or another DE credential.
+
+    Args:
+        de: The DE credential to inspect.
+        dossier_acdcs: All credentials in the dossier for edge resolution.
+
+    Returns:
+        The target credential (APE or DE), or None if not found.
+    """
+    if not de.edges:
+        return None
+
+    # Check for delegation edge (various naming conventions)
+    for edge_name, edge_ref in de.edges.items():
+        if edge_name.lower() in ('delegation', 'd', 'delegate', 'delegator'):
+            # Extract target SAID from edge reference
+            target_said = None
+            if isinstance(edge_ref, str):
+                target_said = edge_ref
+            elif isinstance(edge_ref, dict):
+                target_said = edge_ref.get('n') or edge_ref.get('d')
+
+            if target_said and target_said in dossier_acdcs:
+                return dossier_acdcs[target_said]
+
+    return None
+
+
+def _walk_de_chain(
+    starting_de: ACDC,
+    dossier_acdcs: Dict[str, ACDC],
+    max_depth: int = 10,
+) -> Tuple[bool, Optional[ACDC], Optional[str], List[str]]:
+    """Walk a single DE chain to find the terminating APE.
+
+    Args:
+        starting_de: The DE credential to start walking from.
+        dossier_acdcs: All credentials in the dossier for edge resolution.
+        max_depth: Maximum chain depth to prevent infinite loops.
+
+    Returns:
+        Tuple of (success, APE credential or None, error reason or None, evidence list).
+    """
+    visited: set = set()
+    current = starting_de
+    depth = 0
+    evidence: List[str] = []
+
+    while depth < max_depth:
+        visited.add(current.said)
+
+        # Find delegation target
+        target = _find_delegation_target(current, dossier_acdcs)
+
+        if target is None:
+            return (
+                False, None,
+                f"DE {current.said[:20]}... delegation edge target not found in dossier",
+                evidence
+            )
+
+        # Check for cycle
+        if target.said in visited:
+            return (
+                False, None,
+                f"Circular delegation detected at {target.said[:20]}...",
+                evidence
+            )
+
+        # Check if target is APE (chain terminates)
+        if target.credential_type == "APE":
+            evidence.append(f"ape_said:{target.said[:16]}...")
+            accountable_aid = _get_issuee(target)
+            if accountable_aid:
+                evidence.append(f"accountable_party:{accountable_aid[:16]}...")
+            return (True, target, None, evidence)
+
+        # Target is another DE - continue walking
+        if target.credential_type == "DE":
+            evidence.append(f"de_chain:{target.said[:16]}...")
+            current = target
+            depth += 1
+            continue
+
+        # Unexpected credential type in chain
+        return (
+            False, None,
+            f"Unexpected credential type {target.credential_type} in delegation chain",
+            evidence
+        )
+
+    # Exceeded max depth without reaching APE
+    return (
+        False, None,
+        f"Delegation chain exceeds maximum depth of {max_depth}",
+        evidence
+    )
+
+
+def _verify_delegation_chain(
+    ctx: AuthorizationContext,
+    matching_des: List[ACDC],
+    claim: AuthorizationClaimBuilder,
+    max_depth: int = 10,
+) -> Tuple[AuthorizationClaimBuilder, Optional[ACDC]]:
+    """Validate delegation chain from DE to APE (Case B).
+
+    Per §5A Step 10 Case B:
+    - Originating party (pss_signer_aid) MUST be issuee of DE credential
+    - DE delegation edge MUST point to APE (or another DE in nested delegation)
+    - Chain terminates when APE is reached (accountable party credential)
+
+    Tries all matching DEs and accepts the first valid chain.
+
+    Args:
+        ctx: Authorization context with signer AID and all dossier credentials.
+        matching_des: List of DE credentials where issuee == signer.
+        claim: AuthorizationClaimBuilder to record status and evidence.
+        max_depth: Maximum chain depth to prevent infinite loops (default 10).
+
+    Returns:
+        Tuple of (claim, APE credential). APE.issuee = accountable party.
+        Returns (claim, None) on failure with appropriate status/reason.
+    """
+    # Try each matching DE and accept the first valid chain
+    last_error = None
+    for de in matching_des:
+        success, ape, error, evidence = _walk_de_chain(
+            de, ctx.dossier_acdcs, max_depth
+        )
+
+        if success:
+            # Add evidence for successful chain
+            claim.add_evidence(f"de_said:{de.said[:16]}...")
+            claim.add_evidence(f"de_issuee_match:{ctx.pss_signer_aid[:16]}...")
+            for ev in evidence:
+                claim.add_evidence(ev)
+            return claim, ape
+
+        # Record error for later (in case all chains fail)
+        last_error = error
+
+    # All matching DEs failed - report the last error
+    claim.fail(
+        ClaimStatus.INVALID,
+        last_error or "All delegation chains failed"
+    )
+    claim.add_evidence(f"matching_de_count:{len(matching_des)}")
+    claim.add_evidence(f"signer:{ctx.pss_signer_aid[:16]}...")
+    return claim, None
+
+
 def verify_party_authorization(
     ctx: AuthorizationContext,
 ) -> Tuple[AuthorizationClaimBuilder, Optional[ACDC]]:
     """Verify originating party is authorized to sign PASSporT (Step 10).
 
-    Per §5A Step 10, Case A (no delegation):
-    - Find APE credential where issuee == pss_signer_aid
-    - This proves OP is the accountable party and authorized to sign
+    Per §5A Step 10:
+    - Case A (no delegation): APE issuee == pss_signer_aid (OP is AP)
+    - Case B (with delegation): DE issuee == pss_signer_aid, DE → APE chain valid
 
-    Case B (delegation) is detected but deferred - returns INDETERMINATE.
+    Case B is only used when there exists a DE credential with issuee matching
+    the signer. If unrelated DEs are present (issuee != signer), they are ignored
+    and Case A is attempted instead.
+
+    In both cases, returns the APE credential. The accountable party is the
+    APE issuee (in Case A, this equals the signer; in Case B, it's different).
 
     Args:
         ctx: Authorization context with signer AID and dossier credentials.
 
     Returns:
         Tuple of (AuthorizationClaimBuilder for party_authorized, matching APE if found).
+        The APE issuee is the accountable party for TN rights binding in Step 11.
     """
     claim = AuthorizationClaimBuilder("party_authorized")
 
@@ -121,16 +287,17 @@ def verify_party_authorization(
     ape_credentials = _find_credentials_by_type(ctx.dossier_acdcs, "APE")
     de_credentials = _find_credentials_by_type(ctx.dossier_acdcs, "DE")
 
-    # Check for Case B (delegation) - defer to future sprint
-    if de_credentials:
-        claim.fail(
-            ClaimStatus.INDETERMINATE,
-            "Delegation chain validation not yet implemented (Case B deferred)"
-        )
-        claim.add_evidence(f"de_count:{len(de_credentials)}")
-        return claim, None
+    # Find DEs where issuee == signer (matching DEs for Case B)
+    matching_des = [
+        de for de in de_credentials
+        if _get_issuee(de) == ctx.pss_signer_aid
+    ]
 
-    # Case A: No delegation - OP must be issuee of APE
+    # Case B: With delegation - only if there are DEs matching the signer
+    if matching_des:
+        return _verify_delegation_chain(ctx, matching_des, claim)
+
+    # Case A: No delegation (or no matching DEs) - OP must be issuee of APE
     if not ape_credentials:
         claim.fail(
             ClaimStatus.INVALID,

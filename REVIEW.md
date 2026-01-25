@@ -435,3 +435,38 @@ Issue Resolution
 
 Additional Findings
 None.
+
+## Code Review: Sprint 16 - Delegation Authorization (Case B)
+
+Verdict: CHANGES_REQUESTED
+
+Implementation Assessment
+Delegation chain walking is implemented with cycle detection and depth limits, and it correctly binds the accountable party to the APE issuee for TN rights. However, the Case B selection logic treats the mere presence of any DE as mandatory delegation, which can incorrectly fail valid Case A flows.
+
+Code Quality
+The chain walker is readable and well-structured. Evidence messages are helpful. One unused parameter (`ape_credentials`) suggests some planned validation isn’t used, but that’s minor.
+
+Test Coverage
+Tests cover single and multi‑level chains, missing targets, cycles, and max depth. There is no test for “unrelated DE present but Case A should still succeed,” and no test for multiple matching DEs where one chain succeeds.
+
+Findings
+- [High]: `verify_party_authorization()` forces Case B whenever any DE exists, even if none of those DEs are for the signer. This can invalidate otherwise valid Case A authorization when an unrelated DE is present in the dossier. The logic should attempt delegation only for DEs whose issuee matches the signer, and if none match, fall back to Case A. `app/vvp/authorization.py`.
+- [Medium]: `_verify_delegation_chain()` stops at the first matching DE. If multiple DE credentials match the signer and one chain is broken while another is valid, the current implementation returns INVALID instead of succeeding. Consider trying all matching DEs and succeeding on the first valid chain. `app/vvp/authorization.py`.
+
+Required Changes (if not APPROVED)
+1. Adjust Case B selection to only require delegation when a DE with issuee == signer exists; otherwise fall back to Case A.
+2. Iterate over all matching DEs and accept the first chain that reaches a valid APE; only fail if all such chains fail.
+
+## Code Review: Sprint 16 Revision 1 - Delegation Fixes
+
+Verdict: APPROVED
+
+Issue Resolution
+[High] Case B selection: FIXED
+[Medium] Multiple matching DEs: FIXED
+
+Implementation Assessment
+Case B now only triggers when a DE is actually issued to the signer, and chain validation tries all matching DEs until a valid APE is found. This removes the false‑negative Case A behavior and matches the intended delegation semantics.
+
+Required Changes (if not APPROVED)
+None.
