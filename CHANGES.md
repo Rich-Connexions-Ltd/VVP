@@ -1,5 +1,79 @@
 # VVP Verifier Change Log
 
+## Sprint 15: Authorization Verification (§5A Steps 10-11)
+
+**Date:** 2026-01-25
+**Commit:** `82c88a0`
+
+### Files Changed
+
+| File | Action | Description |
+|------|--------|-------------|
+| `app/vvp/authorization.py` | Created | Authorization module with party authorization and TN rights validation (~265 lines) |
+| `app/vvp/api_models.py` | Modified | Added `AUTHORIZATION_FAILED`, `TN_RIGHTS_INVALID` error codes |
+| `app/vvp/verify.py` | Modified | Wired `authorization_valid` claim into claim tree (~98 lines added) |
+| `tests/test_authorization.py` | Created | 36 unit tests for authorization verification |
+| `tests/vectors/data/v*.json` | Modified | Updated expected claim tree structure for authorization claims |
+| `REVIEW.md` | Modified | Added Sprint 15 review records |
+| `app/Documentation/PLAN_Sprint15.md` | Created | Archived implementation plan |
+
+### Summary
+
+Implemented VVP Specification §5A Steps 10-11: Party authorization and TN rights validation for Case A (no delegation).
+
+**Key Changes:**
+
+1. **Party Authorization (Step 10):**
+   - `verify_party_authorization()` finds APE credential where issuee == PASSporT signer AID
+   - Case A (no delegation): Direct match proves OP is accountable party
+   - Case B (DE delegation): Returns INDETERMINATE (deferred to future sprint)
+   - Error code: `AUTHORIZATION_FAILED`
+
+2. **TN Rights Validation (Step 11):**
+   - `verify_tn_rights()` validates orig.tn is covered by TNAlloc credential
+   - **Binding requirement**: TNAlloc must be issued to the accountable party (issuee match)
+   - When party authorization fails: TN rights returns INDETERMINATE (no party to bind to)
+   - Uses existing `tn_utils.py` for E.164 parsing and subset validation
+   - Error code: `TN_RIGHTS_INVALID`
+
+3. **Claim Tree Structure:**
+   ```
+   caller_authorised
+   ├── passport_verified (REQUIRED)
+   ├── dossier_verified (REQUIRED)
+   └── authorization_valid (REQUIRED)      ← NEW
+       ├── party_authorized (REQUIRED)     ← NEW
+       └── tn_rights_valid (REQUIRED)      ← NEW
+   ```
+
+4. **AuthorizationContext Dataclass:**
+   - `pss_signer_aid`: AID extracted from PASSporT kid header
+   - `orig_tn`: E.164 phone number from passport.payload.orig["tn"]
+   - `dossier_acdcs`: All ACDC credentials parsed from the dossier
+
+### Review History
+
+- **Rev 0**: CHANGES_REQUESTED - TN rights not bound to accountable party
+- **Rev 1**: APPROVED - Added `authorized_aid` parameter, TNAlloc issuee binding
+
+### Checklist Items Completed
+
+- 10.2: Extract originating party AID from PASSporT
+- 10.4: Case A - verify orig = accountable (via APE issuee)
+- 10.6: Locate TNAlloc in dossier
+- 10.7: Compare orig field to TNAlloc credential (bound to accountable party)
+- 10.9: Add caller_authorized claim to tree
+- 10.10: Add tn_rights_valid claim to tree
+- 10.11: Unit tests for authorization
+
+### Test Results
+
+```
+737 passed, 2 skipped in 4.79s
+```
+
+---
+
 ## Sprint 14: Tier 2 Completion - Schema, Edge Semantics, TNAlloc
 
 **Date:** 2026-01-25
