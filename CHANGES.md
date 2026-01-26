@@ -3,7 +3,7 @@
 ## Sprint 18: Brand/Business Logic & SIP Contextual Alignment
 
 **Date:** 2026-01-25
-**Commit:** `d8c3eb2`
+**Commit:** `8d9d697`
 
 ### Files Changed
 
