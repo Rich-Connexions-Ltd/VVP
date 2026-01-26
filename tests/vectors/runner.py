@@ -187,6 +187,22 @@ class VectorRunner:
                 patch("app.vvp.verify.verify_passport_signature_tier2", mock_sig_verify_before_inception)
             )
 
+        # 8b. Mock key state error (for v12 - key rotated before T)
+        # Per §5.1.1-2.4: Key rotated before reference time → KERI_STATE_INVALID
+        if artifacts.mock_key_state_error == "KEY_ROTATED":
+            from app.vvp.keri import KeyNotYetValidError
+
+            async def mock_sig_verify_key_rotated(*args, **kwargs):
+                raise KeyNotYetValidError(
+                    "Signing key was rotated before reference time T. "
+                    "Key rotated at 2023-12-01T00:00:00+00:00, "
+                    "reference time 2023-12-31T23:00:00+00:00"
+                )
+
+            stack.enter_context(
+                patch("app.vvp.verify.verify_passport_signature_tier2", mock_sig_verify_key_rotated)
+            )
+
         # 9. Mock SAID validation (for v07 - SAID mismatch)
         # Per §4.2A: SAID mismatch → ACDC_SAID_MISMATCH (distinct from chain invalid)
         # ACDCSAIDMismatch is now caught in verify.py and maps to ACDC_SAID_MISMATCH

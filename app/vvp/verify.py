@@ -51,6 +51,8 @@ from .dossier import (
     FetchError,
     ParseError,
     GraphError,
+    get_dossier_cache,
+    CachedDossier,
 )
 from .exceptions import VVPIdentityError, PassportError
 from .authorization import AuthorizationContext, validate_authorization
@@ -499,6 +501,13 @@ async def check_dossier_revocations(
             claim.add_evidence(f"revocation_source:{result.source}")
             log.info(f"  credential REVOKED: {said[:20]}...")
 
+            # Invalidate dossier cache entries containing this revoked credential
+            # Per §5.1.1-2.7: Cache invalidation on revocation
+            dossier_cache = get_dossier_cache()
+            invalidated = await dossier_cache.invalidate_by_said(said)
+            if invalidated > 0:
+                log.info(f"  cache invalidated: {invalidated} dossier(s)")
+
         elif result.status in (CredentialStatus.UNKNOWN, CredentialStatus.ERROR):
             unknown_count += 1
             # Only mark INDETERMINATE if we haven't already found revoked creds
@@ -695,34 +704,65 @@ async def verify_vvp(
     # -------------------------------------------------------------------------
     # Per reviewer feedback: skip dossier fetch if passport has fatal failure
     # This reduces load and provides clearer error diagnostics
+    # Per §5.1.1-2.7: Check dossier cache before fetching
+    import time as _time
     raw_dossier: Optional[bytes] = None
     dag: Optional[DossierDAG] = None
     acdc_signatures: Dict[str, bytes] = {}  # SAID -> signature bytes from CESR
     has_variant_limitations: bool = False  # Track if any ACDC is compact/partial per §1.4
+    dossier_cache = get_dossier_cache()
+    cache_hit = False
 
     if vvp_identity and not passport_fatal:
-        try:
-            raw_dossier = await fetch_dossier(vvp_identity.evd)
-            dossier_claim.add_evidence(f"fetched={vvp_identity.evd[:40]}...")
-        except FetchError as e:
-            errors.append(to_error_detail(e))
-            dossier_claim.fail(ClaimStatus.INDETERMINATE, e.message)
-
-        if raw_dossier is not None:
+        # §5.1.1-2.7: Check cache first (URL available pre-fetch)
+        evd_url = vvp_identity.evd
+        cached = await dossier_cache.get(evd_url)
+        if cached:
+            # Cache hit - use cached data
+            cache_hit = True
+            dag = cached.dag
+            raw_dossier = cached.raw_content
+            dossier_claim.add_evidence(f"cache_hit={evd_url[:40]}...")
+            dossier_claim.add_evidence(f"dag_valid,root={dag.root_said}")
+            if dag.is_aggregate:
+                dossier_claim.add_evidence(f"aggregate_roots={len(dag.root_saids)}")
+            log.info(f"Dossier cache hit: {evd_url[:50]}...")
+        else:
+            # Cache miss - fetch from network
             try:
-                from app.core.config import ALLOW_AGGREGATE_DOSSIERS
-                nodes, acdc_signatures = parse_dossier(raw_dossier)
-                dag = build_dag(nodes)
-                validate_dag(dag, allow_aggregate=ALLOW_AGGREGATE_DOSSIERS)
-                dossier_claim.add_evidence(f"dag_valid,root={dag.root_said}")
-                if dag.is_aggregate:
-                    dossier_claim.add_evidence(f"aggregate_roots={len(dag.root_saids)}")
-                if acdc_signatures:
-                    dossier_claim.add_evidence(f"cesr_sigs={len(acdc_signatures)}")
-            except (ParseError, GraphError) as e:
+                raw_dossier = await fetch_dossier(evd_url)
+                dossier_claim.add_evidence(f"fetched={evd_url[:40]}...")
+            except FetchError as e:
                 errors.append(to_error_detail(e))
-                dossier_claim.fail(ClaimStatus.INVALID, e.message)
-                dag = None  # Ensure dag is None on validation failure
+                dossier_claim.fail(ClaimStatus.INDETERMINATE, e.message)
+
+            if raw_dossier is not None:
+                try:
+                    from app.core.config import ALLOW_AGGREGATE_DOSSIERS
+                    nodes, acdc_signatures = parse_dossier(raw_dossier)
+                    dag = build_dag(nodes)
+                    validate_dag(dag, allow_aggregate=ALLOW_AGGREGATE_DOSSIERS)
+                    dossier_claim.add_evidence(f"dag_valid,root={dag.root_said}")
+                    if dag.is_aggregate:
+                        dossier_claim.add_evidence(f"aggregate_roots={len(dag.root_saids)}")
+                    if acdc_signatures:
+                        dossier_claim.add_evidence(f"cesr_sigs={len(acdc_signatures)}")
+
+                    # §5.1.1-2.7: Store in cache on successful parse/validate
+                    contained_saids = set(dag.nodes.keys())
+                    cached_dossier = CachedDossier(
+                        dag=dag,
+                        raw_content=raw_dossier,
+                        fetch_timestamp=_time.time(),
+                        content_type="application/json+cesr",
+                        contained_saids=contained_saids,
+                    )
+                    await dossier_cache.put(evd_url, cached_dossier)
+                    log.info(f"Dossier cached: {evd_url[:50]}... (saids={len(contained_saids)})")
+                except (ParseError, GraphError) as e:
+                    errors.append(to_error_detail(e))
+                    dossier_claim.fail(ClaimStatus.INVALID, e.message)
+                    dag = None  # Ensure dag is None on validation failure
     elif passport_fatal:
         # Mark dossier as indeterminate since we skipped verification
         dossier_claim.fail(

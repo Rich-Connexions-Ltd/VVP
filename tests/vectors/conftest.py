@@ -4,9 +4,20 @@ import json
 from pathlib import Path
 from typing import List
 
+import pytest
+
 from .schema import VectorCase
 
 VECTORS_DIR = Path(__file__).parent / "data"
+
+
+@pytest.fixture(autouse=True)
+def reset_caches():
+    """Reset all caches before each test vector to ensure isolation."""
+    from app.vvp.dossier.cache import reset_dossier_cache
+    reset_dossier_cache()
+    yield
+    reset_dossier_cache()
 
 
 def load_all_vectors() -> List[VectorCase]:

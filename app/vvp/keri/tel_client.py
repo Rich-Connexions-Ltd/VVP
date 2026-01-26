@@ -107,6 +107,9 @@ class TELClient:
         self.timeout = timeout
         self.witness_urls = witness_urls or self.DEFAULT_WITNESSES
         self._cache: Dict[str, RevocationResult] = {}
+        # Cache metrics
+        self._cache_hits: int = 0
+        self._cache_misses: int = 0
 
     async def check_revocation(
         self,
@@ -131,8 +134,11 @@ class TELClient:
         # Check cache first
         if cache_key in self._cache:
             cached = self._cache[cache_key]
+            self._cache_hits += 1
             log.info(f"  cache_hit: status={cached.status.value}")
             return cached
+
+        self._cache_misses += 1
 
         # Try OOBI resolution if URL provided
         if oobi_url:
@@ -442,6 +448,21 @@ class TELClient:
     def clear_cache(self):
         """Clear the revocation status cache."""
         self._cache.clear()
+
+    def cache_metrics(self) -> Dict[str, Any]:
+        """Get cache metrics for monitoring.
+
+        Returns:
+            Dictionary with cache statistics.
+        """
+        total = self._cache_hits + self._cache_misses
+        hit_rate = self._cache_hits / total if total > 0 else 0.0
+        return {
+            "hits": self._cache_hits,
+            "misses": self._cache_misses,
+            "size": len(self._cache),
+            "hit_rate": round(hit_rate, 4),
+        }
 
 
 # Singleton instance

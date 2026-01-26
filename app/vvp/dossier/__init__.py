@@ -6,6 +6,13 @@ Tier 1 (MVP): Fetch, parse JSON, validate DAG structure
 Tier 2: Full CESR parsing, SAID verification, issuer verification
 """
 
+from .cache import (
+    CachedDossier,
+    CacheMetrics,
+    DossierCache,
+    get_dossier_cache,
+    reset_dossier_cache,
+)
 from .exceptions import DossierError, FetchError, GraphError, ParseError
 from .fetch import fetch_dossier
 from .models import ACDCNode, DossierDAG
@@ -21,6 +28,12 @@ __all__ = [
     # Models
     "ACDCNode",
     "DossierDAG",
+    # Cache
+    "CachedDossier",
+    "CacheMetrics",
+    "DossierCache",
+    "get_dossier_cache",
+    "reset_dossier_cache",
     # Functions
     "fetch_dossier",
     "parse_acdc",

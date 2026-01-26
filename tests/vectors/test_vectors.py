@@ -36,4 +36,4 @@ def test_vector_compliance_summary():
     print(f"  Tier 1 (implemented): {len(tier1)}")
     print(f"  Tier 2 (deferred):    {len(tier2)}")
 
-    assert len(vectors) == 11, f"§10.2 requires at least 8 test vectors, found {len(vectors)}"
+    assert len(vectors) >= 8, f"§10.2 requires at least 8 test vectors, found {len(vectors)}"

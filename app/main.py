@@ -146,8 +146,11 @@ def admin():
         DOSSIER_MAX_REDIRECTS,
         TIER2_KEL_RESOLUTION_ENABLED,
         ADMIN_ENDPOINT_ENABLED,
+        DOSSIER_CACHE_TTL_SECONDS,
+        DOSSIER_CACHE_MAX_ENTRIES,
     )
-    from app.vvp.keri.tel_client import TELClient
+    from app.vvp.keri.tel_client import TELClient, get_tel_client
+    from app.vvp.dossier.cache import get_dossier_cache
 
     if not ADMIN_ENDPOINT_ENABLED:
         return JSONResponse(
@@ -181,6 +184,14 @@ def admin():
         "environment": {
             "log_level": logging.getLogger().getEffectiveLevel(),
             "log_level_name": logging.getLevelName(logging.getLogger().getEffectiveLevel()),
+        },
+        "cache_config": {
+            "dossier_cache_ttl_seconds": DOSSIER_CACHE_TTL_SECONDS,
+            "dossier_cache_max_entries": DOSSIER_CACHE_MAX_ENTRIES,
+        },
+        "cache_metrics": {
+            "dossier": get_dossier_cache().metrics().to_dict(),
+            "revocation": get_tel_client().cache_metrics(),
         }
     }
 

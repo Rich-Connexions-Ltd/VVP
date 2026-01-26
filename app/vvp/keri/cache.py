@@ -11,12 +11,60 @@ key state that was valid at the queried time.
 """
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Dict, Optional, Tuple
 
 if TYPE_CHECKING:
     from .kel_resolver import KeyState
+
+log = logging.getLogger(__name__)
+
+
+@dataclass
+class CacheMetrics:
+    """Metrics for cache operations.
+
+    Used for monitoring and debugging cache effectiveness.
+
+    Attributes:
+        hits: Number of cache hits.
+        misses: Number of cache misses.
+        evictions: Number of LRU evictions.
+        invalidations: Number of invalidation operations.
+    """
+
+    hits: int = 0
+    misses: int = 0
+    evictions: int = 0
+    invalidations: int = 0
+
+    def hit_rate(self) -> float:
+        """Calculate cache hit rate.
+
+        Returns:
+            Hit rate as float (0.0 to 1.0), or 0.0 if no requests.
+        """
+        total = self.hits + self.misses
+        return self.hits / total if total > 0 else 0.0
+
+    def to_dict(self) -> Dict[str, any]:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "hits": self.hits,
+            "misses": self.misses,
+            "evictions": self.evictions,
+            "invalidations": self.invalidations,
+            "hit_rate": round(self.hit_rate(), 4),
+        }
+
+    def reset(self) -> None:
+        """Reset all metrics to zero."""
+        self.hits = 0
+        self.misses = 0
+        self.evictions = 0
+        self.invalidations = 0
 
 
 @dataclass
@@ -71,6 +119,8 @@ class KeyStateCache:
         self._access_order: list[Tuple[str, str]] = []
         # Lock for thread safety
         self._lock = asyncio.Lock()
+        # Metrics tracking
+        self._metrics = CacheMetrics()
 
     async def get(self, aid: str, establishment_digest: str) -> Optional["KeyState"]:
         """Get cached key state by AID and establishment event digest.
@@ -87,17 +137,23 @@ class KeyStateCache:
             entry = self._entries.get(key)
 
             if entry is None:
+                self._metrics.misses += 1
+                log.debug(f"KeyState cache miss: {aid[:20]}...")
                 return None
 
             # Check expiration
             now = datetime.now(timezone.utc)
             if entry.expires_at < now:
                 self._remove_entry(key)
+                self._metrics.misses += 1
+                log.debug(f"KeyState cache expired: {aid[:20]}...")
                 return None
 
             # Update access time for LRU
             entry.last_access = now
             self._touch_access_order(key)
+            self._metrics.hits += 1
+            log.debug(f"KeyState cache hit: {aid[:20]}...")
 
             return entry.key_state
 
@@ -177,13 +233,16 @@ class KeyStateCache:
                 ref_time_key = (key_state.aid, reference_time)
                 self._time_index[ref_time_key] = key_state.establishment_digest
 
-    async def invalidate(self, aid: str) -> None:
+    async def invalidate(self, aid: str) -> int:
         """Invalidate all cached entries for an AID.
 
         Use when key state may have changed (e.g., rotation detected).
 
         Args:
             aid: The AID to invalidate.
+
+        Returns:
+            Number of entries invalidated.
         """
         async with self._lock:
             # Find all entries for this AID
@@ -192,6 +251,7 @@ class KeyStateCache:
                 if key[0] == aid
             ]
 
+            count = len(keys_to_remove)
             for key in keys_to_remove:
                 self._remove_entry(key)
 
@@ -202,6 +262,12 @@ class KeyStateCache:
             ]
             for tkey in time_keys_to_remove:
                 del self._time_index[tkey]
+
+            if count > 0:
+                self._metrics.invalidations += count
+                log.info(f"KeyState cache invalidated {count} entries for AID: {aid[:20]}...")
+
+            return count
 
     def _remove_entry(self, key: Tuple[str, str]) -> None:
         """Remove entry from all indexes (caller must hold lock)."""
@@ -229,6 +295,8 @@ class KeyStateCache:
         if self._access_order:
             lru_key = self._access_order[0]
             self._remove_entry(lru_key)
+            self._metrics.evictions += 1
+            log.debug(f"KeyState cache LRU eviction: {lru_key[0][:20]}...")
 
     async def clear(self) -> None:
         """Clear all cache entries."""
@@ -241,3 +309,11 @@ class KeyStateCache:
     def size(self) -> int:
         """Current number of cached entries."""
         return len(self._entries)
+
+    def metrics(self) -> CacheMetrics:
+        """Get cache metrics.
+
+        Returns:
+            CacheMetrics instance with current statistics.
+        """
+        return self._metrics

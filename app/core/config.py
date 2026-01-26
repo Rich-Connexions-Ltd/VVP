@@ -222,3 +222,21 @@ IDENTITY_DISCOVERY_TIMEOUT_SECONDS: float = float(
 IDENTITY_CACHE_TTL_SECONDS: float = float(
     os.getenv("VVP_IDENTITY_CACHE_TTL", "300.0")
 )
+
+
+# =============================================================================
+# SPRINT 23: DOSSIER CACHING (Phase 14.2 / §5.1.1-2.7)
+# =============================================================================
+
+# Dossier cache TTL (§5C.2 freshness policy)
+# Default 300s aligns with key state cache freshness per §5C.2
+# Can be increased for stable production dossiers, but should not exceed
+# MAX_TOKEN_AGE_SECONDS to ensure verification freshness
+DOSSIER_CACHE_TTL_SECONDS: float = float(
+    os.getenv("VVP_DOSSIER_CACHE_TTL", "300.0")
+)
+
+# Maximum dossier cache entries before LRU eviction
+DOSSIER_CACHE_MAX_ENTRIES: int = int(
+    os.getenv("VVP_DOSSIER_CACHE_MAX_ENTRIES", "100")
+)
