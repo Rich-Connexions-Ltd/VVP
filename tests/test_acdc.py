@@ -18,6 +18,7 @@ from app.vvp.acdc import (
     ACDCSAIDMismatch,
     ACDCChainInvalid,
 )
+from app.vvp.api_models import ClaimStatus
 
 # Known vLEI LE schema SAID for tests that need valid LE credentials
 # Per §6.3.5, APE vetting credentials must use known LE schemas
@@ -711,9 +712,10 @@ class TestEdgeSemantics:
 
         dossier_acdcs = {le_said: le_cred}
 
-        # Should not raise, returns empty warnings
-        warnings = validate_edge_semantics(ape_cred, dossier_acdcs)
+        # Should not raise, returns empty warnings and VALID status
+        warnings, status = validate_edge_semantics(ape_cred, dossier_acdcs)
         assert warnings == []
+        assert status == ClaimStatus.VALID
 
     def test_ape_vetting_edge_target_missing_raises(self):
         """APE with vetting edge pointing to missing target raises ACDCChainInvalid."""
@@ -800,7 +802,7 @@ class TestEdgeSemantics:
 
         dossier_acdcs = {ape_said: ape_cred}
 
-        warnings = validate_edge_semantics(de_cred, dossier_acdcs)
+        warnings, status = validate_edge_semantics(de_cred, dossier_acdcs)
         assert warnings == []
 
     def test_de_with_delegation_edge_to_de_valid(self):
@@ -831,7 +833,7 @@ class TestEdgeSemantics:
 
         dossier_acdcs = {parent_de_said: parent_de}
 
-        warnings = validate_edge_semantics(child_de, dossier_acdcs)
+        warnings, status = validate_edge_semantics(child_de, dossier_acdcs)
         assert warnings == []
 
     def test_de_delegation_edge_target_missing_raises(self):
@@ -881,7 +883,7 @@ class TestEdgeSemantics:
 
         dossier_acdcs = {parent_said: parent}
 
-        warnings = validate_edge_semantics(child, dossier_acdcs)
+        warnings, status = validate_edge_semantics(child, dossier_acdcs)
         assert warnings == []
 
     def test_tnalloc_without_jl_returns_warning(self):
@@ -900,7 +902,7 @@ class TestEdgeSemantics:
         )
 
         # Should return warning, not raise (JL is optional for root allocators)
-        warnings = validate_edge_semantics(root_tnalloc, {})
+        warnings, status = validate_edge_semantics(root_tnalloc, {})
         assert len(warnings) == 1
         assert "Optional edge not found" in warnings[0]
 
@@ -918,7 +920,7 @@ class TestEdgeSemantics:
             raw={}
         )
 
-        warnings = validate_edge_semantics(generic, {})
+        warnings, status = validate_edge_semantics(generic, {})
         assert warnings == []
 
 
@@ -1005,32 +1007,44 @@ class TestAcdcVariantDetection:
         acdc = parse_acdc(full_acdc)
         assert acdc.said == "E" + "A" * 43
 
-    def test_compact_acdc_raises_parse_error(self):
-        """Compact ACDC raises ParseError (not yet supported)."""
-        from app.vvp.dossier.exceptions import ParseError
-
+    def test_compact_acdc_parses_successfully(self):
+        """Compact ACDC parses successfully per §1.4 variant support."""
         compact_acdc = {
             "d": "E" + "A" * 43,
             "i": "D" + "B" * 43,
             "s": "E" + "S" * 43,
-            # No 'a' field
+            # No 'a' field - compact form
         }
 
-        with pytest.raises(ParseError, match="variant 'compact' not yet supported"):
-            parse_acdc(compact_acdc)
+        acdc = parse_acdc(compact_acdc)
+        assert acdc.variant == "compact"
+        assert acdc.said == "E" + "A" * 43
+        assert acdc.attributes is None
 
-    def test_partial_acdc_raises_parse_error(self):
-        """Partial ACDC raises ParseError (not yet supported)."""
-        from app.vvp.dossier.exceptions import ParseError
-
+    def test_partial_acdc_parses_successfully(self):
+        """Partial ACDC parses successfully per §1.4 variant support."""
         partial_acdc = {
             "d": "E" + "A" * 43,
             "i": "D" + "B" * 43,
             "a": {"name": "_", "secret": "_:SAID"},  # Placeholders
         }
 
-        with pytest.raises(ParseError, match="variant 'partial' not yet supported"):
-            parse_acdc(partial_acdc)
+        acdc = parse_acdc(partial_acdc)
+        assert acdc.variant == "partial"
+        assert acdc.attributes["name"] == "_"
+
+    def test_compact_acdc_raises_with_allow_variants_false(self):
+        """Compact ACDC raises ParseError when allow_variants=False (legacy mode)."""
+        from app.vvp.dossier.exceptions import ParseError
+
+        compact_acdc = {
+            "d": "E" + "A" * 43,
+            "i": "D" + "B" * 43,
+            "s": "E" + "S" * 43,
+        }
+
+        with pytest.raises(ParseError, match="not allowed"):
+            parse_acdc(compact_acdc, allow_variants=False)
 
     def test_compact_acdc_allowed_with_flag(self):
         """Compact ACDC parses with allow_variants=True."""
@@ -1186,8 +1200,9 @@ class TestIssueeBinding:
             raw={}
         )
 
-        # Should not raise
-        validate_issuee_binding(acdc, is_root_credential=False)
+        # Should return VALID
+        status = validate_issuee_binding(acdc, is_root_credential=False)
+        assert status == ClaimStatus.VALID
 
     def test_credential_with_issuee_field_valid(self):
         """Credential with 'issuee' field passes validation."""
@@ -1202,8 +1217,9 @@ class TestIssueeBinding:
             raw={}
         )
 
-        # Should not raise
-        validate_issuee_binding(acdc, is_root_credential=False)
+        # Should return VALID
+        status = validate_issuee_binding(acdc, is_root_credential=False)
+        assert status == ClaimStatus.VALID
 
     def test_credential_with_holder_field_valid(self):
         """Credential with 'holder' field passes validation."""
@@ -1218,8 +1234,9 @@ class TestIssueeBinding:
             raw={}
         )
 
-        # Should not raise
-        validate_issuee_binding(acdc, is_root_credential=False)
+        # Should return VALID
+        status = validate_issuee_binding(acdc, is_root_credential=False)
+        assert status == ClaimStatus.VALID
 
     def test_credential_without_issuee_raises(self):
         """Credential without issuee field fails validation (bearer token)."""
@@ -1250,8 +1267,9 @@ class TestIssueeBinding:
             raw={}
         )
 
-        # Should not raise for root credentials
-        validate_issuee_binding(acdc, is_root_credential=True)
+        # Should return VALID for root credentials
+        status = validate_issuee_binding(acdc, is_root_credential=True)
+        assert status == ClaimStatus.VALID
 
     def test_credential_without_attributes_raises(self):
         """Credential with no attributes fails (can't verify issuee)."""
@@ -1465,7 +1483,7 @@ class TestSprint17ApeVettingValidation:
         dossier_acdcs = {le_said: le_cred}
 
         # With strict schema validation, known LE schema should pass
-        warnings = validate_edge_semantics(ape_cred, dossier_acdcs)
+        warnings, status = validate_edge_semantics(ape_cred, dossier_acdcs)
         assert warnings == []
 
     def test_ape_vetting_target_must_be_le_type(self):
@@ -1484,3 +1502,250 @@ class TestSprint17ApeVettingValidation:
 
         with pytest.raises(ACDCChainInvalid, match="must be LE type"):
             validate_ape_vetting_target(wrong_type)
+
+
+class TestCompactVariantIndeterminate:
+    """Tests for compact ACDC variant returning INDETERMINATE per §2.2.
+
+    Per VVP §1.4, verifiers MUST support compact ACDC variants.
+    Per §2.2 ("Uncertainty must be explicit"), when compact variants have
+    external edge references that cannot be verified, status is INDETERMINATE.
+    """
+
+    @pytest.mark.asyncio
+    async def test_compact_external_edge_ref_returns_indeterminate(self):
+        """Compact ACDC with external edge ref returns INDETERMINATE not raises."""
+        root_aid = "D" + "R" * 43
+        trusted_roots = {root_aid}
+
+        # Compact ACDC with edge pointing to external SAID not in dossier
+        compact_acdc = ACDC(
+            version="",
+            said="E" + "C" * 43,
+            issuer_aid="D" + "I" * 43,
+            schema_said="E" + "S" * 43,
+            attributes=None,  # Compact form - no expanded attributes
+            edges={"parent": {"n": "E" + "X" * 43}},  # External ref
+            variant="compact",
+            raw={}
+        )
+
+        # For compact variants, missing edge target should return INDETERMINATE
+        # not raise ACDCChainInvalid
+        result = await validate_credential_chain(
+            compact_acdc,
+            trusted_roots,
+            {compact_acdc.said: compact_acdc}  # Only this ACDC in dossier
+        )
+
+        # Should return result with INDETERMINATE status
+        assert result.status == "INDETERMINATE"
+        assert result.has_variant_limitations is True
+        assert not result.validated  # Not fully validated
+        assert any("compact variant" in err.lower() for err in result.errors)
+
+    @pytest.mark.asyncio
+    async def test_compact_with_all_refs_in_dossier_can_be_valid(self):
+        """Compact ACDC with all edge refs present can reach VALID."""
+        root_aid = "D" + "R" * 43
+        trusted_roots = {root_aid}
+
+        root_said = "E" + "R" * 43
+
+        # Root credential (LE type for vetting) - must use known LE schema
+        root_acdc = ACDC(
+            version="",
+            said=root_said,
+            issuer_aid=root_aid,
+            schema_said=KNOWN_LE_SCHEMA,  # Use known LE schema per §6.3.5
+            attributes={"LEI": "1234567890"},  # LE type
+            edges=None,
+            raw={}
+        )
+
+        # Compact APE credential with vetting edge to root in dossier
+        compact_ape = ACDC(
+            version="",
+            said="E" + "A" * 43,
+            issuer_aid="D" + "I" * 43,
+            schema_said="E" + "S" * 43,
+            attributes="E" + "ATTR" + "0" * 39,  # SAID reference (compact form)
+            edges={"vetting": {"n": root_said}},  # Edge ref IS in dossier
+            variant="compact",
+            raw={}
+        )
+
+        dossier_acdcs = {
+            root_said: root_acdc,
+            compact_ape.said: compact_ape,
+        }
+
+        result = await validate_credential_chain(
+            compact_ape,
+            trusted_roots,
+            dossier_acdcs
+        )
+
+        # Chain CAN succeed if all refs present, but has_variant_limitations
+        assert result.validated is True
+        assert result.root_aid == root_aid
+        assert result.has_variant_limitations is True  # Still compact variant
+
+
+class TestPartialVariantIndeterminate:
+    """Tests for partial ACDC variant returning INDETERMINATE per §2.2.
+
+    Per VVP §1.4, verifiers MUST support partial ACDC variants.
+    Per §2.2 ("Uncertainty must be explicit"), when partial variants have
+    placeholder issuee fields that cannot be verified, status is INDETERMINATE.
+    """
+
+    def test_partial_placeholder_issuee_returns_indeterminate(self):
+        """Partial ACDC with placeholder issuee returns INDETERMINATE."""
+        from app.vvp.acdc.verifier import validate_issuee_binding
+
+        # Partial ACDC with placeholder issuee
+        partial_acdc = ACDC(
+            version="",
+            said="E" + "P" * 43,
+            issuer_aid="D" + "I" * 43,
+            schema_said="",
+            attributes={"i": "_"},  # Placeholder issuee (redacted)
+            variant="partial",
+            raw={}
+        )
+
+        status = validate_issuee_binding(partial_acdc, is_root_credential=False)
+
+        # Should return INDETERMINATE for placeholder issuee
+        assert status == ClaimStatus.INDETERMINATE
+
+    def test_partial_typed_placeholder_issuee_returns_indeterminate(self):
+        """Partial ACDC with _:type placeholder returns INDETERMINATE."""
+        from app.vvp.acdc.verifier import validate_issuee_binding
+
+        # Partial ACDC with typed placeholder
+        partial_acdc = ACDC(
+            version="",
+            said="E" + "P" * 43,
+            issuer_aid="D" + "I" * 43,
+            schema_said="",
+            attributes={"issuee": "_:string"},  # Typed placeholder
+            variant="partial",
+            raw={}
+        )
+
+        status = validate_issuee_binding(partial_acdc, is_root_credential=False)
+
+        # Should return INDETERMINATE
+        assert status == ClaimStatus.INDETERMINATE
+
+    def test_partial_with_disclosed_issuee_returns_valid(self):
+        """Partial ACDC with disclosed (non-placeholder) issuee returns VALID."""
+        from app.vvp.acdc.verifier import validate_issuee_binding
+
+        # Partial ACDC with actual issuee value (not redacted)
+        partial_acdc = ACDC(
+            version="",
+            said="E" + "P" * 43,
+            issuer_aid="D" + "I" * 43,
+            schema_said="",
+            attributes={"i": "D" + "U" * 43},  # Actual AID, not placeholder
+            variant="partial",
+            raw={}
+        )
+
+        status = validate_issuee_binding(partial_acdc, is_root_credential=False)
+
+        # Should return VALID since issuee is disclosed
+        assert status == ClaimStatus.VALID
+
+
+class TestAggregateDossierValidation:
+    """Tests for aggregate dossier (multi-root) validation per §1.4 and §6.1.
+
+    Per VVP §1.4, verifiers MUST support aggregate ACDC variants.
+    Per §6.1, "unless local policy explicitly supports multiple roots".
+    """
+
+    def test_aggregate_dossier_rejected_by_default(self):
+        """Multi-root dossier raises GraphError when aggregate disabled."""
+        from app.vvp.dossier.validator import validate_dag, build_dag
+        from app.vvp.dossier.models import ACDCNode
+        from app.vvp.dossier.exceptions import GraphError
+
+        # Create two root nodes (no incoming edges to either)
+        node1 = ACDCNode(
+            said="E" + "1" * 43,
+            issuer="D" + "A" * 43,
+            schema="E" + "S" * 43,
+            attributes={},
+            edges=None,
+            raw={}
+        )
+
+        node2 = ACDCNode(
+            said="E" + "2" * 43,
+            issuer="D" + "B" * 43,
+            schema="E" + "S" * 43,
+            attributes={},
+            edges=None,
+            raw={}
+        )
+
+        dag = build_dag([node1, node2])
+
+        # Should raise GraphError when aggregate not allowed
+        with pytest.raises(GraphError, match="Multiple root nodes"):
+            validate_dag(dag, allow_aggregate=False)
+
+    def test_aggregate_dossier_accepted_when_enabled(self):
+        """Multi-root dossier succeeds when allow_aggregate=True."""
+        from app.vvp.dossier.validator import validate_dag, build_dag
+        from app.vvp.dossier.models import ACDCNode
+
+        # Create two root nodes
+        node1 = ACDCNode(
+            said="E" + "1" * 43,
+            issuer="D" + "A" * 43,
+            schema="E" + "S" * 43,
+            attributes={},
+            edges=None,
+            raw={}
+        )
+
+        node2 = ACDCNode(
+            said="E" + "2" * 43,
+            issuer="D" + "B" * 43,
+            schema="E" + "S" * 43,
+            attributes={},
+            edges=None,
+            raw={}
+        )
+
+        dag = build_dag([node1, node2])
+
+        # Should succeed when aggregate allowed
+        validate_dag(dag, allow_aggregate=True)
+
+        # Verify aggregate fields are set
+        assert dag.is_aggregate is True
+        assert len(dag.root_saids) == 2
+        assert node1.said in dag.root_saids
+        assert node2.said in dag.root_saids
+
+    def test_aggregate_config_from_environment(self, monkeypatch):
+        """Verify ALLOW_AGGREGATE_DOSSIERS config reads from environment."""
+        import os
+        import importlib
+
+        # Test True
+        monkeypatch.setenv("VVP_ALLOW_AGGREGATE_DOSSIERS", "true")
+        import app.core.config
+        importlib.reload(app.core.config)
+        assert app.core.config.ALLOW_AGGREGATE_DOSSIERS is True
+
+        # Test False (default)
+        monkeypatch.setenv("VVP_ALLOW_AGGREGATE_DOSSIERS", "false")
+        importlib.reload(app.core.config)
+        assert app.core.config.ALLOW_AGGREGATE_DOSSIERS is False

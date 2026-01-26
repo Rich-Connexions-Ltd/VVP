@@ -203,7 +203,7 @@ The following VVP spec requirements are **out of scope** for this verification A
 | 8.6 | Validate ACDC schema against declared schema SAID | [ ] | | Per §5.1.1-2.8.3 - Deferred |
 | 8.7 | Traverse evidence chain to root of trust | [x] | Phase 10 | validate_credential_chain() |
 | 8.8 | Verify correct relationships among artifacts | [ ] | | Per §5.1.1-2.8.3 - Deferred to Tier 3 |
-| 8.9 | Handle ACDC variants: compact, partial, aggregate | [ ] | | Per §1.4/§6.1B - Deferred to Tier 3 |
+| 8.9 | Handle ACDC variants: compact, partial, aggregate | [x] | Sprint 21 | Per §1.4/§6.1B - Full variant support |
 | 8.10 | Unit tests for ACDC verification | [x] | Phase 10 | test_acdc.py |
 | 8.11 | Validate vetting credential has JL to qualifying credential | [ ] | | Per VVP §6.3.5 - Deferred to Tier 3 |
 | 8.12 | Verify credentials are NOT bearer tokens (have issuee binding) | [x] | Sprint 12 | Per VVP §6.3.5 - validate_issuee_binding() |
@@ -350,7 +350,7 @@ The following VVP spec requirements are **out of scope** for this verification A
 | 15.6 | Dossier unreachable → INDETERMINATE | [x] | | Per §10.2 |
 | 15.7 | Key rotated/revoked before T (historical) → INVALID | [ ] | | Per §10.2 - requires Tier 2 |
 | 15.8 | SAID mismatch under most-compact-form rule → INVALID | [ ] | | Per §10.2 - requires Phase 8 |
-| 15.9 | Valid compact/partial/aggregate dossier variant → VALID | [ ] | | Per §10.2 - requires Phase 8 |
+| 15.9 | Valid compact/partial/aggregate dossier variant → VALID | [x] | Sprint 21 | Per §10.2 - variant tests added |
 | 15.10 | TNAlloc mismatch → INVALID | [ ] | | Per §5.1.1-2.11 - requires Phase 10 |
 | 15.11 | Delegation chain invalid → INVALID | [ ] | | Per §5.1.1-2.10 - requires Phase 10 |
 | 15.12 | Revoked credential in dossier → INVALID | [ ] | | Per §5.1.1-2.9 - requires Phase 9 |
@@ -413,16 +413,16 @@ These are the **18 error codes** defined in the v1.4 FINAL specification:
 | 5 | Dossier Validation (Tier 1) | 15 | 15 | 100% |
 | 6 | Verification Orchestration (Tier 1) | 8 | 8 | 100% |
 | 7 | KEL Key State Resolution (Tier 2) | 17 | 16 | 94% |
-| 8 | ACDC Signature Verification (Tier 2) | 14 | 10 | 71% |
+| 8 | ACDC Signature Verification (Tier 2) | 14 | 11 | 79% |
 | 9 | Revocation Checking (Tier 2) | 7 | 7 | 100% |
 | 10 | Authorization Verification (Tier 3) | 19 | 19 | 100% |
 | 11 | Brand and Business Logic (Tier 3) | 17 | 17 | 100% |
 | 12 | Callee Verification (Tier 3) | 15 | 15 | 100% |
 | 13 | SIP Contextual Alignment | 6 | 6 | 100% |
 | 14 | Caching and Efficiency | 8 | 5 | 63% |
-| 15 | Test Vectors | 14 | 6 | 43% |
+| 15 | Test Vectors | 14 | 7 | 50% |
 | 16 | API Routes and Deployment | 9 | 5 | 56% |
-| **TOTAL** | | **182** | **172** | **95%** |
+| **TOTAL** | | **182** | **174** | **96%** |
 
 ---
 
@@ -473,6 +473,7 @@ These are the **18 error codes** defined in the v1.4 FINAL specification:
 | 3.9 | 2026-01-25 | Sprint 17: Phase 10 complete (19/19). Authorization verification finished. 10.12 APE vetting edge always required. 10.18 single-sig enforcement documented. 10.19 vetting credential LE schema validation via `validate_ape_vetting_target()`. Total 182 items (79% complete). |
 | 3.10 | 2026-01-25 | Sprint 18: Phase 11 (Brand/Business Logic) and Phase 13 (SIP Contextual Alignment) complete. New modules: sip_context.py, brand.py, goal.py. New claims: context_aligned, brand_verified, business_logic_verified. Brand proxy missing→INDETERMINATE. Geo constraints without GeoIP→INDETERMINATE. 82 new tests (36 SIP + 46 brand/goal). Total 182 items (91% complete). |
 | 3.11 | 2026-01-26 | Sprint 19: Phase 12 (Callee Verification) complete. New module: verify_callee.py. New claims: dialog_matched, issuer_matched, goal_overlap_verified. New error codes: DIALOG_MISMATCH, ISSUER_MISMATCH. Sprint 18 fixes: A1 (context_required), A2 (timing_tolerance), A3 (_find_signer_de_credential). 41 new tests (35 callee + 6 config fixes). Total 182 items (95% complete). |
+| 3.12 | 2026-01-26 | Sprint 21: ACDC Variant Support (Phase 8.9, 15.9). Full support for compact, partial, and aggregate ACDC variants per §1.4. Compact external refs→INDETERMINATE. Partial placeholders→INDETERMINATE. Aggregate dossiers gated by VVP_ALLOW_AGGREGATE_DOSSIERS config. Multi-root validation: non-aggregate requires any valid chain, aggregate requires all chains valid. 12 new tests (variant behavior + verify_vvp integration). Total 182 items (96% complete). |
 
 ---
 

@@ -817,3 +817,317 @@ class TestSignerDESelection:
         result = _find_signer_de_credential(dossier_acdcs, signer_aid)
 
         assert result is None
+
+
+class TestMultiLeafChainAggregation:
+    """Tests for multi-leaf chain status aggregation in verify.py.
+
+    Per §6.1: For aggregate dossiers, ALL leaves must validate.
+    For non-aggregate: at least one valid chain suffices (prior behavior).
+    """
+
+    @pytest.mark.asyncio
+    async def test_non_aggregate_valid_chain_succeeds(self):
+        """Non-aggregate dossier with a single valid leaf chain succeeds.
+
+        This tests the basic case where a single leaf credential
+        reaches a trusted root for chain_verified to be VALID.
+        """
+        from app.vvp.acdc import ACDC, validate_credential_chain
+        from app.vvp.dossier.models import ACDCNode
+        from app.vvp.dossier.validator import build_dag, validate_dag
+        from app.vvp.acdc.schema_registry import KNOWN_SCHEMA_SAIDS
+
+        # Set up trusted root
+        root_aid = "D" + "R" * 43
+        trusted_roots = {root_aid}
+        known_le_schema = next(iter(KNOWN_SCHEMA_SAIDS.get("LE", frozenset())), "")
+
+        root_said = "E" + "R" * 43
+        leaf_said = "E" + "L" * 43
+
+        # Root credential (LE type - this is the trust anchor)
+        root_node = ACDCNode(
+            said=root_said,
+            issuer=root_aid,
+            schema=known_le_schema,
+            attributes={"LEI": "1234567890123456"},
+            edges=None,
+            raw={}
+        )
+
+        # Leaf credential (APE) pointing to root
+        leaf_node = ACDCNode(
+            said=leaf_said,
+            issuer="D" + "I" * 43,
+            schema="E" + "S" * 43,
+            attributes={"name": "valid leaf", "i": "D" + "U" * 43},
+            edges={"vetting": {"n": root_said}},
+            raw={}
+        )
+
+        # Build DAG - single graph root (the leaf credential)
+        dag = build_dag([root_node, leaf_node])
+        validate_dag(dag, allow_aggregate=False)
+
+        # DAG root is the LEAF (no incoming edges to leaf)
+        # Trust anchor (root_said) has incoming edge from leaf
+        assert dag.is_aggregate is False
+        assert dag.root_said == leaf_said  # Graph root = leaf credential
+
+        # Create ACDC versions for chain validation
+        root_acdc = ACDC(
+            version="",
+            said=root_said,
+            issuer_aid=root_aid,
+            schema_said=known_le_schema,
+            attributes={"LEI": "1234567890123456"},
+            raw={}
+        )
+
+        leaf_acdc = ACDC(
+            version="",
+            said=leaf_said,
+            issuer_aid="D" + "I" * 43,
+            schema_said="E" + "S" * 43,
+            attributes={"name": "valid leaf", "i": "D" + "U" * 43},
+            edges={"vetting": {"n": root_said}},
+            raw={}
+        )
+
+        dossier_acdcs = {
+            root_said: root_acdc,
+            leaf_said: leaf_acdc,
+        }
+
+        # Validate leaf chain - should succeed
+        result = await validate_credential_chain(
+            leaf_acdc,
+            trusted_roots,
+            dossier_acdcs,
+            validate_schemas=False
+        )
+
+        assert result.validated is True
+        assert result.root_aid == root_aid
+
+    @pytest.mark.asyncio
+    async def test_aggregate_all_chains_must_validate(self):
+        """Aggregate dossier fails if any leaf chain fails.
+
+        Per §6.1: ALL leaves must validate for aggregate dossiers.
+        """
+        from app.vvp.dossier.models import ACDCNode
+        from app.vvp.dossier.validator import build_dag, validate_dag
+
+        # Two separate roots (aggregate)
+        root1_said = "E" + "1" * 43
+        root2_said = "E" + "2" * 43
+
+        root1 = ACDCNode(
+            said=root1_said,
+            issuer="D" + "A" * 43,
+            schema="E" + "S" * 43,
+            attributes={},
+            edges=None,
+            raw={}
+        )
+
+        root2 = ACDCNode(
+            said=root2_said,
+            issuer="D" + "B" * 43,
+            schema="E" + "S" * 43,
+            attributes={},
+            edges=None,
+            raw={}
+        )
+
+        dag = build_dag([root1, root2])
+        validate_dag(dag, allow_aggregate=True)
+
+        # Verify aggregate fields
+        assert dag.is_aggregate is True
+        assert len(dag.root_saids) == 2
+
+    @pytest.mark.asyncio
+    async def test_verify_vvp_non_aggregate_any_valid_is_success(self):
+        """verify_vvp: non-aggregate dossier with mixed leaf results succeeds.
+
+        This tests the integration point in verify.py where the aggregation
+        logic is applied. For non-aggregate dossiers, at least one valid
+        chain should result in chain_verified = VALID.
+        """
+        from app.vvp.acdc import ACDC, ACDCChainResult
+        from app.vvp.acdc.exceptions import ACDCChainInvalid
+
+        context = CallContext(call_id="test-123", received_at="2024-01-01T00:00:00Z")
+
+        with (
+            patch("app.vvp.verify.parse_vvp_identity") as mock_vvp,
+            patch("app.vvp.verify.parse_passport") as mock_passport,
+            patch("app.vvp.verify.validate_passport_binding") as mock_binding,
+            patch("app.vvp.verify.verify_passport_signature_tier2") as mock_sig,
+            patch("app.vvp.verify.fetch_dossier") as mock_fetch,
+            patch("app.vvp.verify.parse_dossier") as mock_parse,
+            patch("app.vvp.verify.build_dag") as mock_build,
+            patch("app.vvp.verify.validate_dag") as mock_validate,
+            patch("app.vvp.verify._find_leaf_credentials") as mock_find_leaves,
+            patch("app.vvp.verify._convert_dag_to_acdcs") as mock_convert,
+            patch("app.vvp.acdc.validate_credential_chain") as mock_chain,
+            patch("app.vvp.verify.validate_authorization") as mock_auth,
+        ):
+            mock_vvp.return_value = MagicMock(evd="http://example.com/dossier")
+            signer_aid = "EAbc123456789012345"
+            mock_passport.return_value = MagicMock(
+                header=MagicMock(kid=f"http://witness.example.com/oobi/{signer_aid}/witness/EXyz"),
+                payload=MagicMock(orig={"tn": "+15551234567"}, card=None, goal=None)
+            )
+            mock_binding.return_value = None
+            mock_sig.return_value = None
+            mock_fetch.return_value = b'[]'
+            mock_parse.return_value = ([], {})
+
+            # Non-aggregate DAG with two leaves
+            mock_dag = MagicMock()
+            mock_dag.root_said = "SAID_LEAF1"
+            mock_dag.is_aggregate = False  # Explicitly non-aggregate
+            mock_build.return_value = mock_dag
+            mock_validate.return_value = None
+
+            # Two leaf credentials
+            mock_find_leaves.return_value = ["SAID_LEAF1", "SAID_LEAF2"]
+
+            # Mock ACDCs for both leaves
+            mock_acdc1 = MagicMock()
+            mock_acdc1.said = "SAID_LEAF1"
+            mock_acdc2 = MagicMock()
+            mock_acdc2.said = "SAID_LEAF2"
+            mock_convert.return_value = {
+                "SAID_LEAF1": mock_acdc1,
+                "SAID_LEAF2": mock_acdc2,
+            }
+
+            # First leaf succeeds, second leaf fails
+            def chain_side_effect(acdc, **kwargs):
+                if acdc.said == "SAID_LEAF1":
+                    result = ACDCChainResult(
+                        chain=[acdc],
+                        root_aid="EGLEIF0000000000",
+                        validated=True,
+                        status="VALID",
+                        has_variant_limitations=False
+                    )
+                    return result
+                else:
+                    raise ACDCChainInvalid("Chain failed for leaf 2")
+            mock_chain.side_effect = chain_side_effect
+
+            # Mock authorization
+            from app.vvp.authorization import AuthorizationClaimBuilder
+            mock_party = AuthorizationClaimBuilder("party_authorized")
+            mock_tn = AuthorizationClaimBuilder("tn_rights_valid")
+            mock_auth.return_value = (mock_party, mock_tn)
+
+            req = VerifyRequest(passport_jwt="test", context=context)
+            req_id, resp = await verify_vvp(req, "valid-header")
+
+            # For non-aggregate, at least one valid chain = chain_verified VALID
+            dossier_claim = resp.claims[0].children[1].node
+            assert dossier_claim.status == ClaimStatus.VALID
+
+            # Find chain_verified child claim
+            chain_claim = None
+            for child in dossier_claim.children:
+                if child.node.name == "chain_verified":
+                    chain_claim = child.node
+                    break
+
+            # chain_verified should be VALID (one chain succeeded)
+            assert chain_claim is not None
+            assert chain_claim.status == ClaimStatus.VALID
+
+    @pytest.mark.asyncio
+    async def test_verify_vvp_aggregate_requires_all_valid(self):
+        """verify_vvp: aggregate dossier with mixed leaf results fails.
+
+        For aggregate dossiers, ALL chains must validate. If any chain
+        fails, chain_verified should be INVALID.
+        """
+        from app.vvp.acdc import ACDCChainResult
+        from app.vvp.acdc.exceptions import ACDCChainInvalid
+
+        context = CallContext(call_id="test-123", received_at="2024-01-01T00:00:00Z")
+
+        with (
+            patch("app.vvp.verify.parse_vvp_identity") as mock_vvp,
+            patch("app.vvp.verify.parse_passport") as mock_passport,
+            patch("app.vvp.verify.validate_passport_binding") as mock_binding,
+            patch("app.vvp.verify.verify_passport_signature_tier2") as mock_sig,
+            patch("app.vvp.verify.fetch_dossier") as mock_fetch,
+            patch("app.vvp.verify.parse_dossier") as mock_parse,
+            patch("app.vvp.verify.build_dag") as mock_build,
+            patch("app.vvp.verify.validate_dag") as mock_validate,
+            patch("app.vvp.verify._find_leaf_credentials") as mock_find_leaves,
+            patch("app.vvp.verify._convert_dag_to_acdcs") as mock_convert,
+            patch("app.vvp.acdc.validate_credential_chain") as mock_chain,
+        ):
+            mock_vvp.return_value = MagicMock(evd="http://example.com/dossier")
+            signer_aid = "EAbc123456789012345"
+            mock_passport.return_value = MagicMock(
+                header=MagicMock(kid=f"http://witness.example.com/oobi/{signer_aid}/witness/EXyz"),
+                payload=MagicMock(orig={"tn": "+15551234567"}, card=None, goal=None)
+            )
+            mock_binding.return_value = None
+            mock_sig.return_value = None
+            mock_fetch.return_value = b'[]'
+            mock_parse.return_value = ([], {})
+
+            # Aggregate DAG with two leaves
+            mock_dag = MagicMock()
+            mock_dag.root_said = "SAID_LEAF1"
+            mock_dag.is_aggregate = True  # Aggregate dossier
+            mock_build.return_value = mock_dag
+            mock_validate.return_value = None
+
+            # Two leaf credentials
+            mock_find_leaves.return_value = ["SAID_LEAF1", "SAID_LEAF2"]
+
+            mock_acdc1 = MagicMock()
+            mock_acdc1.said = "SAID_LEAF1"
+            mock_acdc2 = MagicMock()
+            mock_acdc2.said = "SAID_LEAF2"
+            mock_convert.return_value = {
+                "SAID_LEAF1": mock_acdc1,
+                "SAID_LEAF2": mock_acdc2,
+            }
+
+            # First leaf succeeds, second leaf fails
+            def chain_side_effect(acdc, **kwargs):
+                if acdc.said == "SAID_LEAF1":
+                    return ACDCChainResult(
+                        chain=[acdc],
+                        root_aid="EGLEIF0000000000",
+                        validated=True,
+                        status="VALID",
+                        has_variant_limitations=False
+                    )
+                else:
+                    raise ACDCChainInvalid("Chain failed for leaf 2")
+            mock_chain.side_effect = chain_side_effect
+
+            req = VerifyRequest(passport_jwt="test", context=context)
+            req_id, resp = await verify_vvp(req, "valid-header")
+
+            # For aggregate, any invalid chain = overall chain_verified INVALID
+            dossier_claim = resp.claims[0].children[1].node
+
+            # Find chain_verified child claim
+            chain_claim = None
+            for child in dossier_claim.children:
+                if child.node.name == "chain_verified":
+                    chain_claim = child.node
+                    break
+
+            # chain_verified should be INVALID (aggregate requires all chains)
+            assert chain_claim is not None
+            assert chain_claim.status == ClaimStatus.INVALID

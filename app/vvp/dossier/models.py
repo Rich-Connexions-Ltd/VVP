@@ -6,7 +6,7 @@ Defines:
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 @dataclass(frozen=True)
@@ -47,15 +47,20 @@ class DossierDAG:
     A dossier is a Directed Acyclic Graph where:
     - Each node is an ACDC identified by its SAID
     - Edges represent credential chaining (e field references)
-    - Exactly one root node (no incoming edges)
+    - Exactly one root node (no incoming edges) for standard dossiers
+    - Multiple roots allowed for aggregate dossiers (per §6.1 policy)
 
     Attributes:
         nodes: Mapping of SAID to ACDCNode
-        root_said: SAID of the root node (identified during validation)
+        root_said: SAID of the primary root node (identified during validation)
+        root_saids: List of all root SAIDs (for aggregate dossiers)
+        is_aggregate: True if dossier has multiple roots (aggregate variant)
     """
 
     nodes: Dict[str, ACDCNode] = field(default_factory=dict)
     root_said: Optional[str] = None
+    root_saids: List[str] = field(default_factory=list)
+    is_aggregate: bool = False
 
     def __len__(self) -> int:
         """Return number of nodes in DAG."""

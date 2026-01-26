@@ -185,11 +185,23 @@ ERROR_RECOVERABILITY: Dict[str, bool] = {
 # =============================================================================
 
 class VerifyResponse(BaseModel):
-    """Response schema for /verify endpoint per §4.2, §4.3"""
+    """Response schema for /verify endpoint per §4.2, §4.3
+
+    Attributes:
+        request_id: Unique identifier for this verification request.
+        overall_status: Final verification status (VALID, INVALID, INDETERMINATE).
+        claims: Claim tree with verification results.
+        errors: List of errors encountered during verification.
+        has_variant_limitations: True if dossier contains compact/partial ACDCs
+            that may limit verification completeness (per §1.4). When True,
+            some claims may be INDETERMINATE due to unverifiable external refs
+            or redacted fields.
+    """
     request_id: str
     overall_status: ClaimStatus
     claims: Optional[List[ClaimNode]] = None
     errors: Optional[List[ErrorDetail]] = None
+    has_variant_limitations: bool = False
 
 
 # =============================================================================

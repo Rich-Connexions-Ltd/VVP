@@ -120,19 +120,21 @@ def detect_cycle(dag: DossierDAG) -> Optional[List[str]]:
     return None
 
 
-def find_root(dag: DossierDAG) -> str:
-    """Find root node (node with no incoming edges).
+def find_roots(dag: DossierDAG, allow_multiple: bool = False) -> List[str]:
+    """Find root node(s) (nodes with no incoming edges).
 
-    Per spec §6.1, a valid dossier DAG must have exactly one root node.
+    Per spec §6.1, a valid dossier DAG must have exactly one root node,
+    unless local policy explicitly supports multiple roots (aggregate dossiers).
 
     Args:
         dag: DossierDAG to analyze
+        allow_multiple: If True, allows multiple roots (aggregate mode per §1.4)
 
     Returns:
-        SAID of the root node
+        List of root SAIDs (1 element for standard, N for aggregate)
 
     Raises:
-        GraphError: If no root or multiple roots found
+        GraphError: If no root found, or multiple roots when not allowed
     """
     # Collect all nodes that are targets of edges
     referenced: Set[str] = set()
@@ -146,27 +148,48 @@ def find_root(dag: DossierDAG) -> str:
         raise GraphError(
             "No root node found (all nodes have incoming edges - possible cycle)"
         )
-    if len(roots) > 1:
+    if len(roots) > 1 and not allow_multiple:
         raise GraphError(
             f"Multiple root nodes found: {sorted(roots)}. "
-            "Dossier must have exactly one root."
+            "Dossier must have exactly one root. "
+            "Enable VVP_ALLOW_AGGREGATE_DOSSIERS for aggregate support."
         )
 
+    return roots
+
+
+def find_root(dag: DossierDAG) -> str:
+    """Find single root node (backward compatibility).
+
+    Per spec §6.1, a valid dossier DAG must have exactly one root node.
+
+    Args:
+        dag: DossierDAG to analyze
+
+    Returns:
+        SAID of the root node
+
+    Raises:
+        GraphError: If no root or multiple roots found
+    """
+    roots = find_roots(dag, allow_multiple=False)
     return roots[0]
 
 
-def validate_dag(dag: DossierDAG) -> None:
+def validate_dag(dag: DossierDAG, allow_aggregate: bool = False) -> None:
     """Validate DAG structure per spec §6.1.
 
     Checks:
     1. No cycles (would violate DAG property)
     2. Exactly one root node (entry point for verification)
+       - Unless allow_aggregate=True (per §1.4 aggregate variant support)
 
     Note: Dangling edges (references to non-existent nodes) are allowed
     in Tier 1 as they may reference external credentials.
 
     Args:
-        dag: DossierDAG to validate (modified in place with root_said)
+        dag: DossierDAG to validate (modified in place with root_said/root_saids)
+        allow_aggregate: If True, allows multiple roots (aggregate dossiers per §1.4)
 
     Raises:
         GraphError: If validation fails
@@ -180,5 +203,8 @@ def validate_dag(dag: DossierDAG) -> None:
         cycle_path = " -> ".join(cycle)
         raise GraphError(f"Cycle detected: {cycle_path}")
 
-    # Find and set root
-    dag.root_said = find_root(dag)
+    # Find and set root(s)
+    roots = find_roots(dag, allow_multiple=allow_aggregate)
+    dag.root_saids = roots
+    dag.root_said = roots[0]  # Primary root for backward compatibility
+    dag.is_aggregate = len(roots) > 1

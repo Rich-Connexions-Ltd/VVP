@@ -1,5 +1,68 @@
 # VVP Verifier Change Log
 
+## Sprint 21: ACDC Variant Support (Phase 8.9 / §1.4)
+
+**Date:** 2026-01-26
+**Commit:** TBD
+
+### Files Changed
+
+| File | Action | Description |
+|------|--------|-------------|
+| `app/vvp/acdc/models.py` | Modified | Added `variant` field to ACDC dataclass, updated `credential_type` for compact detection |
+| `app/vvp/acdc/parser.py` | Modified | Removed variant rejection block, variants now stored in model |
+| `app/vvp/acdc/verifier.py` | Modified | Compact edge refs → INDETERMINATE, partial placeholder handling |
+| `app/vvp/dossier/models.py` | Modified | Added `root_saids`, `is_aggregate` fields to DossierDAG |
+| `app/vvp/dossier/validator.py` | Modified | Multi-root support via `find_roots()`, aggregate gating |
+| `app/core/config.py` | Modified | Added `VVP_ALLOW_AGGREGATE_DOSSIERS` env var |
+| `app/vvp/verify.py` | Modified | Chain status aggregation gated by `dag.is_aggregate` |
+| `tests/test_acdc.py` | Modified | Added compact/partial/aggregate variant tests |
+| `tests/test_verify.py` | Modified | Added `verify_vvp`-level integration tests for aggregation |
+| `app/Documentation/VVP_Implementation_Checklist.md` | Modified | Updated 8.9, 15.9 complete (96% overall) |
+
+### Summary
+
+Implemented VVP §1.4 MUST requirement for ACDC variants: compact, partial, and aggregate.
+
+**Key Changes:**
+
+1. **Variant Detection & Storage (§1.4):**
+   - `detect_acdc_variant()` identifies full/compact/partial variants
+   - Variants stored in `ACDC.variant` field for downstream handling
+   - No longer rejected at parse time
+
+2. **Compact Variant Handling:**
+   - External edge refs (SAID not in dossier) → `INDETERMINATE` (not raise)
+   - Edge-based credential type detection for compact ACDCs
+   - Log message: "Cannot verify edge target {SAID} (compact variant)"
+
+3. **Partial Variant Handling:**
+   - Placeholder issuee (`"_"` or `"_:*"`) → `INDETERMINATE`
+   - Cannot verify binding with redacted fields
+
+4. **Aggregate Dossier Support (§6.1):**
+   - `VVP_ALLOW_AGGREGATE_DOSSIERS` env var (default: false)
+   - Multi-root DAGs accepted when enabled
+   - `dag.is_aggregate` flag for downstream logic
+
+5. **Chain Status Aggregation:**
+   - Non-aggregate: at least one valid chain suffices (prior behavior)
+   - Aggregate: ALL chains must validate (stricter requirement)
+   - Prevents false positives when multiple independent trust hierarchies
+
+### Checklist Items Completed
+
+- 8.9: Handle ACDC variants (compact, partial, aggregate)
+- 15.9: Valid ACDC variant test vector
+
+### Test Results
+
+```
+899 passed in 5.09s
+```
+
+---
+
 ## Sprint 20: Test Vectors & CI Integration (Phase 15 Completion)
 
 **Date:** 2026-01-26

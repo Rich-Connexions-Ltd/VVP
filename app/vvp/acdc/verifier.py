@@ -4,7 +4,7 @@ Per VVP §6.3.x credential verification requirements.
 """
 
 import logging
-from typing import Dict, FrozenSet, List, Optional, Set
+from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 from .exceptions import ACDCChainInvalid, ACDCSignatureInvalid
 from .models import ACDC, ACDCChainResult
@@ -15,6 +15,7 @@ from .schema_registry import (
     has_governance_schemas,
     is_known_schema,
 )
+from ..api_models import ClaimStatus
 
 log = logging.getLogger(__name__)
 
@@ -108,7 +109,7 @@ def validate_edge_semantics(
     acdc: ACDC,
     dossier_acdcs: Dict[str, ACDC],
     is_root: bool = False
-) -> List[str]:
+) -> Tuple[List[str], ClaimStatus]:
     """Validate edge relationships match credential type rules.
 
     Per VVP §6.3.x, different credential types have specific edge requirements:
@@ -116,23 +117,33 @@ def validate_edge_semantics(
     - DE: MUST have delegation edge to APE or DE
     - TNAlloc: SHOULD have JL edge to parent TNAlloc
 
+    Per §2.2 ("Uncertainty must be explicit"), compact variants with external
+    edge references (targets not in dossier) return INDETERMINATE status rather
+    than raising an exception.
+
     Args:
         acdc: The ACDC to validate.
         dossier_acdcs: Map of SAID -> ACDC for edge target lookup.
         is_root: If True, relaxes required edge checks for root credentials.
 
     Returns:
-        List of warning messages (empty if valid).
+        Tuple of (warning messages, ClaimStatus):
+        - VALID if all required edges verified
+        - INDETERMINATE if compact variant has unresolvable external refs
+        - Raises ACDCChainInvalid (→INVALID) for definite failures
 
     Raises:
-        ACDCChainInvalid: If required edge is missing or points to wrong type.
+        ACDCChainInvalid: If required edge is missing or points to wrong type
+            (not for compact variants with external refs - those get INDETERMINATE).
     """
     warnings = []
+    status = ClaimStatus.VALID
     cred_type = acdc.credential_type
+    is_compact = getattr(acdc, 'variant', 'full') == 'compact'
 
     if cred_type not in EDGE_RULES:
         # No rules defined for this credential type
-        return warnings
+        return warnings, status
 
     rules = EDGE_RULES[cred_type]
 
@@ -145,6 +156,7 @@ def validate_edge_semantics(
         # Find matching edge
         found_edge = None
         found_target = None
+        target_said = None
 
         if acdc.edges:
             for edge_name, edge_ref in acdc.edges.items():
@@ -157,7 +169,6 @@ def validate_edge_semantics(
                     found_edge = edge_name
 
                     # Extract target SAID
-                    target_said = None
                     if isinstance(edge_ref, str):
                         target_said = edge_ref
                     elif isinstance(edge_ref, dict):
@@ -179,14 +190,28 @@ def validate_edge_semantics(
             else:
                 warnings.append(f"Optional edge not found: {description}")
         elif found_target is None:
-            # Edge exists but target is not in dossier
+            # Edge exists but target is not in dossier (external reference)
             # APE vetting edge is ALWAYS required per §6.3.3, even for root issuers
             skip_for_root = is_root and cred_type != "APE"
             if required and not skip_for_root:
-                raise ACDCChainInvalid(
-                    f"{cred_type} credential {acdc.said[:20]}... edge '{found_edge}' "
-                    f"references credential not found in dossier"
-                )
+                if is_compact:
+                    # Per §2.2: Compact variant with external ref → INDETERMINATE
+                    # Cannot verify chain without the referenced credential
+                    log.warning(
+                        f"Cannot verify edge target {target_said[:20] if target_said else 'unknown'}... "
+                        f"- not in dossier (compact variant, §2.2 INDETERMINATE)"
+                    )
+                    warnings.append(
+                        f"Edge '{found_edge}' references external SAID not in dossier "
+                        f"- cannot verify target type (compact variant)"
+                    )
+                    status = ClaimStatus.INDETERMINATE
+                else:
+                    # Full variant must have all required edges resolvable
+                    raise ACDCChainInvalid(
+                        f"{cred_type} credential {acdc.said[:20]}... edge '{found_edge}' "
+                        f"references credential not found in dossier"
+                    )
             else:
                 warnings.append(f"Optional edge target not found in dossier: {found_edge}")
         else:
@@ -203,7 +228,7 @@ def validate_edge_semantics(
                 from app.core import config
                 validate_ape_vetting_target(found_target, strict_schema=config.SCHEMA_VALIDATION_STRICT)
 
-    return warnings
+    return warnings, status
 
 
 def validate_ape_vetting_target(
@@ -367,6 +392,8 @@ async def validate_credential_chain(
     visited: Set[str] = set()
     chain: List[ACDC] = []
     errors: List[str] = []
+    chain_status = ClaimStatus.VALID  # Track worst status across chain
+    has_variants = False  # Track if any ACDCs are compact/partial
 
     def walk_chain(
         current: ACDC,
@@ -386,6 +413,7 @@ async def validate_credential_chain(
         Raises:
             ACDCChainInvalid: If validation fails.
         """
+        nonlocal chain_status, has_variants
         # Check depth limit
         if depth > max_depth:
             raise ACDCChainInvalid(
@@ -424,13 +452,26 @@ async def validate_credential_chain(
         # Check if issuer is a trusted root
         is_at_root = current.issuer_aid in trusted_roots
 
+        # Track variant limitations (compact/partial)
+        current_variant = getattr(current, 'variant', 'full')
+        if current_variant in ('compact', 'partial'):
+            has_variants = True
+
         # Validate edge semantics per §6.3.3/§6.3.4/§6.3.6
         # This validates that APE has vetting edge to LE, DE has delegation edge, etc.
-        validate_edge_semantics(current, dossier_acdcs, is_root=is_at_root)
+        edge_warnings, edge_status = validate_edge_semantics(current, dossier_acdcs, is_root=is_at_root)
+        if edge_warnings:
+            errors.extend(edge_warnings)
+        # Propagate worst status (INVALID > INDETERMINATE > VALID)
+        if edge_status == ClaimStatus.INDETERMINATE and chain_status == ClaimStatus.VALID:
+            chain_status = ClaimStatus.INDETERMINATE
 
         # Validate issuee binding per §6.3.5 (non-bearer token check)
         # Root credentials may lack issuee, leaf credentials MUST have it
-        validate_issuee_binding(current, is_root_credential=is_at_root)
+        issuee_status = validate_issuee_binding(current, is_root_credential=is_at_root)
+        # Propagate worst status
+        if issuee_status == ClaimStatus.INDETERMINATE and chain_status == ClaimStatus.VALID:
+            chain_status = ClaimStatus.INDETERMINATE
 
         if is_at_root:
             return current.issuer_aid
@@ -460,6 +501,19 @@ async def validate_credential_chain(
 
             # Look up parent credential in dossier
             if parent_said not in dossier_acdcs:
+                # For compact variants, external edge refs result in INDETERMINATE
+                # per §2.2 ("Uncertainty must be explicit") - cannot verify the chain
+                current_variant = getattr(current, 'variant', 'full')
+                if current_variant == 'compact':
+                    errors.append(
+                        f"Cannot verify edge target {parent_said[:20]}... - "
+                        f"not in dossier (compact variant)"
+                    )
+                    chain_status = ClaimStatus.INDETERMINATE
+                    # Return None to indicate chain cannot be fully verified
+                    # but this is not a definite INVALID - it's uncertainty
+                    return None
+                # For full variants, missing edge target is a definite error
                 raise ACDCChainInvalid(
                     f"Edge target {parent_said[:20]}... not found in dossier"
                 )
@@ -476,6 +530,14 @@ async def validate_credential_chain(
                 return root_aid
 
         # No path to trusted root found
+        # If chain_status is already INDETERMINATE (compact variant external refs),
+        # don't raise - return None to surface that status
+        if chain_status == ClaimStatus.INDETERMINATE:
+            errors.append(
+                f"Cannot verify path to trusted root from {current.said[:20]}... "
+                f"(external references in compact variant)"
+            )
+            return None
         raise ACDCChainInvalid(
             f"No path to trusted root from credential {current.said[:20]}..."
         )
@@ -483,11 +545,17 @@ async def validate_credential_chain(
     # Start chain walk
     try:
         root_aid = walk_chain(acdc, pss_signer_aid=pss_signer_aid)
+        # Determine final status: validated but may be INDETERMINATE due to variants
+        final_status = chain_status.value if chain_status != ClaimStatus.VALID else "VALID"
+        # If root_aid is None but chain_status is INDETERMINATE, return INDETERMINATE result
+        # This happens when compact variants have external refs that can't be verified
         return ACDCChainResult(
             chain=chain,
             root_aid=root_aid,
-            validated=True,
-            errors=errors
+            validated=(root_aid is not None and chain_status != ClaimStatus.INVALID),
+            errors=errors,
+            status=final_status,
+            has_variant_limitations=has_variants
         )
     except ACDCChainInvalid:
         raise
@@ -499,7 +567,7 @@ def validate_issuee_binding(
     acdc: ACDC,
     is_root_credential: bool = False,
     expected_issuee_aid: Optional[str] = None
-) -> None:
+) -> ClaimStatus:
     """Validate ACDC has issuee binding (not a bearer token).
 
     Per VVP §6.3.5, credentials MUST NOT be bearer tokens - they must have
@@ -509,18 +577,38 @@ def validate_issuee_binding(
     Root credentials (from GLEIF/QVIs) may lack issuee as they establish
     the trust anchor. Leaf credentials (APE/DE/TNAlloc) MUST have issuee.
 
+    Per §2.2 ("Uncertainty must be explicit"), partial variants with
+    placeholder issuees return INDETERMINATE status rather than raising.
+
     Args:
         acdc: The ACDC to validate.
         is_root_credential: If True, allows missing issuee for trust anchor.
         expected_issuee_aid: If provided, verifies issuee matches this AID.
 
+    Returns:
+        ClaimStatus:
+        - VALID if issuee verified or root credential
+        - INDETERMINATE if partial variant has placeholder issuee
+        - Raises ACDCChainInvalid (→INVALID) for definite failures
+
     Raises:
-        ACDCChainInvalid: If issuee binding is missing or mismatched.
-            Maps to ACDC_PROOF_MISSING error code.
+        ACDCChainInvalid: If issuee binding is missing or mismatched
+            (not for partial variants with placeholders - those get INDETERMINATE).
     """
     # Root credentials may lack issuee (they establish the trust anchor)
     if is_root_credential:
-        return
+        return ClaimStatus.VALID
+
+    is_partial = getattr(acdc, 'variant', 'full') == 'partial'
+    is_compact = getattr(acdc, 'variant', 'full') == 'compact'
+
+    # Handle compact variant (attributes may be SAID string, not dict)
+    if is_compact and not isinstance(acdc.attributes, dict):
+        log.warning(
+            f"Cannot verify issuee binding for compact ACDC {acdc.said[:20]}... "
+            f"- attributes is SAID reference, not expanded (§2.2 INDETERMINATE)"
+        )
+        return ClaimStatus.INDETERMINATE
 
     if not acdc.attributes:
         raise ACDCChainInvalid(
@@ -533,6 +621,21 @@ def validate_issuee_binding(
         acdc.attributes.get("issuee") or
         acdc.attributes.get("holder")
     )
+
+    # Check for placeholder in partial variant
+    if issuee and _is_placeholder(issuee):
+        if is_partial:
+            # Per §2.2: Partial variant with placeholder issuee → INDETERMINATE
+            log.warning(
+                f"Cannot verify issuee binding for partial ACDC {acdc.said[:20]}... "
+                f"- issuee field is redacted (§2.2 INDETERMINATE)"
+            )
+            return ClaimStatus.INDETERMINATE
+        else:
+            # Non-partial with placeholder is invalid
+            raise ACDCChainInvalid(
+                f"Credential {acdc.said[:20]}... has placeholder issuee in non-partial variant"
+            )
 
     if not issuee:
         cred_type = acdc.credential_type or "unknown"
@@ -547,6 +650,26 @@ def validate_issuee_binding(
             f"Issuee mismatch: expected {expected_issuee_aid[:20]}..., "
             f"got {issuee[:20]}..."
         )
+
+    return ClaimStatus.VALID
+
+
+def _is_placeholder(value: str) -> bool:
+    """Check if a value is a partial variant placeholder.
+
+    Per ACDC spec, placeholders are:
+    - "_" (simple redaction)
+    - "_:SAID" (typed placeholder with SAID reference)
+
+    Args:
+        value: The string value to check.
+
+    Returns:
+        True if value is a placeholder marker.
+    """
+    if not isinstance(value, str):
+        return False
+    return value == "_" or value.startswith("_:")
 
 
 def validate_ape_credential(acdc: ACDC) -> None:

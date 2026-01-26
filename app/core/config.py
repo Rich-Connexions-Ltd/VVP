@@ -178,3 +178,20 @@ REJECT_UNKNOWN_GOALS: bool = os.getenv("VVP_REJECT_UNKNOWN_GOALS", "false").lowe
 # When True (default): geo constraints trigger INDETERMINATE if GeoIP unavailable
 # When False: geo constraints are skipped (documented policy deviation)
 GEO_CONSTRAINTS_ENFORCED: bool = os.getenv("VVP_GEO_CONSTRAINTS_ENFORCED", "true").lower() == "true"
+
+
+# =============================================================================
+# SPRINT 21: ACDC VARIANT SUPPORT (Phase 8.9 / §1.4)
+# =============================================================================
+
+# Aggregate dossier support (§1.4 / §6.1)
+# Per §6.1: "unless local policy explicitly supports multiple roots"
+#
+# When True: Accept dossiers with multiple root nodes (aggregate disclosure)
+# When False (default): Require exactly one root per spec default behavior
+#
+# Aggregate dossiers are used for composite credentials from multiple
+# independent trust hierarchies. Each sub-graph is validated independently.
+ALLOW_AGGREGATE_DOSSIERS: bool = os.getenv(
+    "VVP_ALLOW_AGGREGATE_DOSSIERS", "false"
+).lower() == "true"

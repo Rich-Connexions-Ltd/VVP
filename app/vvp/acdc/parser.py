@@ -14,12 +14,14 @@ def detect_acdc_variant(acdc_data: Dict[str, Any]) -> str:
     """Detect ACDC variant type.
 
     Per VVP §1.4, verifiers MUST support valid ACDC variants:
-    - full: Complete ACDC with all fields expanded
-    - compact: Minimal ACDC with only essential fields
-    - partial: ACDC with selective disclosure (contains "_" placeholders)
+    - full: Complete ACDC with all fields expanded (attributes is dict)
+    - compact: Minimal ACDC with SAID references (attributes missing or is string)
+    - partial: ACDC with selective disclosure (contains "_" or "_:type" placeholders)
 
-    This implementation currently only supports "full" variant.
-    Other variants are detected for explicit error handling.
+    Variant affects downstream validation per §2.2 ("Uncertainty must be explicit"):
+    - Full: Complete verification possible
+    - Compact: Edge targets may be external SAIDs → INDETERMINATE if unresolvable
+    - Partial: Required fields may be redacted → INDETERMINATE if unverifiable
 
     Args:
         acdc_data: The ACDC dictionary to analyze.
@@ -54,36 +56,41 @@ def detect_acdc_variant(acdc_data: Dict[str, Any]) -> str:
     return "full"
 
 
-def parse_acdc(data: Dict[str, Any], allow_variants: bool = False) -> ACDC:
+def parse_acdc(data: Dict[str, Any], allow_variants: bool = True) -> ACDC:
     """Parse and validate ACDC structure.
 
     Validates required fields are present and creates an ACDC object.
 
-    Per VVP §1.4, verifiers MUST support ACDC variants. However, this
-    implementation currently only supports fully-expanded ACDCs. Compact
-    and partial variants are detected and rejected with explicit errors.
+    Per VVP §1.4, verifiers MUST support ACDC variants (compact, partial,
+    aggregate). This implementation accepts all variants and stores the
+    detected variant type in the ACDC object for downstream handling.
+
+    Variant semantics per §2.2 ("Uncertainty must be explicit"):
+    - Full: Complete validation possible → may be VALID
+    - Compact: External refs may be unverifiable → may be INDETERMINATE
+    - Partial: Redacted fields may be unverifiable → may be INDETERMINATE
 
     Args:
         data: ACDC dictionary (parsed from JSON or dossier).
-        allow_variants: If True, allows compact/partial ACDCs (for future use).
-            Default False - rejects non-full variants with DossierParseError.
+        allow_variants: If True (default), allows compact/partial ACDCs.
+            If False, raises ParseError for non-full variants (legacy mode).
 
     Returns:
-        Parsed ACDC object.
+        Parsed ACDC object with variant field set.
 
     Raises:
         ACDCParseError: If required fields are missing or invalid.
-        DossierParseError: If ACDC is a non-supported variant (compact/partial).
+        ParseError: If allow_variants=False and ACDC is non-full variant.
     """
     # Detect ACDC variant
     variant = detect_acdc_variant(data)
 
     if variant != "full" and not allow_variants:
-        # Import here to avoid circular import
+        # Legacy mode: reject non-full variants
         from ..dossier.exceptions import ParseError
         raise ParseError(
-            f"ACDC variant '{variant}' not yet supported (§1.4 compliance pending). "
-            f"Only fully-expanded ACDCs are accepted in this version."
+            f"ACDC variant '{variant}' not allowed (allow_variants=False). "
+            f"Set allow_variants=True to accept compact/partial ACDCs."
         )
 
     # Validate required fields
@@ -117,7 +124,8 @@ def parse_acdc(data: Dict[str, Any], allow_variants: bool = False) -> ACDC:
         attributes=attributes,
         edges=edges,
         rules=rules,
-        raw=data
+        raw=data,
+        variant=variant
     )
 
 

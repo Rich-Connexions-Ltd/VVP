@@ -698,6 +698,7 @@ async def verify_vvp(
     raw_dossier: Optional[bytes] = None
     dag: Optional[DossierDAG] = None
     acdc_signatures: Dict[str, bytes] = {}  # SAID -> signature bytes from CESR
+    has_variant_limitations: bool = False  # Track if any ACDC is compact/partial per §1.4
 
     if vvp_identity and not passport_fatal:
         try:
@@ -709,10 +710,13 @@ async def verify_vvp(
 
         if raw_dossier is not None:
             try:
+                from app.core.config import ALLOW_AGGREGATE_DOSSIERS
                 nodes, acdc_signatures = parse_dossier(raw_dossier)
                 dag = build_dag(nodes)
-                validate_dag(dag)
+                validate_dag(dag, allow_aggregate=ALLOW_AGGREGATE_DOSSIERS)
                 dossier_claim.add_evidence(f"dag_valid,root={dag.root_said}")
+                if dag.is_aggregate:
+                    dossier_claim.add_evidence(f"aggregate_roots={len(dag.root_saids)}")
                 if acdc_signatures:
                     dossier_claim.add_evidence(f"cesr_sigs={len(acdc_signatures)}")
             except (ParseError, GraphError) as e:
@@ -764,14 +768,19 @@ async def verify_vvp(
         chain_claim.add_evidence(f"leaves={len(leaf_saids)}")
 
         # Validate chain from each leaf credential
-        # At least one must successfully validate to a trusted root
-        any_chain_valid = False
+        # Per §2.2: Track worst status across all leaves (INVALID > INDETERMINATE > VALID)
+        # Per §6.1: For aggregate dossiers, ALL leaves must validate
         chain_errors: List[str] = []
+        valid_chains = 0
+        indeterminate_chains = 0
+        invalid_chains = 0
+        worst_chain_status = ClaimStatus.VALID
 
         for leaf_said in leaf_saids:
             leaf_acdc = dossier_acdcs.get(leaf_said)
             if not leaf_acdc:
                 chain_errors.append(f"Leaf {leaf_said[:16]}... not in dossier")
+                invalid_chains += 1
                 continue
 
             try:
@@ -783,8 +792,27 @@ async def verify_vvp(
                     pss_signer_aid=pss_signer_aid,
                     validate_schemas=SCHEMA_VALIDATION_STRICT
                 )
-                chain_claim.add_evidence(f"chain_valid:{leaf_said[:12]}...,root={result.root_aid[:12]}...")
-                any_chain_valid = True
+
+                # Track variant limitations from chain result (§1.4)
+                if result.has_variant_limitations:
+                    has_variant_limitations = True
+                    chain_claim.add_evidence("variant_limitations=true")
+
+                # Check result status - INDETERMINATE can occur for compact variants
+                # with external edge refs (per §2.2 "uncertainty must be explicit")
+                result_status_str = result.status or "VALID"
+                if result_status_str == "INDETERMINATE":
+                    indeterminate_chains += 1
+                    chain_claim.add_evidence(f"chain_indeterminate:{leaf_said[:12]}...")
+                    if worst_chain_status == ClaimStatus.VALID:
+                        worst_chain_status = ClaimStatus.INDETERMINATE
+                elif result.validated and result.root_aid:
+                    valid_chains += 1
+                    chain_claim.add_evidence(f"chain_valid:{leaf_said[:12]}...,root={result.root_aid[:12]}...")
+                else:
+                    # Chain returned but not validated (shouldn't happen but handle defensively)
+                    invalid_chains += 1
+                    chain_errors.append(f"{leaf_said[:16]}...: Chain not validated")
             except ACDCSAIDMismatch as e:
                 # §4.2A: SAID mismatch is a distinct error code from chain invalid
                 error_msg = f"ACDC SAID mismatch: {str(e)}"
@@ -796,17 +824,58 @@ async def verify_vvp(
                 chain_claim.fail(ClaimStatus.INVALID, error_msg)
                 break  # Fatal error, no point checking other leaves
             except ACDCChainInvalid as e:
+                invalid_chains += 1
                 chain_errors.append(f"{leaf_said[:16]}...: {str(e)}")
 
-        if not any_chain_valid:
-            # No leaf credential validated to a trusted root
-            error_msg = f"No credential chain reaches trusted root: {'; '.join(chain_errors[:3])}"
-            errors.append(ErrorDetail(
-                code=ErrorCode.DOSSIER_GRAPH_INVALID,  # Use existing error code
-                message=error_msg,
-                recoverable=False
-            ))
-            chain_claim.fail(ClaimStatus.INVALID, error_msg)
+        # Determine final chain_claim status
+        # Per §6.1: For aggregate dossiers, ALL leaves must validate
+        # For non-aggregate: at least one valid chain suffices (prior behavior)
+        # Per §2.2: INDETERMINATE propagates unless overridden by INVALID
+        if chain_claim.status != ClaimStatus.INVALID:  # Don't override SAID mismatch failure
+            is_aggregate = dag.is_aggregate if dag else False
+
+            if is_aggregate:
+                # Aggregate dossiers: ALL chains must pass
+                if invalid_chains > 0:
+                    error_msg = f"Aggregate dossier chain validation failed: {'; '.join(chain_errors[:3])}"
+                    errors.append(ErrorDetail(
+                        code=ErrorCode.DOSSIER_GRAPH_INVALID,
+                        message=error_msg,
+                        recoverable=False
+                    ))
+                    chain_claim.fail(ClaimStatus.INVALID, error_msg)
+                elif worst_chain_status == ClaimStatus.INDETERMINATE:
+                    chain_claim.fail(
+                        ClaimStatus.INDETERMINATE,
+                        "Aggregate chain verification incomplete due to variant limitations"
+                    )
+                # else: all chains valid, chain_claim stays VALID
+            else:
+                # Non-aggregate dossiers: at least one valid chain suffices
+                if valid_chains > 0:
+                    # At least one chain validated successfully - overall success
+                    # Propagate INDETERMINATE if any chains had variant limitations
+                    if worst_chain_status == ClaimStatus.INDETERMINATE:
+                        chain_claim.fail(
+                            ClaimStatus.INDETERMINATE,
+                            "Chain verification incomplete due to variant limitations"
+                        )
+                    # else: at least one chain VALID, chain_claim stays VALID
+                elif indeterminate_chains > 0:
+                    # No valid chains but some INDETERMINATE - propagate uncertainty
+                    chain_claim.fail(
+                        ClaimStatus.INDETERMINATE,
+                        "Chain verification incomplete - no chain fully validated"
+                    )
+                else:
+                    # No valid or indeterminate chains - all failed
+                    error_msg = f"No credential chain reaches trusted root: {'; '.join(chain_errors[:3])}"
+                    errors.append(ErrorDetail(
+                        code=ErrorCode.DOSSIER_GRAPH_INVALID,
+                        message=error_msg,
+                        recoverable=False
+                    ))
+                    chain_claim.fail(ClaimStatus.INVALID, error_msg)
 
         # Verify ACDC signatures (for CESR format dossiers)
         # Per §5A Step 8: cryptographic verification MUST be performed
@@ -1175,4 +1244,5 @@ async def verify_vvp(
         overall_status=overall_status,
         claims=claims,
         errors=errors if errors else None,
+        has_variant_limitations=has_variant_limitations,
     )
