@@ -53,6 +53,9 @@ from .dossier import (
 )
 from .exceptions import VVPIdentityError, PassportError
 from .authorization import AuthorizationContext, validate_authorization
+from .sip_context import verify_sip_context_alignment
+from .brand import verify_brand
+from .goal import verify_business_logic, GoalPolicyConfig
 
 
 # =============================================================================
@@ -232,6 +235,44 @@ def _find_leaf_credentials(dag: DossierDAG, dossier_acdcs: Dict[str, "ACDC"]) ->
         return [dag.root_said] if dag.root_said else []
 
     return leaf_saids
+
+
+def _find_de_credential(dossier_acdcs: Dict[str, "ACDC"]) -> Optional["ACDC"]:
+    """Find Delegation Edge (DE) credential in dossier.
+
+    Per §6.3.4, DE credentials authorize delegated signers. They're identified
+    by having a 'delegate' or 'auth' edge pointing to another credential.
+
+    Args:
+        dossier_acdcs: Dict mapping SAID to ACDC objects
+
+    Returns:
+        DE ACDC if found, None otherwise
+    """
+    from app.vvp.acdc import ACDCCredentialType
+
+    for said, acdc in dossier_acdcs.items():
+        # Check credential type if available
+        cred_type = getattr(acdc, "credential_type", None)
+        if cred_type == ACDCCredentialType.DE:
+            return acdc
+
+        # Fallback: look for DE-indicative edges
+        edges = getattr(acdc, "edges", None)
+        if edges is None:
+            raw = getattr(acdc, "raw", {})
+            edges = raw.get("e", {})
+
+        if not isinstance(edges, dict):
+            continue
+
+        # DE credentials typically have auth/delegate edges
+        de_edge_names = {"auth", "delegate", "delegation", "proxy"}
+        for edge_name in edges.keys():
+            if edge_name.lower() in de_edge_names:
+                return acdc
+
+    return None
 
 
 # =============================================================================
@@ -852,6 +893,85 @@ async def verify_vvp(
             tn_rights_claim.fail(ClaimStatus.INDETERMINATE, "Cannot validate: passport failed")
 
     # -------------------------------------------------------------------------
+    # Phase 13: SIP Contextual Alignment (§5A Step 2)
+    # -------------------------------------------------------------------------
+    # context_aligned is REQUIRED or OPTIONAL per policy (default: OPTIONAL)
+    from app.core.config import (
+        CONTEXT_ALIGNMENT_REQUIRED,
+        ACCEPTED_GOALS,
+        REJECT_UNKNOWN_GOALS,
+        GEO_CONSTRAINTS_ENFORCED,
+    )
+
+    sip_context = req.context.sip if req.context else None
+    context_claim = verify_sip_context_alignment(passport, sip_context)
+
+    # Add errors for context alignment failures
+    if context_claim.status == ClaimStatus.INVALID:
+        errors.append(ErrorDetail(
+            code=ErrorCode.CONTEXT_MISMATCH,
+            message=context_claim.reasons[0] if context_claim.reasons else "Context alignment failed",
+            recoverable=ERROR_RECOVERABILITY.get(ErrorCode.CONTEXT_MISMATCH, False),
+        ))
+
+    # -------------------------------------------------------------------------
+    # Phase 11: Brand Verification (§5A Step 12)
+    # -------------------------------------------------------------------------
+    # brand_verified is REQUIRED when card is present (failures propagate)
+    brand_claim = None
+    if passport and getattr(passport.payload, "card", None):
+        # Find DE credential for brand proxy check (if delegation present)
+        de_credential = None
+        if dag is not None:
+            de_credential = _find_de_credential(dossier_acdcs)
+
+        brand_claim = verify_brand(passport, dossier_acdcs if dag else {}, de_credential)
+
+        # Add errors for brand verification failures
+        if brand_claim and brand_claim.status == ClaimStatus.INVALID:
+            errors.append(ErrorDetail(
+                code=ErrorCode.BRAND_CREDENTIAL_INVALID,
+                message=brand_claim.reasons[0] if brand_claim.reasons else "Brand verification failed",
+                recoverable=ERROR_RECOVERABILITY.get(ErrorCode.BRAND_CREDENTIAL_INVALID, False),
+            ))
+
+    # -------------------------------------------------------------------------
+    # Phase 11: Business Logic Verification (§5A Step 13)
+    # -------------------------------------------------------------------------
+    # business_logic_verified is REQUIRED when goal is present (failures propagate)
+    business_claim = None
+    if passport and getattr(passport.payload, "goal", None):
+        from datetime import datetime, timezone
+        policy = GoalPolicyConfig(
+            accepted_goals=ACCEPTED_GOALS,
+            reject_unknown=REJECT_UNKNOWN_GOALS,
+            geo_enforced=GEO_CONSTRAINTS_ENFORCED,
+        )
+
+        # Find DE credential for signer constraints (if delegation present)
+        de_credential = None
+        if dag is not None:
+            de_credential = _find_de_credential(dossier_acdcs)
+
+        # No caller_geo available currently - results in INDETERMINATE if geo enforced
+        business_claim = verify_business_logic(
+            passport,
+            dossier_acdcs if dag else {},
+            de_credential,
+            policy,
+            call_time=datetime.now(timezone.utc),
+            caller_geo=None,  # GeoIP not yet implemented
+        )
+
+        # Add errors for business logic failures
+        if business_claim and business_claim.status == ClaimStatus.INVALID:
+            errors.append(ErrorDetail(
+                code=ErrorCode.GOAL_REJECTED,
+                message=business_claim.reasons[0] if business_claim.reasons else "Goal rejected by policy",
+                recoverable=ERROR_RECOVERABILITY.get(ErrorCode.GOAL_REJECTED, False),
+            ))
+
+    # -------------------------------------------------------------------------
     # Phase 6: Build Claim Tree
     # -------------------------------------------------------------------------
     passport_node = passport_claim.build()
@@ -892,17 +1012,53 @@ async def verify_vvp(
         children=authorization_node_temp.children,
     )
 
+    # Build context_aligned node from SIP context verification
+    # context_aligned is REQUIRED or OPTIONAL per CONTEXT_ALIGNMENT_REQUIRED
+    context_node = ClaimNode(
+        name=context_claim.name,
+        status=context_claim.status,
+        reasons=context_claim.reasons,
+        evidence=context_claim.evidence,
+        children=[],
+    )
+
+    # Build root claim children list
+    root_children = [
+        ChildLink(required=True, node=passport_node),
+        ChildLink(required=True, node=dossier_node),
+        ChildLink(required=True, node=authorization_node),
+        ChildLink(required=CONTEXT_ALIGNMENT_REQUIRED, node=context_node),
+    ]
+
+    # Add brand_verified node if card was present (REQUIRED when present)
+    if brand_claim is not None:
+        brand_node = ClaimNode(
+            name=brand_claim.name,
+            status=brand_claim.status,
+            reasons=brand_claim.reasons,
+            evidence=brand_claim.evidence,
+            children=[],
+        )
+        root_children.append(ChildLink(required=True, node=brand_node))
+
+    # Add business_logic_verified node if goal was present (REQUIRED when present)
+    if business_claim is not None:
+        business_node = ClaimNode(
+            name=business_claim.name,
+            status=business_claim.status,
+            reasons=business_claim.reasons,
+            evidence=business_claim.evidence,
+            children=[],
+        )
+        root_children.append(ChildLink(required=True, node=business_node))
+
     # Build root claim with children
     root_claim = ClaimNode(
         name="caller_authorised",
         status=ClaimStatus.VALID,  # Will be updated by propagation
         reasons=[],
         evidence=[],
-        children=[
-            ChildLink(required=True, node=passport_node),
-            ChildLink(required=True, node=dossier_node),
-            ChildLink(required=True, node=authorization_node),
-        ],
+        children=root_children,
     )
 
     # Use propagate_status uniformly per reviewer feedback
@@ -915,11 +1071,7 @@ async def verify_vvp(
         status=root_status,
         reasons=[],
         evidence=[],
-        children=[
-            ChildLink(required=True, node=passport_node),
-            ChildLink(required=True, node=dossier_node),
-            ChildLink(required=True, node=authorization_node),
-        ],
+        children=root_children,
     )
 
     claims = [root_claim]

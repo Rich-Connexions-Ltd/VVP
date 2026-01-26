@@ -1,5 +1,72 @@
 # VVP Verifier Change Log
 
+## Sprint 18: Brand/Business Logic & SIP Contextual Alignment
+
+**Date:** 2026-01-25
+**Commit:** `d8c3eb2`
+
+### Files Changed
+
+| File | Action | Description |
+|------|--------|-------------|
+| `app/vvp/api_models.py` | Modified | Added SipContext model, CONTEXT_MISMATCH/BRAND_CREDENTIAL_INVALID/GOAL_REJECTED error codes |
+| `app/vvp/sip_context.py` | Created | SIP URI parsing, E.164 normalization, context alignment validation |
+| `app/vvp/brand.py` | Created | Brand credential verification, vCard validation, JL and proxy checks |
+| `app/vvp/goal.py` | Created | Goal policy, signer constraints (hours, geographies) |
+| `app/core/config.py` | Modified | Added Sprint 18 config: SIP_TIMING_TOLERANCE, ACCEPTED_GOALS, GEO_CONSTRAINTS_ENFORCED |
+| `app/vvp/verify.py` | Modified | Integrated context_aligned, brand_verified, business_logic_verified claims |
+| `tests/test_sip_context.py` | Created | 36 tests for SIP context alignment |
+| `tests/test_brand.py` | Created | 22 tests for brand verification |
+| `tests/test_goal.py` | Created | 24 tests for goal/business logic |
+| `tests/test_verify.py` | Modified | Updated mock passports, claim tree assertions for new structure |
+| `tests/test_models.py` | Modified | Updated error code count (21→24) |
+| `tests/vectors/data/v*.json` | Modified | Added context_aligned claim to all vectors |
+| `app/Documentation/VVP_Implementation_Checklist.md` | Modified | Phase 11 and 13 complete, overall 91% |
+
+### Summary
+
+Completed Phase 11 (Brand/Business Logic) and Phase 13 (SIP Contextual Alignment) per VVP spec §5.1.1-2.2, §5.1.1-2.12, §5.1.1-2.13.
+
+**Key Changes:**
+
+1. **SIP Contextual Alignment (Phase 13):**
+   - SipContext model with from_uri, to_uri, invite_time, cseq
+   - URI parsing: sip:, sips:, tel: formats with E.164 normalization
+   - orig/dest alignment validation against SIP headers
+   - Timing tolerance: 30s default (VVP_SIP_TIMING_TOLERANCE configurable)
+   - context_aligned claim: INDETERMINATE when SIP context absent
+
+2. **Brand Verification (Phase 11):**
+   - vCard format validation (warn on unknown fields, don't fail)
+   - Brand credential location by indicator fields (fn, org, logo, url, photo)
+   - Attribute matching between card and credential
+   - JL validation: brand credential MUST link to vetting (§6.3.7)
+   - Brand proxy: INDETERMINATE when delegation present but proxy missing (§6.3.4)
+
+3. **Business Logic (Phase 11):**
+   - Goal acceptance policy (whitelist, reject_unknown flag)
+   - Signer constraints extraction from DE credential (hours, geographies)
+   - Hours validation with overnight range support (e.g., 22-06)
+   - Geographic constraints: INDETERMINATE when GeoIP unavailable
+
+4. **Claim Tree Updates:**
+   - context_aligned: OPTIONAL by default (CONTEXT_ALIGNMENT_REQUIRED configurable)
+   - brand_verified: REQUIRED when card present (per Reviewer feedback)
+   - business_logic_verified: REQUIRED when goal present (per Reviewer feedback)
+
+### Checklist Items Completed
+
+**Phase 11 (17/17):** 11.1-11.17 (Brand and Business Logic)
+**Phase 13 (6/6):** 13.1-13.6 (SIP Contextual Alignment)
+
+### Test Results
+
+```
+834 passed, 2 skipped in 5.47s
+```
+
+---
+
 ## Sprint 17: APE Vetting Edge & Schema Validation
 
 **Date:** 2026-01-25

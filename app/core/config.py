@@ -131,3 +131,50 @@ def _parse_trusted_roots() -> frozenset[str]:
 # Per VVP §5.1-7: verifier MUST accept root of trust
 # ACDC credentials must chain back to one of these AIDs
 TRUSTED_ROOT_AIDS: frozenset[str] = _parse_trusted_roots()
+
+
+# =============================================================================
+# SPRINT 18: SIP CONTEXT AND BUSINESS LOGIC (Phase 11 & 13)
+# =============================================================================
+
+# SIP contextual alignment timing tolerance (§5A Step 2)
+# Default 30 seconds allows for normal SIP processing delays
+SIP_TIMING_TOLERANCE_SECONDS: int = int(os.getenv("VVP_SIP_TIMING_TOLERANCE", "30"))
+
+# Whether context alignment is required (§4.4 - default False)
+# When False: missing SIP context results in INDETERMINATE (not INVALID)
+# When True: missing SIP context results in INVALID
+CONTEXT_ALIGNMENT_REQUIRED: bool = os.getenv("VVP_CONTEXT_REQUIRED", "false").lower() == "true"
+
+
+def _parse_accepted_goals() -> frozenset[str]:
+    """Parse comma-separated accepted goals from environment.
+
+    Per §5.1.1-2.13, verifier may accept only specific goals.
+    Empty set means accept all goals.
+
+    Environment variable format:
+        VVP_ACCEPTED_GOALS=sales,support,callback
+
+    Returns:
+        frozenset of accepted goal strings.
+    """
+    env_value = os.getenv("VVP_ACCEPTED_GOALS", "")
+    if env_value:
+        return frozenset(g.strip() for g in env_value.split(",") if g.strip())
+    return frozenset()  # Empty = accept all
+
+
+# Goal acceptance policy (§5.1.1-2.13)
+# Empty = accept all goals
+ACCEPTED_GOALS: frozenset[str] = _parse_accepted_goals()
+
+# Whether to reject unknown goals (default: False = accept unknown)
+# When True: goals not in ACCEPTED_GOALS result in INVALID
+# When False: unknown goals accepted with warning
+REJECT_UNKNOWN_GOALS: bool = os.getenv("VVP_REJECT_UNKNOWN_GOALS", "false").lower() == "true"
+
+# Geographic constraint enforcement (§5.1.1-2.13)
+# When True (default): geo constraints trigger INDETERMINATE if GeoIP unavailable
+# When False: geo constraints are skipped (documented policy deviation)
+GEO_CONSTRAINTS_ENFORCED: bool = os.getenv("VVP_GEO_CONSTRAINTS_ENFORCED", "true").lower() == "true"

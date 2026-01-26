@@ -1,10 +1,10 @@
 # VVP Verifier Implementation Checklist
 
-**Document Version:** 3.9
+**Document Version:** 3.10
 **Specification Version:** v1.4 FINAL + draft-hardman-verifiable-voice-protocol §5
 **Created:** 2026-01-23
 **Last Updated:** 2026-01-25
-**Status:** Tier 1 Complete, Tier 2 Complete, Tier 3 In Progress (79% overall)
+**Status:** Tier 1 Complete, Tier 2 Complete, Tier 3 In Progress (91% overall)
 
 ---
 
@@ -23,7 +23,7 @@
 |------|-------------|--------|
 | **Tier 1** | Direct verification: parse, validate structure, verify embedded keys | Complete |
 | **Tier 2** | Full KERI: KEL resolution, historical key state, witness validation | Mostly Complete (90%) |
-| **Tier 3** | Authorization: TNAlloc, delegation, brand credentials, business logic | In Progress (Phase 10 complete) |
+| **Tier 3** | Authorization: TNAlloc, delegation, brand credentials, business logic | In Progress (Phases 10, 11, 13 complete) |
 
 ---
 
@@ -256,29 +256,29 @@ The following VVP spec requirements are **out of scope** for this verification A
 
 ---
 
-## Phase 11: Brand and Business Logic (Tier 3) - NEW
+## Phase 11: Brand and Business Logic (Tier 3) - COMPLETE
 
 **Spec Reference:** §5.1.1-2.12, §5.1.1-2.13 (Brand Attributes, Business Logic)
 
 | # | Task | Status | Commit | Comments |
 |---|------|--------|--------|----------|
-| 11.1 | Create `app/vvp/claims/brand.py` module | [ ] | | |
-| 11.2 | Extract `card` claim from passport payload | [ ] | | Optional rich call data |
-| 11.3 | Locate brand credential in dossier | [ ] | | If `card` present |
-| 11.4 | Verify brand attributes match credential | [ ] | | Per §5.1.1-2.12 |
-| 11.5 | Create `app/vvp/claims/goal.py` module | [ ] | | |
-| 11.6 | Extract `goal` claim from passport payload | [ ] | | Optional |
-| 11.7 | Implement verifier goal acceptance policy | [ ] | | Configurable |
-| 11.8 | Check delegated signer constraints (hours, geographies) | [ ] | | Per §5.1.1-2.13 |
-| 11.9 | Verify call attributes match credential limitations | [ ] | | Per §5.1.1-2.13 |
-| 11.10 | Add `brand_verified` claim to tree (OPTIONAL) | [ ] | | |
-| 11.11 | Add `business_logic_verified` claim to tree (OPTIONAL) | [ ] | | |
-| 11.12 | Unit tests for brand and business logic | [ ] | | |
-| 11.13 | If `card` present: verify brand attributes justified by dossier | [ ] | | Per VVP §4.2 - **MUST** |
-| 11.14 | If `goal` present: verify dossier proves OP authorized for goal | [ ] | | Per VVP §4.2 - **MUST** |
-| 11.15 | Brand credential **MUST** include JL to vetting credential | [ ] | | Per VVP §6.3.7 - **MUST** |
-| 11.16 | If brand in APE + delegation: DE **MUST** have brand proxy credential | [ ] | | Per VVP §6.3.4 - **MUST** |
-| 11.17 | Validate `card` attributes conform to vCard format | [ ] | | Per VVP §4.2 - **MUST** |
+| 11.1 | Create `app/vvp/claims/brand.py` module | [x] | Sprint 18 | app/vvp/brand.py |
+| 11.2 | Extract `card` claim from passport payload | [x] | Sprint 18 | verify_brand() |
+| 11.3 | Locate brand credential in dossier | [x] | Sprint 18 | find_brand_credential() |
+| 11.4 | Verify brand attributes match credential | [x] | Sprint 18 | verify_brand_attributes() |
+| 11.5 | Create `app/vvp/claims/goal.py` module | [x] | Sprint 18 | app/vvp/goal.py |
+| 11.6 | Extract `goal` claim from passport payload | [x] | Sprint 18 | verify_business_logic() |
+| 11.7 | Implement verifier goal acceptance policy | [x] | Sprint 18 | GoalPolicyConfig + config.py |
+| 11.8 | Check delegated signer constraints (hours, geographies) | [x] | Sprint 18 | SignerConstraints, geo→INDETERMINATE |
+| 11.9 | Verify call attributes match credential limitations | [x] | Sprint 18 | verify_signer_constraints() |
+| 11.10 | Add `brand_verified` claim to tree (REQUIRED when card) | [x] | Sprint 18 | Per reviewer: REQUIRED when present |
+| 11.11 | Add `business_logic_verified` claim to tree (REQUIRED when goal) | [x] | Sprint 18 | Per reviewer: REQUIRED when present |
+| 11.12 | Unit tests for brand and business logic | [x] | Sprint 18 | 46 tests (test_brand.py, test_goal.py) |
+| 11.13 | If `card` present: verify brand attributes justified by dossier | [x] | Sprint 18 | Per VVP §4.2 - **MUST** |
+| 11.14 | If `goal` present: verify dossier proves OP authorized for goal | [x] | Sprint 18 | Per VVP §4.2 - **MUST** |
+| 11.15 | Brand credential **MUST** include JL to vetting credential | [x] | Sprint 18 | verify_brand_jl() per §6.3.7 |
+| 11.16 | If brand in APE + delegation: DE **MUST** have brand proxy credential | [x] | Sprint 18 | INDETERMINATE if missing per §6.3.4 |
+| 11.17 | Validate `card` attributes conform to vCard format | [x] | Sprint 18 | validate_vcard_format() - warn not fail
 
 ---
 
@@ -306,18 +306,18 @@ The following VVP spec requirements are **out of scope** for this verification A
 
 ---
 
-## Phase 13: SIP Contextual Alignment - NEW
+## Phase 13: SIP Contextual Alignment - COMPLETE
 
 **Spec Reference:** §5.1.1-2.2 (Contextual Alignment)
 
 | # | Task | Status | Commit | Comments |
 |---|------|--------|--------|----------|
-| 13.1 | Define SIP context fields in request model | [ ] | | call_id, cseq, from_uri, to_uri, invite_time |
-| 13.2 | Validate `orig` matches SIP From URI | [ ] | | Per §5.1.1-2.2 |
-| 13.3 | Validate `dest` matches SIP To URI | [ ] | | Per §5.1.1-2.2 |
-| 13.4 | Validate `iat` aligns with SIP INVITE timing | [ ] | | Per §5.1.1-2.2 |
-| 13.5 | Add `context_aligned` claim to tree | [ ] | | |
-| 13.6 | Unit tests for SIP alignment | [ ] | | |
+| 13.1 | Define SIP context fields in request model | [x] | Sprint 18 | SipContext in api_models.py |
+| 13.2 | Validate `orig` matches SIP From URI | [x] | Sprint 18 | validate_orig_alignment() |
+| 13.3 | Validate `dest` matches SIP To URI | [x] | Sprint 18 | validate_dest_alignment() |
+| 13.4 | Validate `iat` aligns with SIP INVITE timing | [x] | Sprint 18 | 30s tolerance (configurable) |
+| 13.5 | Add `context_aligned` claim to tree | [x] | Sprint 18 | OPTIONAL by default (configurable) |
+| 13.6 | Unit tests for SIP alignment | [x] | Sprint 18 | 36 tests (test_sip_context.py) |
 
 ---
 
@@ -471,8 +471,9 @@ These are the **18 error codes** defined in the v1.4 FINAL specification:
 | 3.7 | 2026-01-25 | VVP spec review corrections: Fixed 4.2 AID prefix definitions (B=non-transferable, D=transferable per §6.2.3). Added 3.17 (PSS CESR signature decoding per §6.3.1). Added 10.19 (vetting credential LE vLEI schema validation per §6.3.5). Added 1.9 (root of trust configuration per §5.1-7). Updated exp policy section to reflect VVP compliance (300s max is spec-compliant, not deviation). Total 182 items (53% complete). |
 | 3.8 | 2026-01-25 | Sprint 12 completion: Phase 1 (1.9 root AIDs), Phase 3 (3.14-3.17 PASSporT validation complete), Phase 7 (7.16-7.17 witness sigs and OOBI KEL), Phase 8 (8.1-8.5, 8.7, 8.10, 8.12-8.14 ACDC verification). Total 182 items (68% complete). |
 | 3.9 | 2026-01-25 | Sprint 17: Phase 10 complete (19/19). Authorization verification finished. 10.12 APE vetting edge always required. 10.18 single-sig enforcement documented. 10.19 vetting credential LE schema validation via `validate_ape_vetting_target()`. Total 182 items (79% complete). |
+| 3.10 | 2026-01-25 | Sprint 18: Phase 11 (Brand/Business Logic) and Phase 13 (SIP Contextual Alignment) complete. New modules: sip_context.py, brand.py, goal.py. New claims: context_aligned, brand_verified, business_logic_verified. Brand proxy missing→INDETERMINATE. Geo constraints without GeoIP→INDETERMINATE. 82 new tests (36 SIP + 46 brand/goal). Total 182 items (91% complete). |
 
 ---
 
 **Last Updated:** 2026-01-25
-**Next Review:** After Phase 11 (Brand and Business Logic) or Phase 12 (Callee Verification)
+**Next Review:** After Phase 12 (Callee Verification) or Phase 14 (Caching)

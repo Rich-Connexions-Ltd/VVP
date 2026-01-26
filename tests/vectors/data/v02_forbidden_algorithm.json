@@ -70,6 +70,14 @@
               }
             ]
           }
+        },
+        {
+          "required": false,
+          "node": {
+            "name": "context_aligned",
+            "status": "INDETERMINATE",
+            "reasons_contain": ["SIP context not provided"]
+          }
         }
       ]
     },

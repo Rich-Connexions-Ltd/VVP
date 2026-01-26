@@ -48,10 +48,23 @@ ClaimNode.model_rebuild()
 # §4.1 Request Models
 # =============================================================================
 
+class SipContext(BaseModel):
+    """SIP context fields per spec §4.4.
+
+    When provided, the verifier MUST perform contextual alignment (§5A Step 2).
+    When absent, context_aligned claim is INDETERMINATE (not INVALID).
+    """
+    from_uri: str  # SIP From URI (originating party)
+    to_uri: str  # SIP To URI (destination party)
+    invite_time: str  # RFC3339 timestamp of SIP INVITE
+    cseq: Optional[int] = None  # CSeq number (for callee verification)
+
+
 class CallContext(BaseModel):
     """Call context per §4.1"""
     call_id: str
     received_at: str  # RFC3339 timestamp
+    sip: Optional[SipContext] = None  # SIP context for contextual alignment (§4.4)
 
 
 class VerifyRequest(BaseModel):
@@ -105,6 +118,13 @@ class ErrorCode:
     AUTHORIZATION_FAILED = "AUTHORIZATION_FAILED"
     TN_RIGHTS_INVALID = "TN_RIGHTS_INVALID"
 
+    # Contextual alignment layer (Sprint 18)
+    CONTEXT_MISMATCH = "CONTEXT_MISMATCH"
+
+    # Brand/business logic layer (Sprint 18)
+    BRAND_CREDENTIAL_INVALID = "BRAND_CREDENTIAL_INVALID"
+    GOAL_REJECTED = "GOAL_REJECTED"
+
     # Verifier layer
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
@@ -131,6 +151,9 @@ ERROR_RECOVERABILITY: Dict[str, bool] = {
     ErrorCode.CREDENTIAL_REVOKED: False,     # Non-recoverable
     ErrorCode.AUTHORIZATION_FAILED: False,   # Non-recoverable (Sprint 15)
     ErrorCode.TN_RIGHTS_INVALID: False,      # Non-recoverable (Sprint 15)
+    ErrorCode.CONTEXT_MISMATCH: False,       # Non-recoverable (Sprint 18)
+    ErrorCode.BRAND_CREDENTIAL_INVALID: False,  # Non-recoverable (Sprint 18)
+    ErrorCode.GOAL_REJECTED: False,          # Non-recoverable (Sprint 18)
     ErrorCode.INTERNAL_ERROR: True,          # Recoverable
 }
 

@@ -494,10 +494,11 @@ class TestVerifyVVPIntegration:
         ):
             mock_vvp.return_value = MagicMock(evd="http://example.com/dossier")
             # Mock passport with proper orig.tn for authorization
+            # Explicitly set card=None and goal=None to prevent brand/business claims
             signer_aid = "EAbc123456789012345"
             mock_passport.return_value = MagicMock(
                 header=MagicMock(kid=f"http://witness.example.com/oobi/{signer_aid}/witness/EXyz"),
-                payload=MagicMock(orig={"tn": "+15551234567"})
+                payload=MagicMock(orig={"tn": "+15551234567"}, card=None, goal=None)
             )
             mock_binding.return_value = None
             mock_sig.return_value = None
@@ -546,7 +547,11 @@ class TestVerifyVVPIntegration:
             patch("app.vvp.verify.validate_dag") as mock_validate,
         ):
             mock_vvp.return_value = MagicMock(evd="http://example.com/dossier")
-            mock_passport.return_value = MagicMock(header=MagicMock(kid="http://witness.example.com/oobi/EAbc123456789012345/witness/EXyz"))
+            # Explicitly set card=None and goal=None to prevent brand/business claims
+            mock_passport.return_value = MagicMock(
+                header=MagicMock(kid="http://witness.example.com/oobi/EAbc123456789012345/witness/EXyz"),
+                payload=MagicMock(orig={"tn": "+15551234567"}, card=None, goal=None)
+            )
             mock_binding.return_value = None
             mock_sig.return_value = None
             mock_fetch.return_value = b'[]'
@@ -563,7 +568,8 @@ class TestVerifyVVPIntegration:
             assert len(resp.claims) == 1
             root = resp.claims[0]
             assert root.name == "caller_authorised"
-            assert len(root.children) == 3  # passport_verified, dossier_verified, authorization_valid
+            # 4 children: passport_verified, dossier_verified, authorization_valid, context_aligned
+            assert len(root.children) == 4
 
             # All children should be REQUIRED
             assert root.children[0].required is True
@@ -597,7 +603,11 @@ class TestVerifyVVPIntegration:
             patch("app.vvp.acdc.validate_credential_chain") as mock_chain,
         ):
             mock_vvp.return_value = MagicMock(evd="http://example.com/dossier")
-            mock_passport.return_value = MagicMock(header=MagicMock(kid="http://witness.example.com/oobi/EAbc123456789012345678901234567890/witness/EXyz"))
+            # Explicitly set card=None and goal=None to prevent brand/business claims
+            mock_passport.return_value = MagicMock(
+                header=MagicMock(kid="http://witness.example.com/oobi/EAbc123456789012345678901234567890/witness/EXyz"),
+                payload=MagicMock(orig={"tn": "+15551234567"}, card=None, goal=None)
+            )
             mock_binding.return_value = None
             mock_sig.return_value = None
             mock_fetch.return_value = b'[]'

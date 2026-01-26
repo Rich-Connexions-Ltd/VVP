@@ -150,10 +150,11 @@ class TestErrorCode:
     """Tests for ErrorCode registry per §4.2A"""
 
     def test_error_code_count(self):
-        """18 error codes per §4.2A + 3 extensions (revocation, authorization)"""
+        """18 error codes per §4.2A + 6 extensions (revocation, authorization, sprint 18)"""
         codes = [attr for attr in dir(ErrorCode) if not attr.startswith("_")]
         # 18 spec codes + CREDENTIAL_REVOKED + AUTHORIZATION_FAILED + TN_RIGHTS_INVALID
-        assert len(codes) == 21
+        # + CONTEXT_MISMATCH + BRAND_CREDENTIAL_INVALID + GOAL_REJECTED (Sprint 18)
+        assert len(codes) == 24
 
     def test_all_error_codes_have_recoverability(self):
         """Every error code must have recoverability defined"""
