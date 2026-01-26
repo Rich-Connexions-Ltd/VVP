@@ -642,12 +642,16 @@ async def ui_fetch_dossier(
     from app.vvp.ui.credential_viewmodel import build_credential_card_vm
     from app.vvp.keri.tel_client import TELClient, CredentialStatus
 
+    start_time = time.time()
+
     try:
         # Fetch raw dossier bytes
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(evd_url)
             raw_bytes = resp.content
             raw_text = resp.text
+
+        fetch_elapsed = time.time() - start_time
 
         # Use the existing CESR-aware dossier parser
         nodes, signatures = parse_dossier(raw_bytes)
@@ -710,6 +714,8 @@ async def ui_fetch_dossier(
                 acdc_dict["type"] = _infer_credential_type(node.attributes)
                 credential_vms.append(acdc_dict)
 
+        total_elapsed = time.time() - start_time
+
         return templates.TemplateResponse(
             "partials/dossier.html",
             {
@@ -719,6 +725,8 @@ async def ui_fetch_dossier(
                 "kid_url": kid_url,
                 "dossier_stream": raw_text,
                 "raw_data": raw_text[:5000] if len(raw_text) > 5000 else raw_text,
+                "fetch_time": round(fetch_elapsed, 2),
+                "total_time": round(total_elapsed, 2),
             },
         )
     except httpx.TimeoutException:

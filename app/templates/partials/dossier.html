@@ -21,7 +21,7 @@
 {% endif %}
 
 <h3>Dossier Contents</h3>
-<p><small>{{ (credential_vms or acdcs) | length }} credential(s) found</small></p>
+<p><small>{{ (credential_vms or acdcs) | length }} credential(s) found{% if total_time %} &mdash; retrieved in {{ total_time }}s{% if fetch_time and fetch_time != total_time %} (fetch: {{ fetch_time }}s){% endif %}{% endif %}</small></p>
 
 {% if credential_vms %}
 {# Sprint 21/22: Use view-model path for enhanced display #}
