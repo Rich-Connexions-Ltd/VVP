@@ -120,20 +120,7 @@
             }
         }
 
-        // Handle credential graph result - draw SVG connectors
-        if (evt.detail.target.id === 'graph-result') {
-            const svg = document.getElementById('graph-connectors');
-            if (svg) {
-                // Create arrow marker and draw connectors
-                if (typeof createArrowMarker === 'function') {
-                    createArrowMarker(svg);
-                }
-                if (typeof drawGraphConnectors === 'function') {
-                    // Delay to allow cards to render and layout
-                    setTimeout(drawGraphConnectors, 200);
-                }
-            }
-        }
+        // Graph rendering is now self-contained in credential_graph.html
     });
 </script>
 {% endblock %}
