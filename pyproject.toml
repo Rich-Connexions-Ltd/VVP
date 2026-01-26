@@ -11,3 +11,10 @@ dependencies = [
   "jinja2>=3.1.0",
   "python-multipart>=0.0.9",
 ]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8.0.0",
+  "pytest-asyncio>=0.23.0",
+  "pytest-cov>=4.1.0",
+]

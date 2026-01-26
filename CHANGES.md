@@ -1,5 +1,77 @@
 # VVP Verifier Change Log
 
+## Sprint 20: Test Vectors & CI Integration (Phase 15 Completion)
+
+**Date:** 2026-01-26
+**Commit:** (pending)
+
+### Files Changed
+
+| File | Action | Description |
+|------|--------|-------------|
+| `.github/workflows/deploy.yml` | Modified | Added test job before deploy with libsodium verification |
+| `pyproject.toml` | Modified | Added test dependencies |
+| `pytest.ini` | Modified | Added asyncio_mode config and e2e marker |
+| `app/vvp/verify.py` | Modified | Added KeyNotYetValidError and ACDCSAIDMismatch handlers |
+| `tests/vectors/schema.py` | Modified | Added mock config fields for Tier 2/3 vectors |
+| `tests/vectors/runner.py` | Modified | Added mock handlers using actual exception types |
+| `tests/vectors/data/v04_iat_before_inception.json` | Modified | Completed with KERI_STATE_INVALID error code |
+| `tests/vectors/data/v07_said_mismatch.json` | Modified | Completed with ACDC_SAID_MISMATCH error code |
+| `tests/vectors/data/v09_tnalloc_mismatch.json` | Created | TNAlloc mismatch vector |
+| `tests/vectors/data/v10_revoked_credential.json` | Created | Revoked credential vector |
+| `tests/vectors/data/v11_delegation_invalid.json` | Created | Delegation chain invalid vector |
+| `tests/vectors/test_vectors.py` | Modified | Updated expected vector count to 11 |
+| `tests/test_trial_dossier_e2e.py` | Created | E2E integration tests with @pytest.mark.e2e marker |
+| `app/Documentation/PLAN_Sprint20.md` | Created | Archived implementation plan |
+
+### Summary
+
+Completed Phase 15 (Test Vectors & CI Integration) per VVP spec §10.2 and §4.2A.
+
+**Key Changes:**
+
+1. **CI Infrastructure (Item 15.14):**
+   - Test job runs before deployment in GitHub Actions
+   - libsodium installation with verification steps
+   - 80% coverage threshold enforced
+
+2. **Exception Handlers in verify.py:**
+   - `KeyNotYetValidError` → `KERI_STATE_INVALID` (for v04)
+   - `ACDCSAIDMismatch` → `ACDC_SAID_MISMATCH` (for v07)
+
+3. **Tier 2 Vectors (Items 15.7, 15.8):**
+   - v04: iat before inception → `KERI_STATE_INVALID`
+   - v07: SAID mismatch → `ACDC_SAID_MISMATCH`
+
+4. **Tier 3 Vectors (Items 15.10-15.12):**
+   - v09: TNAlloc mismatch → `TN_RIGHTS_INVALID`
+   - v10: Revoked credential → `CREDENTIAL_REVOKED`
+   - v11: Delegation chain invalid → `AUTHORIZATION_FAILED`
+
+5. **E2E Integration Tests:**
+   - `test_trial_dossier_e2e.py` with `@pytest.mark.e2e` marker
+   - Tests real Provenant trial dossier parsing and DAG building
+   - Skippable via `pytest -m "not e2e"` if flaky
+
+### Checklist Items Completed
+
+- 15.7: iat before inception → INVALID (v04)
+- 15.8: SAID mismatch → INVALID (v07)
+- 15.10: TNAlloc mismatch → INVALID (v09)
+- 15.11: Delegation chain invalid → INVALID (v11)
+- 15.12: Revoked credential → INVALID (v10)
+- 15.14: CI integration (GitHub Actions)
+
+### Test Results
+
+```
+886 passed in 5.19s
+```
+
+All 11 vectors pass with correct error codes per §4.2A.
+
+---
+
 ## Sprint 19: Callee Verification (Phase 12) + Sprint 18 Fixes
 
 **Date:** 2026-01-26

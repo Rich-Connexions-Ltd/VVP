@@ -171,6 +171,86 @@ class VectorRunner:
             patch("app.vvp.verify._convert_dag_to_acdcs", mock_convert)
         )
 
+        # 8. Mock PASSporT signature verification (for v04 - iat before inception)
+        # Per §4.2A: Reference time before inception → KERI_STATE_INVALID
+        # KeyNotYetValidError is now caught in verify.py and maps to KERI_STATE_INVALID
+        if artifacts.mock_key_state_error == "KEY_NOT_YET_VALID":
+            from app.vvp.keri import KeyNotYetValidError
+
+            async def mock_sig_verify_before_inception(*args, **kwargs):
+                raise KeyNotYetValidError(
+                    "Reference time 2023-12-31T23:00:00+00:00 is before "
+                    "inception at 2024-01-01T00:00:00+00:00"
+                )
+
+            stack.enter_context(
+                patch("app.vvp.verify.verify_passport_signature_tier2", mock_sig_verify_before_inception)
+            )
+
+        # 9. Mock SAID validation (for v07 - SAID mismatch)
+        # Per §4.2A: SAID mismatch → ACDC_SAID_MISMATCH (distinct from chain invalid)
+        # ACDCSAIDMismatch is now caught in verify.py and maps to ACDC_SAID_MISMATCH
+        if artifacts.mock_said_validation_error:
+            from app.vvp.acdc.exceptions import ACDCSAIDMismatch
+
+            async def mock_chain_said_fail(*args, **kwargs):
+                raise ACDCSAIDMismatch("SAID does not match computed Blake3-256 hash")
+
+            # Override the default mock_validate_chain
+            stack.enter_context(
+                patch("app.vvp.acdc.validate_credential_chain", mock_chain_said_fail)
+            )
+
+        # 10. Mock revocation checking (for v10 - revoked credential)
+        if artifacts.mock_revocation:
+            from app.vvp.api_models import ClaimStatus
+
+            rev_config = artifacts.mock_revocation
+            target_said = rev_config.get("credential_said")
+
+            async def mock_check_dossier_revocations(dag, raw_dossier=None, oobi_url=None):
+                """Mock that returns INVALID with revoked credential SAID."""
+                # Import locally to avoid circular imports
+                from app.vvp.verify import ClaimBuilder
+                claim = ClaimBuilder("revocation_clear")
+                claim.fail(ClaimStatus.INVALID, f"Credential {target_said} revoked")
+                return (claim, [target_said])
+
+            stack.enter_context(
+                patch("app.vvp.verify.check_dossier_revocations", mock_check_dossier_revocations)
+            )
+
+        # 11. Mock authorization validation (for v09 - TNAlloc mismatch, v11 - delegation invalid)
+        # validate_authorization returns (party_claim, tn_rights_claim) tuple
+        if artifacts.mock_tn_mismatch or artifacts.mock_delegation_error:
+            from app.vvp.api_models import ClaimStatus
+            from app.vvp.authorization import AuthorizationClaimBuilder
+
+            def mock_validate_authorization(ctx):
+                """Mock that returns failure claims for authorization scenarios."""
+                party_claim = AuthorizationClaimBuilder("party_authorized")
+                tn_rights_claim = AuthorizationClaimBuilder("tn_rights_valid")
+
+                if artifacts.mock_tn_mismatch:
+                    # TN rights mismatch - tn_rights_claim is INVALID
+                    tn_rights_claim.fail(
+                        ClaimStatus.INVALID,
+                        "orig.tn +12025551234 not covered by any TNAlloc credential"
+                    )
+
+                if artifacts.mock_delegation_error:
+                    # Delegation invalid - party_claim is INVALID
+                    party_claim.fail(
+                        ClaimStatus.INVALID,
+                        "Delegation target SAID_MISSING_TARGET not found in dossier"
+                    )
+
+                return (party_claim, tn_rights_claim)
+
+            stack.enter_context(
+                patch("app.vvp.verify.validate_authorization", mock_validate_authorization)
+            )
+
         return stack
 
     def verify_result(self, response) -> None:

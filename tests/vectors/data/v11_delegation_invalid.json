@@ -1,22 +1,22 @@
 {
-  "id": "v07",
-  "name": "said_mismatch",
-  "description": "ACDC SAID doesn't match computed Blake3-256 hash -> INVALID with ACDC_SAID_MISMATCH",
-  "tier": 2,
+  "id": "v11",
+  "name": "delegation_invalid",
+  "description": "DE credential references non-existent delegation target -> INVALID with AUTHORIZATION_FAILED",
+  "tier": 3,
   "input": {
     "vvp_identity_header": "eyJwcHQiOiAidnZwIiwgImtpZCI6ICJodHRwOi8vd2l0bmVzcy5leGFtcGxlLmNvbS9vb2JpL0JJSG9HZUpLQ0hpWFhjUEg3b01SOEVmOUxnVDVVRmk3T25yZzU0SFlqR3JZL3dpdG5lc3MvRVh5eldpdG5lc3MwMDAwIiwgImV2ZCI6ICJodHRwOi8vZXhhbXBsZS5jb20vZG9zc2llciIsICJpYXQiOiAxNzA0MDY3MjAwfQ",
     "passport_jwt": "eyJhbGciOiAiRWREU0EiLCAicHB0IjogInZ2cCIsICJraWQiOiAiaHR0cDovL3dpdG5lc3MuZXhhbXBsZS5jb20vb29iaS9CSUhvR2VKS0NIaVhYY1BIN29NUjhFZjlMZ1Q1VUZpN09ucmc1NEhZakdyWS93aXRuZXNzL0VYeXpXaXRuZXNzMDAwMCJ9.eyJpYXQiOiAxNzA0MDY3MjAwLCAib3JpZyI6IHsidG4iOiAiKzEyMDI1NTUxMjM0In0sICJkZXN0IjogeyJ0biI6IFsiKzEyMDI1NTU1Njc4Il19LCAiZXZkIjogImh0dHA6Ly9leGFtcGxlLmNvbS9kb3NzaWVyIn0.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     "call_context": {
-      "call_id": "test-v07",
+      "call_id": "test-v11",
       "received_at": "2024-01-01T00:00:00Z"
     }
   },
   "artifacts": {
-    "evd_body": "[{\"d\":\"SAID_ROOT\",\"i\":\"BIHoGeJKCHiXXcPH7oMR8Ef9LgT5UFi7Onrg54HYjGrY\",\"s\":\"SCHEMA\"}]",
+    "evd_body": "[{\"d\":\"SAID_DE_CRED\",\"i\":\"BIHoGeJKCHiXXcPH7oMR8Ef9LgT5UFi7Onrg54HYjGrY\",\"s\":\"DE_SCHEMA\",\"e\":{\"delegation\":{\"n\":\"SAID_MISSING_TARGET\"}}}]",
     "evd_content_type": "application/json",
     "http_status_evd": 200,
     "should_timeout_evd": false,
-    "mock_said_validation_error": true
+    "mock_delegation_error": true
   },
   "verification_context": {
     "reference_time_t": 1704067200,
@@ -40,14 +40,31 @@
           "required": true,
           "node": {
             "name": "dossier_verified",
-            "status": "INVALID"
+            "status": "VALID"
           }
         },
         {
           "required": true,
           "node": {
             "name": "authorization_valid",
-            "status": "INVALID"
+            "status": "INVALID",
+            "children": [
+              {
+                "required": true,
+                "node": {
+                  "name": "party_authorized",
+                  "status": "INVALID",
+                  "reasons_contain": ["delegation"]
+                }
+              },
+              {
+                "required": true,
+                "node": {
+                  "name": "tn_rights_valid",
+                  "status": "VALID"
+                }
+              }
+            ]
           }
         },
         {
@@ -60,6 +77,6 @@
         }
       ]
     },
-    "errors": [{"code": "ACDC_SAID_MISMATCH", "recoverable": false}]
+    "errors": [{"code": "AUTHORIZATION_FAILED", "recoverable": false}]
   }
 }

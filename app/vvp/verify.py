@@ -40,6 +40,7 @@ from .keri import (
     verify_passport_signature_tier2,
     SignatureInvalidError,
     ResolutionFailedError,
+    KeyNotYetValidError,
 )
 from .dossier import (
     fetch_dossier,
@@ -674,6 +675,11 @@ async def verify_vvp(
             errors.append(to_error_detail(e))
             passport_claim.fail(ClaimStatus.INVALID, e.message)
             passport_fatal = True
+        except KeyNotYetValidError as e:
+            # §4.2A: Reference time before inception → KERI_STATE_INVALID
+            errors.append(to_error_detail(e))
+            passport_claim.fail(ClaimStatus.INVALID, e.message)
+            passport_fatal = True
         except ResolutionFailedError as e:
             errors.append(to_error_detail(e))
             # Distinguish between spec violation (bare AID) and network issues
@@ -734,6 +740,7 @@ async def verify_vvp(
         from app.vvp.acdc import (
             validate_credential_chain,
             ACDCChainInvalid,
+            ACDCSAIDMismatch,
             verify_acdc_signature,
             ACDCSignatureInvalid,
         )
@@ -778,6 +785,16 @@ async def verify_vvp(
                 )
                 chain_claim.add_evidence(f"chain_valid:{leaf_said[:12]}...,root={result.root_aid[:12]}...")
                 any_chain_valid = True
+            except ACDCSAIDMismatch as e:
+                # §4.2A: SAID mismatch is a distinct error code from chain invalid
+                error_msg = f"ACDC SAID mismatch: {str(e)}"
+                errors.append(ErrorDetail(
+                    code=ErrorCode.ACDC_SAID_MISMATCH,
+                    message=error_msg,
+                    recoverable=False
+                ))
+                chain_claim.fail(ClaimStatus.INVALID, error_msg)
+                break  # Fatal error, no point checking other leaves
             except ACDCChainInvalid as e:
                 chain_errors.append(f"{leaf_said[:16]}...: {str(e)}")
 

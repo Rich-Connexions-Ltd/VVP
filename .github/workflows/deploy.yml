@@ -9,7 +9,45 @@ permissions:
   id-token: write   # required for OIDC to Azure
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install libsodium
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsodium-dev
+          # Verify libsodium is properly installed
+          ldconfig -p | grep libsodium || echo "libsodium found in apt paths"
+
+      - name: Install dependencies
+        run: |
+          pip install -e .
+          pip install pytest pytest-asyncio pytest-cov
+
+      - name: Verify pysodium import
+        run: python3 -c "import pysodium; print('pysodium OK')"
+
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ -v --cov=app --cov-report=xml --cov-fail-under=80
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          file: coverage.xml
+        continue-on-error: true
+
   build-and-deploy:
+    needs: test
     runs-on: ubuntu-latest
 
     steps:
@@ -41,4 +79,3 @@ jobs:
             --name "${{ secrets.AZURE_CONTAINERAPP_NAME }}" \
             --image "$IMAGE" \
             --set-env-vars "GIT_SHA=${{ github.sha }}"
-

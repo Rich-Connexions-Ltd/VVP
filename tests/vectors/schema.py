@@ -30,6 +30,13 @@ class VectorArtifacts(BaseModel):
     http_status_evd: int = 200
     should_timeout_evd: bool = False
 
+    # Sprint 20: Mock configuration fields for Tier 2/3 vectors
+    mock_key_state_error: Optional[str] = None  # "KEY_NOT_YET_VALID" → raises KeyNotYetValidError
+    mock_said_validation_error: bool = False  # True → raises ACDCSAIDMismatch
+    mock_revocation: Optional[Dict[str, Any]] = None  # {"credential_said": "...", "status": "REVOKED"}
+    mock_tn_mismatch: bool = False  # True → TN rights check fails
+    mock_delegation_error: bool = False  # True → delegation chain validation fails
+
 
 class VerificationContext(BaseModel):
     """Verification context per §10.3."""

@@ -1,0 +1,67 @@
+{
+  "id": "v04",
+  "name": "iat_before_inception",
+  "description": "PASSporT iat is before AID inception event -> INVALID with KERI_STATE_INVALID",
+  "tier": 2,
+  "input": {
+    "vvp_identity_header": "eyJwcHQiOiAidnZwIiwgImtpZCI6ICJodHRwOi8vd2l0bmVzcy5leGFtcGxlLmNvbS9vb2JpL0JJSG9HZUpLQ0hpWFhjUEg3b01SOEVmOUxnVDVVRmk3T25yZzU0SFlqR3JZL3dpdG5lc3MvRVh5eldpdG5lc3MwMDAwIiwgImV2ZCI6ICJodHRwOi8vZXhhbXBsZS5jb20vZG9zc2llciIsICJpYXQiOiAxNzA0MDYzNjAwfQ",
+    "passport_jwt": "eyJhbGciOiAiRWREU0EiLCAicHB0IjogInZ2cCIsICJraWQiOiAiaHR0cDovL3dpdG5lc3MuZXhhbXBsZS5jb20vb29iaS9CSUhvR2VKS0NIaVhYY1BIN29NUjhFZjlMZ1Q1VUZpN09ucmc1NEhZakdyWS93aXRuZXNzL0VYeXpXaXRuZXNzMDAwMCJ9.eyJpYXQiOiAxNzA0MDYzNjAwLCAib3JpZyI6IHsidG4iOiAiKzEyMDI1NTUxMjM0In0sICJkZXN0IjogeyJ0biI6IFsiKzEyMDI1NTU1Njc4Il19LCAiZXZkIjogImh0dHA6Ly9leGFtcGxlLmNvbS9kb3NzaWVyIn0.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "call_context": {
+      "call_id": "test-v04",
+      "received_at": "2023-12-31T23:00:00Z"
+    }
+  },
+  "artifacts": {
+    "evd_body": "[{\"d\":\"SAID_ROOT\",\"i\":\"BIHoGeJKCHiXXcPH7oMR8Ef9LgT5UFi7Onrg54HYjGrY\",\"s\":\"SCHEMA\"}]",
+    "evd_content_type": "application/json",
+    "http_status_evd": 200,
+    "should_timeout_evd": false,
+    "mock_key_state_error": "KEY_NOT_YET_VALID"
+  },
+  "verification_context": {
+    "reference_time_t": 1704063600,
+    "clock_skew": 300,
+    "max_token_age": 300
+  },
+  "expected": {
+    "overall_status": "INVALID",
+    "root_claim": {
+      "name": "caller_authorised",
+      "status": "INVALID",
+      "children": [
+        {
+          "required": true,
+          "node": {
+            "name": "passport_verified",
+            "status": "INVALID",
+            "reasons_contain": ["before inception"]
+          }
+        },
+        {
+          "required": true,
+          "node": {
+            "name": "dossier_verified",
+            "status": "INDETERMINATE",
+            "reasons_contain": ["passport verification failure"]
+          }
+        },
+        {
+          "required": true,
+          "node": {
+            "name": "authorization_valid",
+            "status": "INDETERMINATE"
+          }
+        },
+        {
+          "required": false,
+          "node": {
+            "name": "context_aligned",
+            "status": "INDETERMINATE",
+            "reasons_contain": ["SIP context not provided"]
+          }
+        }
+      ]
+    },
+    "errors": [{"code": "KERI_STATE_INVALID", "recoverable": false}]
+  }
+}
