@@ -19,7 +19,6 @@ from app.vvp.keri.kel_parser import (
 )
 from app.vvp.keri.exceptions import (
     ResolutionFailedError,
-    DelegationNotSupportedError,
 )
 
 
@@ -172,30 +171,65 @@ class TestParseEventDict:
         assert event.sequence == 2
         assert not event.is_establishment
 
-    def test_parse_delegated_inception_raises(self):
-        """Delegated inception should raise DelegationNotSupportedError."""
+    def test_parse_delegated_inception_with_di(self):
+        """Delegated inception with di field parses successfully."""
         event_dict = {
             "t": "dip",
             "s": "0",
             "d": "SAID_PLACEHOLDER",
             "k": [TEST_KEY_1],
+            "di": "EDelegatorAID00000000000000000000000000000",
         }
 
-        with pytest.raises(DelegationNotSupportedError):
-            _parse_event_dict(event_dict)
+        event = _parse_event_dict(event_dict)
+        assert event.event_type == EventType.DIP
+        assert event.delegator_aid == "EDelegatorAID00000000000000000000000000000"
+        assert event.is_delegated is True
 
-    def test_parse_delegated_rotation_raises(self):
-        """Delegated rotation should raise DelegationNotSupportedError."""
+    def test_parse_delegated_inception_missing_di_raises(self):
+        """Delegated inception missing di field raises ResolutionFailedError."""
+        event_dict = {
+            "t": "dip",
+            "s": "0",
+            "d": "SAID_PLACEHOLDER",
+            "k": [TEST_KEY_1],
+            # Missing "di" field
+        }
+
+        with pytest.raises(ResolutionFailedError) as exc_info:
+            _parse_event_dict(event_dict)
+        assert "missing required 'di' field" in str(exc_info.value)
+
+    def test_parse_delegated_rotation_with_di(self):
+        """Delegated rotation with di field parses successfully."""
         event_dict = {
             "t": "drt",
             "s": "1",
             "p": "PRIOR_DIGEST",
             "d": "SAID_PLACEHOLDER",
             "k": [TEST_KEY_2],
+            "di": "EDelegatorAID00000000000000000000000000000",
         }
 
-        with pytest.raises(DelegationNotSupportedError):
+        event = _parse_event_dict(event_dict)
+        assert event.event_type == EventType.DRT
+        assert event.delegator_aid == "EDelegatorAID00000000000000000000000000000"
+        assert event.is_delegated is True
+
+    def test_parse_delegated_rotation_missing_di_raises(self):
+        """Delegated rotation missing di field raises ResolutionFailedError."""
+        event_dict = {
+            "t": "drt",
+            "s": "1",
+            "p": "PRIOR_DIGEST",
+            "d": "SAID_PLACEHOLDER",
+            "k": [TEST_KEY_2],
+            # Missing "di" field
+        }
+
+        with pytest.raises(ResolutionFailedError) as exc_info:
             _parse_event_dict(event_dict)
+        assert "missing required 'di' field" in str(exc_info.value)
 
     def test_parse_hex_sequence_number(self):
         """Parse sequence number in hex format."""

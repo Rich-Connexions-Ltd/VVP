@@ -1,6 +1,7 @@
 FROM python:3.12-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libsodium23 libsodium-dev \
+    ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 WORKDIR /srv
 COPY pyproject.toml /srv/pyproject.toml

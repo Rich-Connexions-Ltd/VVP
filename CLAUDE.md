@@ -6,38 +6,34 @@ The following commands are pre-authorized and do not require user confirmation:
 
 - `git` - All git operations (add, commit, push, status, log, diff, etc.)
 - `gh` - All GitHub CLI operations (run watch, pr create, issue, etc.)
-- `pytest` - Run tests (including with DYLD_LIBRARY_PATH prefix)
+- `./scripts/run-tests.sh` - Test runner script (preferred for running tests)
+- `pytest` - Run tests directly
 - `python3` / `pip3` - Python execution and package management
 - `curl` - HTTP requests for deployment verification
 - `uvicorn` - Running the development server
-- `DYLD_LIBRARY_PATH=* python3 -m pytest` - Test commands with library path
-- `./scripts/run-tests.sh` - Test runner script (pre-configured with library path)
 
-All test-related commands using pytest are pre-authorized, including those that set environment variables like `DYLD_LIBRARY_PATH`.
+All test-related commands are pre-authorized.
 
 ## Running Tests
 
-Tests require libsodium for cryptographic operations. On macOS with Homebrew:
+**Always use the test runner script** - it handles libsodium library paths automatically:
 
 ```bash
-# Preferred: Use the test runner script (handles library paths automatically)
 ./scripts/run-tests.sh                          # Run all tests
 ./scripts/run-tests.sh -v                       # Verbose output
 ./scripts/run-tests.sh tests/test_signature.py  # Run specific file
 ./scripts/run-tests.sh -k "test_format"         # Run tests matching pattern
-
-# Alternative: Run directly with library path
-DYLD_LIBRARY_PATH="/opt/homebrew/lib" python3 -m pytest tests/ -v
-
-# Run with coverage
-./scripts/run-tests.sh --cov=app --cov-report=term-missing
+./scripts/run-tests.sh --cov=app --cov-report=term-missing  # With coverage
 ```
 
-If libsodium is installed elsewhere, find it with:
+### Troubleshooting libsodium
+
+If tests fail with libsodium errors, verify the library is installed:
 ```bash
-brew --prefix libsodium  # Shows: /opt/homebrew/opt/libsodium
-find /opt/homebrew -name "libsodium*.dylib" 2>/dev/null
+brew --prefix libsodium  # Should show: /opt/homebrew/opt/libsodium
 ```
+
+The test script sets `DYLD_LIBRARY_PATH="/opt/homebrew/lib"` automatically. If libsodium is installed elsewhere, update the path in `scripts/run-tests.sh`.
 
 ## Pair Programming Workflow
 

@@ -73,6 +73,12 @@ async def verify_passport_signature_tier2(
 
     Per spec §5A Step 4: "Resolve issuer key state at reference time T"
 
+    For delegated identifiers (dip/drt events), this function also:
+    - Resolves the full delegation chain to the non-delegated root
+    - Validates each delegation is properly authorized by anchor events
+    Per KERI spec, delegated identifiers require authorization from their
+    delegator via an interaction event containing a seal.
+
     WARNING: This function is TEST-ONLY. It does NOT support:
     - CESR binary format (rejects application/json+cesr responses)
     - KERI-compliant signature canonicalization (uses JSON sorted-keys)
@@ -96,8 +102,10 @@ async def verify_passport_signature_tier2(
         ResolutionFailedError: Could not resolve key state (→ INDETERMINATE).
     """
     from app.core.config import TIER2_KEL_RESOLUTION_ENABLED
-    from .kel_resolver import resolve_key_state
-    from .exceptions import ResolutionFailedError
+    from .kel_resolver import resolve_key_state, resolve_key_state_with_kel, KeyState
+    from .exceptions import ResolutionFailedError, KELChainInvalidError
+    from .delegation import resolve_delegation_chain, validate_delegation_authorization
+    from ..api_models import ClaimStatus
 
     # Feature gate check
     if not TIER2_KEL_RESOLUTION_ENABLED and not _allow_test_mode:
@@ -119,8 +127,101 @@ async def verify_passport_signature_tier2(
         kid=passport.header.kid,
         reference_time=reference_time,
         oobi_url=oobi_url,
-        min_witnesses=min_witnesses
+        min_witnesses=min_witnesses,
+        _allow_test_mode=_allow_test_mode
     )
+
+    # Validate delegation chain if this is a delegated identifier
+    # Per KERI spec, delegated identifiers (dip/drt) must have their
+    # delegation chain resolved and authorized
+    if key_state.is_delegated and key_state.inception_event:
+        # Create OOBI resolver for delegation chain resolution
+        async def oobi_resolver(aid: str, ref_time: datetime) -> KeyState:
+            """Resolve delegator's key state via OOBI."""
+            # Construct OOBI URL from base URL pattern
+            delegator_oobi = None
+            if oobi_url:
+                # Replace AID in OOBI path with delegator AID
+                from urllib.parse import urlparse
+                parsed = urlparse(oobi_url)
+                delegator_oobi = f"{parsed.scheme}://{parsed.netloc}/oobi/{aid}"
+
+            return await resolve_key_state(
+                kid=aid,
+                reference_time=ref_time,
+                oobi_url=delegator_oobi,
+                min_witnesses=min_witnesses,
+                _allow_test_mode=_allow_test_mode
+            )
+
+        try:
+            # Resolve delegation chain to non-delegated root
+            # This validates: no cycles, max depth, delegator resolvable
+            delegation_chain = await resolve_delegation_chain(
+                delegated_aid=key_state.aid,
+                inception_event=key_state.inception_event,
+                reference_time=reference_time,
+                oobi_resolver=oobi_resolver
+            )
+
+            # Store delegation chain in key state for downstream use
+            key_state.delegation_chain = delegation_chain
+
+            if not delegation_chain.valid:
+                raise KELChainInvalidError(
+                    f"Delegation chain invalid: {', '.join(delegation_chain.errors)}"
+                )
+
+            # Validate delegation authorization (anchor seal + signature)
+            # Per KERI spec, the delegator must authorize the delegation via
+            # an interaction event (ixn) containing a seal with the delegation SAID
+            delegator_aid = key_state.delegator_aid
+            if delegator_aid:
+                # Construct delegator OOBI URL
+                delegator_oobi = None
+                if oobi_url:
+                    from urllib.parse import urlparse
+                    parsed = urlparse(oobi_url)
+                    delegator_oobi = f"{parsed.scheme}://{parsed.netloc}/oobi/{delegator_aid}"
+
+                # Fetch delegator's key state AND full KEL for authorization check
+                delegator_key_state, delegator_kel = await resolve_key_state_with_kel(
+                    kid=delegator_aid,
+                    reference_time=reference_time,
+                    oobi_url=delegator_oobi,
+                    min_witnesses=min_witnesses,
+                    _allow_test_mode=_allow_test_mode
+                )
+
+                # Validate that delegator authorized this delegation
+                is_authorized, auth_status, auth_errors = await validate_delegation_authorization(
+                    delegation_event=key_state.inception_event,
+                    delegator_kel=delegator_kel,
+                    delegator_key_state=delegator_key_state
+                )
+
+                if not is_authorized:
+                    if auth_status == ClaimStatus.INVALID:
+                        raise KELChainInvalidError(
+                            f"Delegation not authorized: {'; '.join(auth_errors)}"
+                        )
+                    else:
+                        # INDETERMINATE - delegator KEL may be incomplete
+                        raise ResolutionFailedError(
+                            f"Cannot verify delegation authorization: {'; '.join(auth_errors)}"
+                        )
+
+        except KELChainInvalidError:
+            # Re-raise KEL chain errors as-is (maps to INVALID)
+            raise
+        except ResolutionFailedError:
+            # Re-raise resolution errors as-is (maps to INDETERMINATE)
+            raise
+        except Exception as e:
+            # Unexpected delegation error - wrap in ResolutionFailedError
+            raise ResolutionFailedError(
+                f"Delegation validation failed: {e}"
+            )
 
     # Reconstruct JWT signing input
     signing_input = f"{passport.raw_header}.{passport.raw_payload}".encode("ascii")

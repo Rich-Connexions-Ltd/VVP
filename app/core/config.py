@@ -240,3 +240,15 @@ DOSSIER_CACHE_TTL_SECONDS: float = float(
 DOSSIER_CACHE_MAX_ENTRIES: int = int(
     os.getenv("VVP_DOSSIER_CACHE_MAX_ENTRIES", "100")
 )
+
+
+# =============================================================================
+# SPRINT 24: SCHEMA VALIDATION (Phase 8.6 / §5.1.1-2.8.3)
+# =============================================================================
+
+# Schema cache TTL (§5C.2 freshness policy)
+# Default 300s aligns with key state cache freshness per §5C.2
+# Schemas change rarely, so this can be longer than dossier cache
+SCHEMA_CACHE_TTL_SECONDS: int = int(
+    os.getenv("VVP_SCHEMA_CACHE_TTL", "300")
+)

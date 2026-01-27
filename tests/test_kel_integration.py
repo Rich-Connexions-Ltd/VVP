@@ -15,7 +15,6 @@ from app.vvp.keri import (
     verify_passport_signature_tier2,
     KELChainInvalidError,
     KeyNotYetValidError,
-    DelegationNotSupportedError,
     ResolutionFailedError,
 )
 from app.vvp.keri.kel_resolver import reset_cache
@@ -243,22 +242,72 @@ class TestEndToEndKeyResolution:
 
 
 class TestDelegatedEventDetection:
-    """Test detection of delegated events."""
+    """Test detection and parsing of delegated events."""
 
     @pytest.mark.asyncio
-    async def test_delegated_inception_detected(self):
-        """Delegated inception raises DelegationNotSupportedError."""
+    async def test_delegated_inception_parsed_successfully(self):
+        """Delegated inception with di field parses and resolves successfully."""
         pk, sk = generate_keypair()
         kid = encode_keri_key(pk)
 
-        # Create a delegated inception event
+        # Create a delegated inception event with proper delegator
+        delegator_aid = "EDelegatorAID00000000000000000000000000000"
         dip_event = {
             "t": "dip",  # Delegated inception
             "s": "0",
             "d": "ESAID_0",
             "p": "",
             "k": [kid],
-            "di": "DELEGATOR_AID",  # Delegator
+            "di": delegator_aid,  # Delegator AID (required)
+            "bt": "0",
+            "b": [],
+        }
+
+        # Sign the event for chain validation
+        event_bytes = json.dumps(dip_event, separators=(",", ":"), sort_keys=True).encode()
+        sig = pysodium.crypto_sign_detached(event_bytes, sk)
+        sig_b64 = "0B" + base64.urlsafe_b64encode(sig).decode().rstrip("=")
+        dip_event["signatures"] = [sig_b64]
+
+        kel_data = json.dumps([dip_event]).encode()
+
+        mock_result = OOBIResult(
+            aid=kid,
+            kel_data=kel_data,
+            witnesses=[]
+        )
+
+        with patch(
+            "app.vvp.keri.kel_resolver.dereference_oobi",
+            new_callable=AsyncMock,
+            return_value=mock_result
+        ):
+            key_state = await resolve_key_state(
+                kid=f"http://example.com/oobi/{kid}",
+                reference_time=datetime(2024, 6, 15),
+                min_witnesses=0,
+                _allow_test_mode=True
+            )
+            # Verify delegation info is populated
+            assert key_state.is_delegated is True
+            assert key_state.delegator_aid == delegator_aid
+            assert key_state.inception_event is not None
+            assert key_state.inception_event.delegator_aid == delegator_aid
+
+    @pytest.mark.asyncio
+    async def test_delegated_inception_missing_di_raises(self):
+        """Delegated inception missing di field raises ResolutionFailedError."""
+        pk, sk = generate_keypair()
+        kid = encode_keri_key(pk)
+
+        # Create a delegated inception event WITHOUT di field
+        dip_event = {
+            "t": "dip",  # Delegated inception
+            "s": "0",
+            "d": "ESAID_0",
+            "p": "",
+            "k": [kid],
+            # Missing "di" field - should cause error
         }
 
         kel_data = json.dumps([dip_event]).encode()
@@ -274,13 +323,14 @@ class TestDelegatedEventDetection:
             new_callable=AsyncMock,
             return_value=mock_result
         ):
-            with pytest.raises(DelegationNotSupportedError):
+            with pytest.raises(ResolutionFailedError) as exc_info:
                 await resolve_key_state(
                     kid=f"http://example.com/oobi/{kid}",
                     reference_time=datetime(2024, 6, 15),
                     min_witnesses=0,
                     _allow_test_mode=True
                 )
+            assert "missing required 'di' field" in str(exc_info.value)
 
 
 class TestChainValidationIntegration:

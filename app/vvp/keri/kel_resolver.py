@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from .cache import CacheConfig, KeyStateCache
+from .delegation import DelegationChain
 from .exceptions import (
     KELChainInvalidError,
     KeyNotYetValidError,
@@ -20,6 +21,7 @@ from .exceptions import (
 )
 from .kel_parser import (
     ESTABLISHMENT_TYPES,
+    EventType,
     KELEvent,
     WitnessReceipt,
     parse_kel_stream,
@@ -43,6 +45,10 @@ class KeyState:
         valid_from: Earliest witness timestamp for this state.
         witnesses: List of witness AIDs.
         toad: Witness threshold (threshold of accountable duplicity).
+        is_delegated: True if this is a delegated identifier (dip/drt).
+        delegator_aid: For delegated identifiers, the delegator's AID.
+        inception_event: The inception event (icp/dip) for multi-level resolution.
+        delegation_chain: Full delegation chain if resolved.
     """
     aid: str
     signing_keys: List[bytes]
@@ -51,6 +57,10 @@ class KeyState:
     valid_from: Optional[datetime]
     witnesses: List[str]
     toad: int
+    is_delegated: bool = False
+    delegator_aid: Optional[str] = None
+    inception_event: Optional[KELEvent] = None
+    delegation_chain: Optional["DelegationChain"] = None
 
 
 # Global cache instance (singleton pattern)
@@ -169,6 +179,63 @@ async def resolve_key_state(
         await cache.put(key_state, reference_time=reference_time)
 
     return key_state
+
+
+async def resolve_key_state_with_kel(
+    kid: str,
+    reference_time: datetime,
+    oobi_url: Optional[str] = None,
+    min_witnesses: Optional[int] = None,
+    _allow_test_mode: bool = False
+) -> tuple[KeyState, List[KELEvent]]:
+    """Resolve key state AND return the full KEL for delegation authorization.
+
+    This is an extended version of resolve_key_state() that also returns
+    the parsed KEL events. Used for delegation authorization validation
+    which requires access to the delegator's full KEL to find anchor events.
+
+    Args:
+        kid: The AID (Autonomic Identifier) to resolve.
+        reference_time: The reference time T.
+        oobi_url: Optional OOBI URL for fetching KEL.
+        min_witnesses: Minimum witness receipts required.
+        _allow_test_mode: Internal flag to bypass feature gate in tests.
+
+    Returns:
+        Tuple of (KeyState, List[KELEvent]).
+
+    Raises:
+        Same as resolve_key_state().
+    """
+    from app.core.config import TIER2_KEL_RESOLUTION_ENABLED
+
+    if not TIER2_KEL_RESOLUTION_ENABLED and not _allow_test_mode:
+        raise ResolutionFailedError(
+            "Tier 2 KEL resolution is disabled."
+        )
+
+    aid = _extract_aid(kid)
+
+    if not oobi_url:
+        oobi_url = _construct_oobi_url(kid)
+
+    # Fetch and validate KEL via OOBI
+    oobi_result, events = await _fetch_and_validate_oobi(
+        oobi_url,
+        aid,
+        strict_validation=not _allow_test_mode
+    )
+
+    # Find key state at reference time T
+    key_state = _find_key_state_at_time(
+        aid=aid,
+        events=events,
+        reference_time=reference_time,
+        min_witnesses=min_witnesses,
+        strict_validation=not _allow_test_mode
+    )
+
+    return key_state, events
 
 
 async def _fetch_and_validate_oobi(
@@ -373,6 +440,12 @@ def _find_key_state_at_time(
     # Validate witness receipts (§7.3)
     _validate_witness_receipts(valid_event, min_witnesses, strict_validation)
 
+    # Determine if this is a delegated identifier
+    # Check the inception event for delegation status
+    inception_event = establishment_events[0]
+    is_delegated = inception_event.event_type in {EventType.DIP, EventType.DRT}
+    delegator_aid = inception_event.delegator_aid if is_delegated else None
+
     # Build KeyState
     return KeyState(
         aid=aid,
@@ -381,7 +454,11 @@ def _find_key_state_at_time(
         establishment_digest=valid_event.digest,
         valid_from=_get_event_time(valid_event),
         witnesses=valid_event.witnesses,
-        toad=valid_event.toad
+        toad=valid_event.toad,
+        is_delegated=is_delegated,
+        delegator_aid=delegator_aid,
+        inception_event=inception_event,
+        delegation_chain=None  # Populated by caller if needed
     )
 
 

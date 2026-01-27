@@ -18,7 +18,6 @@ from typing import Any, Dict, List, Optional
 
 from .cesr import CESRMessage, parse_cesr_stream as cesr_parse, is_cesr_stream
 from .exceptions import (
-    DelegationNotSupportedError,
     KELChainInvalidError,
     ResolutionFailedError,
 )
@@ -85,6 +84,7 @@ class KELEvent:
         signatures: Attached controller signatures.
         witness_receipts: Receipts from witnesses.
         raw: Original parsed event dict for debugging.
+        delegator_aid: For delegated events (dip/drt), the delegator's AID from 'di' field.
     """
     event_type: EventType
     sequence: int
@@ -98,6 +98,7 @@ class KELEvent:
     signatures: List[bytes] = field(default_factory=list)
     witness_receipts: List[WitnessReceipt] = field(default_factory=list)
     raw: Dict[str, Any] = field(default_factory=dict)
+    delegator_aid: Optional[str] = None
 
     @property
     def is_establishment(self) -> bool:
@@ -216,11 +217,14 @@ def _parse_event_dict(data: Dict[str, Any]) -> KELEvent:
         except ValueError:
             raise ResolutionFailedError(f"Unknown event type: {event_type_str}")
 
-        # Check for delegated events
+        # Extract delegator AID for delegated events (dip/drt)
+        delegator_aid = None
         if event_type in DELEGATED_TYPES:
-            raise DelegationNotSupportedError(
-                f"Delegated event type '{event_type_str}' not yet supported"
-            )
+            delegator_aid = data.get("di")  # 'di' = delegator identifier
+            if not delegator_aid:
+                raise ResolutionFailedError(
+                    f"Delegated event '{event_type_str}' missing required 'di' field"
+                )
 
         # Parse sequence (hex string in KERI)
         seq_str = data.get("s", "0")
@@ -267,11 +271,9 @@ def _parse_event_dict(data: Dict[str, Any]) -> KELEvent:
             timestamp=_parse_timestamp(data.get("dt")),
             signatures=signatures,
             witness_receipts=witness_receipts,
-            raw=data
+            raw=data,
+            delegator_aid=delegator_aid
         )
-
-    except DelegationNotSupportedError:
-        raise
     except Exception as e:
         raise ResolutionFailedError(f"Failed to parse event: {e}")
 

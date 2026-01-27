@@ -4,7 +4,7 @@ Per VVP §6.3.x credential verification requirements.
 """
 
 import logging
-from typing import Dict, FrozenSet, List, Optional, Set, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 
 from .exceptions import ACDCChainInvalid, ACDCSignatureInvalid
 from .models import ACDC, ACDCChainResult
@@ -15,6 +15,8 @@ from .schema_registry import (
     has_governance_schemas,
     is_known_schema,
 )
+from .schema_fetcher import get_schema_for_validation
+from .schema_validator import validate_acdc_against_schema
 from ..api_models import ClaimStatus
 
 log = logging.getLogger(__name__)
@@ -67,6 +69,67 @@ def validate_schema_said(
             f"ACDC {acdc.said[:20]}... has unknown schema SAID "
             f"{acdc.schema_said[:20]}... for type {cred_type} (non-strict mode)"
         )
+
+
+async def validate_schema_document(
+    acdc: ACDC,
+) -> Tuple[ClaimStatus, List[str]]:
+    """Validate ACDC attributes against fetched schema document.
+
+    Per VVP §5.1.1-2.8.3, validation must compare data structure and values
+    against the declared schema. This function:
+    1. Fetches the schema document (from cache or registry)
+    2. Verifies the fetched document's SAID matches declared schema SAID
+    3. Validates ACDC attributes conform to the schema structure
+
+    Args:
+        acdc: The ACDC to validate.
+
+    Returns:
+        Tuple of (ClaimStatus, errors):
+        - (VALID, []) if schema validates successfully
+        - (INDETERMINATE, [...]) if schema cannot be fetched
+        - (INVALID via exception) if SAID mismatch or validation fails
+
+    Raises:
+        ACDCChainInvalid: If schema SAID mismatch or attributes don't match schema
+    """
+    errors: List[str] = []
+
+    if not acdc.schema_said:
+        # No schema declared - cannot validate attributes
+        return (ClaimStatus.INDETERMINATE, ["No schema SAID declared"])
+
+    # Fetch schema document (handles both embedded and referenced schemas)
+    try:
+        schema_doc, fetch_status = await get_schema_for_validation(acdc)
+    except ACDCChainInvalid:
+        # SAID mismatch - re-raise as this is a definite INVALID
+        raise
+
+    if fetch_status == ClaimStatus.INDETERMINATE or not schema_doc:
+        # Schema couldn't be fetched - return INDETERMINATE per §2.2
+        log.warning(
+            f"Schema {acdc.schema_said[:20]}... unavailable for ACDC {acdc.said[:20]}..."
+        )
+        return (ClaimStatus.INDETERMINATE, ["Schema document unavailable"])
+
+    # Validate ACDC attributes against schema
+    if not acdc.attributes or not isinstance(acdc.attributes, dict):
+        # Compact variant with SAID reference for attributes - cannot validate
+        return (ClaimStatus.INDETERMINATE, ["ACDC attributes not expanded (compact variant)"])
+
+    validation_errors = validate_acdc_against_schema(acdc.attributes, schema_doc)
+
+    if validation_errors:
+        # Attribute validation failed - this is INVALID
+        raise ACDCChainInvalid(
+            f"ACDC {acdc.said[:20]}... attributes don't match schema: "
+            f"{'; '.join(validation_errors[:3])}"
+        )
+
+    log.debug(f"ACDC {acdc.said[:20]}... validated against schema {acdc.schema_said[:20]}...")
+    return (ClaimStatus.VALID, [])
 
 
 # Edge rules per credential type for semantic validation
@@ -545,6 +608,18 @@ async def validate_credential_chain(
     # Start chain walk
     try:
         root_aid = walk_chain(acdc, pss_signer_aid=pss_signer_aid)
+
+        # After chain walk, validate schema documents per §5.1.1-2.8.3
+        # This fetches schema documents and validates ACDC attributes against them
+        if validate_schemas:
+            for cred in chain:
+                schema_status, schema_errors = await validate_schema_document(cred)
+                if schema_errors:
+                    errors.extend(schema_errors)
+                # Propagate worst status (INVALID already raises, so just INDETERMINATE)
+                if schema_status == ClaimStatus.INDETERMINATE and chain_status == ClaimStatus.VALID:
+                    chain_status = ClaimStatus.INDETERMINATE
+
         # Determine final status: validated but may be INDETERMINATE due to variants
         final_status = chain_status.value if chain_status != ClaimStatus.VALID else "VALID"
         # If root_aid is None but chain_status is INDETERMINATE, return INDETERMINATE result
