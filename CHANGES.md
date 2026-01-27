@@ -1,5 +1,79 @@
 # VVP Verifier Change Log
 
+## AID to Identity Resolution Enhancement
+
+**Date:** 2026-01-27
+**Commit:** f9dea9b
+
+### Files Changed
+
+| File | Action | Description |
+|------|--------|-------------|
+| `app/vvp/identity.py` | Created | Core identity extraction module with configurable well-known AIDs registry, `IssuerIdentity` dataclass, `build_issuer_identity_map()` function |
+| `app/vvp/api_models.py` | Modified | Added `IssuerIdentityInfo` model and `issuer_identities` field to `VerifyResponse` |
+| `app/vvp/verify.py` | Modified | Integrated identity extraction after Phase 5.5, includes delegation chain AIDs via well-known lookup |
+| `app/vvp/ui/credential_viewmodel.py` | Modified | Expanded `VCardInfo` with FN, ADR, TEL, EMAIL, URL fields; imports from `identity.py` to avoid duplication |
+| `tests/test_identity.py` | Created | 22 unit tests for identity extraction, well-known resolution, lids field handling, vCard ORG fallback |
+| `tests/test_credential_viewmodel.py` | Modified | Added 9 new tests for expanded vCard field parsing |
+| `app/Documentation/PLAN_AID_Identity_Resolution.md` | Created | Archived implementation plan |
+
+### Summary
+
+Exposed semantic identity (legal name, LEI) of credential issuers in the API response. Per KERI design, an AID alone represents cryptographic control, not semantic identity. This enhancement extracts identity from LE credentials in the dossier and includes it in `VerifyResponse.issuer_identities`.
+
+**Key Features:**
+
+1. **API Response Extension:**
+   - `IssuerIdentityInfo` model with `aid`, `legal_name`, `lei`, `source_said`, `identity_source`
+   - `VerifyResponse.issuer_identities` optional field (None when no dossier present)
+   - `identity_source`: "dossier" (from credentials including vCard) vs "wellknown" (static registry)
+
+2. **Identity Extraction Module (`app/vvp/identity.py`):**
+   - Decoupled from UI layer for use in core verification flow
+   - `build_issuer_identity_map()` extracts identity from LE credentials
+   - Checks `legalName`, `LEI`, `lids` field (string, dict, list variants), and vCard ORG
+   - `get_wellknown_identity()` provides fallback for root issuers
+
+3. **Configurable Well-Known AIDs:**
+   - `_DEFAULT_WELLKNOWN_AIDS` built-in registry (GLEIF, Provenant, etc.)
+   - Overridable via `WELLKNOWN_AIDS_FILE` environment variable (JSON format)
+   - Falls back to defaults on file not found or invalid JSON
+
+4. **Delegation Chain Integration:**
+   - Delegation chain AIDs included when dossier-sourced identity exists
+   - Well-known lookup for delegation chain members not in dossier
+
+5. **Expanded vCard Parsing:**
+   - New fields: `fn` (full name), `adr` (address), `tel` (telephone), `email`, `url`
+   - Case-insensitive field name parsing
+
+**Design Decisions (per Reviewer):**
+
+1. **Include delegation chain AIDs?** → Yes, optionally when dossier-sourced identity exists
+2. **Add organization_type field?** → Deferred until normative source identified
+3. **Well-known AIDs configurable?** → Yes, via `WELLKNOWN_AIDS_FILE` env var with built-in defaults
+
+### Checklist Items Completed
+
+- Identity extraction decoupled from UI layer
+- API response extended with `issuer_identities` field (backwards compatible)
+- vCard field extraction expanded per RFC 6350
+- Well-known AIDs configurable via environment variable
+
+### Test Results
+
+```
+1245 passed in 70.12s
+```
+
+### Review History
+
+- Plan Rev 0: CHANGES_REQUESTED - Wrong function reference (`verify_vvp_identity()` → `verify_vvp()`)
+- Plan Rev 1: APPROVED
+- Code Rev: APPROVED
+
+---
+
 ## ToIP Dossier Specification Warnings
 
 **Date:** 2026-01-27

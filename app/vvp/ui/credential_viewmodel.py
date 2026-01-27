@@ -190,6 +190,11 @@ class VCardInfo:
         org: Organization name from ORG: line.
         lei: LEI from NOTE;LEI:... line.
         categories: Categories from CATEGORIES: line.
+        fn: Full name from FN: line.
+        adr: Address from ADR: line.
+        tel: Telephone from TEL: line.
+        email: Email from EMAIL: line.
+        url: Website URL from URL: line.
         raw_lines: Original vCard lines for debugging.
     """
 
@@ -198,6 +203,11 @@ class VCardInfo:
     org: Optional[str] = None
     lei: Optional[str] = None
     categories: Optional[str] = None
+    fn: Optional[str] = None
+    adr: Optional[str] = None
+    tel: Optional[str] = None
+    email: Optional[str] = None
+    url: Optional[str] = None
     raw_lines: List[str] = field(default_factory=list)
 
 
@@ -1089,6 +1099,11 @@ def _parse_vcard_lines(vcard_lines: List[str]) -> VCardInfo:
     - "ORG:Organization Name"
     - "NOTE;LEI:123456789012345678"
     - "CATEGORIES:..."
+    - "FN:Full Name"
+    - "ADR:;;Street;City;Region;PostCode;Country"
+    - "TEL:+1-555-123-4567"
+    - "EMAIL:contact@example.com"
+    - "URL:https://example.com"
 
     Args:
         vcard_lines: List of vCard line strings.
@@ -1100,18 +1115,19 @@ def _parse_vcard_lines(vcard_lines: List[str]) -> VCardInfo:
 
     for line in vcard_lines:
         line = line.strip()
+        line_upper = line.upper()
 
         # Parse LOGO line: LOGO;HASH=...;VALUE=URI:https://...
-        if line.upper().startswith("LOGO"):
+        if line_upper.startswith("LOGO"):
             # Extract VALUE=URI:... part
-            if "VALUE=URI:" in line.upper():
-                uri_start = line.upper().find("VALUE=URI:")
+            if "VALUE=URI:" in line_upper:
+                uri_start = line_upper.find("VALUE=URI:")
                 if uri_start != -1:
                     info.logo_url = line[uri_start + len("VALUE=URI:"):]
 
             # Extract HASH=... part
-            if "HASH=" in line.upper():
-                hash_start = line.upper().find("HASH=")
+            if "HASH=" in line_upper:
+                hash_start = line_upper.find("HASH=")
                 if hash_start != -1:
                     # Find end of hash (before ; or end of line)
                     hash_part = line[hash_start + len("HASH="):]
@@ -1120,16 +1136,45 @@ def _parse_vcard_lines(vcard_lines: List[str]) -> VCardInfo:
                     info.logo_hash = hash_part
 
         # Parse ORG line: ORG:Organization Name
-        elif line.upper().startswith("ORG:"):
+        elif line_upper.startswith("ORG:"):
             info.org = line[4:].strip()
 
         # Parse NOTE;LEI line: NOTE;LEI:123456789012345678
-        elif line.upper().startswith("NOTE;LEI:"):
+        elif line_upper.startswith("NOTE;LEI:"):
             info.lei = line[9:].strip()
 
         # Parse CATEGORIES line: CATEGORIES:...
-        elif line.upper().startswith("CATEGORIES:"):
+        elif line_upper.startswith("CATEGORIES:"):
             info.categories = line[11:].strip()
+
+        # Parse FN line: FN:Full Name
+        elif line_upper.startswith("FN:"):
+            info.fn = line[3:].strip()
+
+        # Parse ADR line: ADR:;;Street;City;Region;PostCode;Country
+        # Also handles ADR;TYPE=... variants
+        elif line_upper.startswith("ADR"):
+            colon_idx = line.find(":")
+            if colon_idx != -1:
+                info.adr = line[colon_idx + 1:].strip()
+
+        # Parse TEL line: TEL:+1-555-123-4567
+        # Also handles TEL;TYPE=... variants
+        elif line_upper.startswith("TEL"):
+            colon_idx = line.find(":")
+            if colon_idx != -1:
+                info.tel = line[colon_idx + 1:].strip()
+
+        # Parse EMAIL line: EMAIL:contact@example.com
+        # Also handles EMAIL;TYPE=... variants
+        elif line_upper.startswith("EMAIL"):
+            colon_idx = line.find(":")
+            if colon_idx != -1:
+                info.email = line[colon_idx + 1:].strip()
+
+        # Parse URL line: URL:https://example.com
+        elif line_upper.startswith("URL:"):
+            info.url = line[4:].strip()
 
     return info
 
@@ -1138,135 +1183,14 @@ def _parse_vcard_lines(vcard_lines: List[str]) -> VCardInfo:
 # Issuer Identity Resolution
 # =============================================================================
 
-# Well-known AIDs for root of trust organizations
-# These provide fallback identity when LE credentials aren't in dossier
-# Source: vLEI Governance Framework
-WELLKNOWN_AIDS: Dict[str, tuple[str, Optional[str]]] = {
-    # GLEIF External (production vLEI root of trust)
-    "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao": ("GLEIF", "5493001KJTIIGC8Y1R12"),
-    # Provenant Global QVI (multiple AIDs observed)
-    "ELW1FqnJZgOBR43USMu1RfVE6U1BXl6UFecIDPmJnscQ": ("Provenant Global", None),
-    "ELW1FqnJZgOBR43UqAXCCFF6Zyz_EXaunivemMEkhRLy": ("Provenant Global", None),
-    # GLEIF Internal Issuer (multiple AIDs observed)
-    "EPI6riUghhZcrzeRvP2w94LKmPYplMVUXgpj2m5sJOzL": ("GLEIF Internal Issuer", None),
-    "EPI6riUghhZcrzeRrf4qxOSgMvqL97LKxMSaxcDUciub": ("GLEIF Internal Issuer", None),
-    # Test roots (for development)
-    "EDP1vHcw_wc4M__Fj53-cJaBnZZASd-aMTaSyWvOPUbo": ("Test QVI Root", None),
-}
-
-
-@dataclass
-class IssuerIdentity:
-    """Resolved identity for an AID from LE credentials.
-
-    Attributes:
-        aid: The AID this identity is about.
-        legal_name: Legal name from LE credential.
-        lei: Legal Entity Identifier from LE credential.
-        source_said: SAID of the LE credential this came from.
-    """
-
-    aid: str
-    legal_name: Optional[str] = None
-    lei: Optional[str] = None
-    source_said: Optional[str] = None
-
-
-def build_issuer_identity_map(
-    acdcs: List[ACDC],
-) -> Dict[str, IssuerIdentity]:
-    """Build AID→identity mapping from LE credentials in a dossier.
-
-    Scans all credentials for Legal Entity (LE) credentials which contain
-    identity information (legalName, LEI) for their issuee AID.
-
-    Args:
-        acdcs: List of parsed ACDC credentials from a dossier.
-
-    Returns:
-        Dict mapping AID strings to IssuerIdentity objects.
-    """
-    import logging
-    log = logging.getLogger(__name__)
-
-    identity_map: Dict[str, IssuerIdentity] = {}
-
-    for acdc in acdcs:
-        # LE credentials have legalName or LEI in attributes
-        if not isinstance(acdc.attributes, dict):
-            continue
-
-        # Check if this is an LE credential with identity info
-        legal_name = acdc.attributes.get("legalName")
-        lei = acdc.attributes.get("LEI")
-
-        # Also check 'lids' field (vLEI Legal Identity Data Source)
-        # May contain LEI directly as string or as structured data
-        lids = acdc.attributes.get("lids")
-        if lids:
-            # lids might be direct LEI string (20-character alphanumeric)
-            if isinstance(lids, str):
-                if len(lids) == 20 and lids.isalnum() and not lei:
-                    lei = lids
-            # lids might be a dict with nested identity fields
-            elif isinstance(lids, dict):
-                if not lei:
-                    lei = lids.get("LEI") or lids.get("lei")
-                if not legal_name:
-                    legal_name = lids.get("legalName") or lids.get("name") or lids.get("legalname")
-            # lids might be a list of identity sources
-            elif isinstance(lids, list):
-                for item in lids:
-                    if isinstance(item, dict):
-                        if not lei:
-                            lei = item.get("LEI") or item.get("lei")
-                        if not legal_name:
-                            legal_name = item.get("legalName") or item.get("name") or item.get("legalname")
-                        if lei or legal_name:
-                            break
-
-        # Also check vCard data for organization name
-        vcard_data = acdc.attributes.get("vcard")
-        if isinstance(vcard_data, list) and not legal_name:
-            for line in vcard_data:
-                if isinstance(line, str) and line.upper().startswith("ORG:"):
-                    legal_name = line[4:].strip()
-                    break
-
-        if not legal_name and not lei:
-            continue
-
-        # The issuee (subject) of the LE credential is the AID being identified
-        issuee = acdc.attributes.get("issuee") or acdc.attributes.get("i")
-
-        # If no explicit issuee, the credential identifies its own issuer
-        # (self-issued LE credentials)
-        if not issuee:
-            issuee = acdc.issuer_aid
-
-        if issuee:
-            identity_map[issuee] = IssuerIdentity(
-                aid=issuee,
-                legal_name=legal_name,
-                lei=lei,
-                source_said=acdc.said,
-            )
-            log.debug(f"Identity from dossier: {issuee[:16]}... = {legal_name or 'LEI:' + str(lei)}")
-
-    # Add well-known AIDs as fallback for issuers not found in dossier
-    all_issuer_aids = {acdc.issuer_aid for acdc in acdcs}
-    for aid in all_issuer_aids:
-        if aid not in identity_map and aid in WELLKNOWN_AIDS:
-            name, lei = WELLKNOWN_AIDS[aid]
-            identity_map[aid] = IssuerIdentity(
-                aid=aid,
-                legal_name=name,
-                lei=lei,
-                source_said=None,  # No credential source, from static registry
-            )
-            log.debug(f"Identity from well-known: {aid[:16]}... = {name}")
-
-    return identity_map
+# Import identity resolution from core module to avoid duplication
+# The identity module handles well-known AIDs (configurable) and extraction logic
+from ..identity import (
+    IssuerIdentity,
+    WELLKNOWN_AIDS,
+    build_issuer_identity_map,
+    get_wellknown_identity,
+)
 
 
 async def build_issuer_identity_map_async(

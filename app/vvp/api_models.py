@@ -4,7 +4,7 @@ Per VVP_Verifier_Specification_v1.4_FINAL.md
 """
 
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -245,6 +245,29 @@ class ToIPWarningDetail(BaseModel):
     field_path: Optional[str] = None
 
 
+class IssuerIdentityInfo(BaseModel):
+    """Resolved identity for an AID.
+
+    This is INFORMATIONAL only and may be incomplete when dossiers are
+    partial/compact. The identity_source indicates provenance:
+    - "dossier": Identity from LE credential (including vCard-derived values)
+    - "wellknown": Identity from built-in registry fallback
+
+    Attributes:
+        aid: The AID this identity refers to.
+        legal_name: Legal entity name from LE credential or vCard ORG.
+        lei: Legal Entity Identifier (ISO 17442) if present.
+        source_said: SAID of the LE credential providing this identity.
+        identity_source: Provenance of the identity data.
+    """
+
+    aid: str
+    legal_name: Optional[str] = None
+    lei: Optional[str] = None
+    source_said: Optional[str] = None
+    identity_source: Literal["dossier", "wellknown"] = "dossier"
+
+
 class VerifyResponse(BaseModel):
     """Response schema for /verify endpoint per §4.2, §4.3
 
@@ -263,6 +286,9 @@ class VerifyResponse(BaseModel):
             credential-to-delegation mapping in UI (Sprint 25).
         toip_warnings: ToIP Verifiable Dossiers Specification compliance warnings.
             These are informational only and do not affect verification status.
+        issuer_identities: Resolved identities for AIDs in the dossier and
+            delegation chain. INFORMATIONAL only - may be incomplete for
+            partial/compact dossiers. None when no dossier is present.
     """
 
     request_id: str
@@ -273,6 +299,7 @@ class VerifyResponse(BaseModel):
     delegation_chain: Optional[DelegationChainResponse] = None
     signer_aid: Optional[str] = None
     toip_warnings: Optional[List[ToIPWarningDetail]] = None
+    issuer_identities: Optional[Dict[str, IssuerIdentityInfo]] = None
 
 
 # =============================================================================

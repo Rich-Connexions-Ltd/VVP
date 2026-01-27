@@ -35,6 +35,7 @@ from .api_models import (
     DelegationChainResponse,
     DelegationNodeResponse,
     ToIPWarningDetail,
+    IssuerIdentityInfo,
 )
 from .header import parse_vvp_identity, VVPIdentity
 from .passport import parse_passport, validate_passport_binding, Passport
@@ -1433,6 +1434,49 @@ async def verify_vvp(
             for w in dag.warnings
         ]
 
+    # Build issuer identity map from dossier credentials
+    issuer_identities = None
+    if dag is not None and dag.nodes:
+        from .identity import build_issuer_identity_map, get_wellknown_identity
+        from .acdc.models import ACDC
+
+        # Convert DAG nodes to ACDC list for identity extraction
+        acdcs = [
+            ACDC(
+                version=node.raw.get("v", ""),
+                said=said,
+                issuer_aid=node.issuer,
+                schema_said=node.schema,
+                attributes=node.attributes,
+                edges=node.edges,
+                rules=node.rules,
+                raw=node.raw,
+            )
+            for said, node in dag.nodes.items()
+        ]
+        identity_map = build_issuer_identity_map(acdcs)
+
+        # Include delegation chain AIDs if available
+        if delegation_chain_data and delegation_chain_data.chain:
+            for chain_node in delegation_chain_data.chain:
+                if chain_node.aid not in identity_map:
+                    # Check well-known registry for delegation chain AIDs
+                    wk = get_wellknown_identity(chain_node.aid)
+                    if wk:
+                        identity_map[chain_node.aid] = wk
+
+        if identity_map:
+            issuer_identities = {
+                aid: IssuerIdentityInfo(
+                    aid=aid,
+                    legal_name=ident.legal_name,
+                    lei=ident.lei,
+                    source_said=ident.source_said,
+                    identity_source="dossier" if ident.source_said else "wellknown",
+                )
+                for aid, ident in identity_map.items()
+            }
+
     return request_id, VerifyResponse(
         request_id=request_id,
         overall_status=overall_status,
@@ -1442,4 +1486,5 @@ async def verify_vvp(
         delegation_chain=delegation_chain_data,
         signer_aid=signer_aid,
         toip_warnings=toip_warnings,
+        issuer_identities=issuer_identities,
     )

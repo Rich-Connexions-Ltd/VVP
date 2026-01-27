@@ -1222,6 +1222,92 @@ class TestParseVcardLines:
         assert info.logo_url == "https://example.com/logo.png"
         assert info.org == "Test Org"
 
+    def test_parse_fn(self):
+        """FN line extracts full name."""
+        from app.vvp.ui.credential_viewmodel import _parse_vcard_lines
+
+        lines = ["FN:John Smith"]
+        info = _parse_vcard_lines(lines)
+        assert info.fn == "John Smith"
+
+    def test_parse_adr(self):
+        """ADR line extracts address."""
+        from app.vvp.ui.credential_viewmodel import _parse_vcard_lines
+
+        lines = ["ADR:;;123 Main St;City;State;12345;Country"]
+        info = _parse_vcard_lines(lines)
+        assert info.adr == ";;123 Main St;City;State;12345;Country"
+
+    def test_parse_adr_with_type(self):
+        """ADR line with TYPE parameter extracts address."""
+        from app.vvp.ui.credential_viewmodel import _parse_vcard_lines
+
+        lines = ["ADR;TYPE=WORK:;;Office Park;Suite 100"]
+        info = _parse_vcard_lines(lines)
+        assert info.adr == ";;Office Park;Suite 100"
+
+    def test_parse_tel(self):
+        """TEL line extracts telephone."""
+        from app.vvp.ui.credential_viewmodel import _parse_vcard_lines
+
+        lines = ["TEL:+1-555-123-4567"]
+        info = _parse_vcard_lines(lines)
+        assert info.tel == "+1-555-123-4567"
+
+    def test_parse_tel_with_type(self):
+        """TEL line with TYPE parameter extracts telephone."""
+        from app.vvp.ui.credential_viewmodel import _parse_vcard_lines
+
+        lines = ["TEL;TYPE=WORK,VOICE:+1-555-987-6543"]
+        info = _parse_vcard_lines(lines)
+        assert info.tel == "+1-555-987-6543"
+
+    def test_parse_email(self):
+        """EMAIL line extracts email address."""
+        from app.vvp.ui.credential_viewmodel import _parse_vcard_lines
+
+        lines = ["EMAIL:contact@example.com"]
+        info = _parse_vcard_lines(lines)
+        assert info.email == "contact@example.com"
+
+    def test_parse_email_with_type(self):
+        """EMAIL line with TYPE parameter extracts email address."""
+        from app.vvp.ui.credential_viewmodel import _parse_vcard_lines
+
+        lines = ["EMAIL;TYPE=WORK:work@example.com"]
+        info = _parse_vcard_lines(lines)
+        assert info.email == "work@example.com"
+
+    def test_parse_url(self):
+        """URL line extracts website URL."""
+        from app.vvp.ui.credential_viewmodel import _parse_vcard_lines
+
+        lines = ["URL:https://example.com"]
+        info = _parse_vcard_lines(lines)
+        assert info.url == "https://example.com"
+
+    def test_parse_extended_vcard(self):
+        """Full vCard with new fields parses correctly."""
+        from app.vvp.ui.credential_viewmodel import _parse_vcard_lines
+
+        lines = [
+            "FN:Acme Corp Contact",
+            "ORG:Acme Corporation",
+            "TEL:+1-555-123-4567",
+            "EMAIL:contact@acme.com",
+            "ADR:;;100 Main St;New York;NY;10001;USA",
+            "URL:https://acme.com",
+            "CATEGORIES:Business,Technology",
+        ]
+        info = _parse_vcard_lines(lines)
+        assert info.fn == "Acme Corp Contact"
+        assert info.org == "Acme Corporation"
+        assert info.tel == "+1-555-123-4567"
+        assert info.email == "contact@acme.com"
+        assert info.adr == ";;100 Main St;New York;NY;10001;USA"
+        assert info.url == "https://acme.com"
+        assert info.categories == "Business,Technology"
+
 
 class TestVmWithVcard:
     """Tests for CredentialCardViewModel with vCard data."""
