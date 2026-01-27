@@ -22,6 +22,7 @@ from app.vvp.exceptions import PassportError
 from app.vvp.passport import parse_passport
 from app.vvp.verify import verify_vvp
 from app.vvp.verify_callee import verify_callee_vvp
+from app.vvp.dossier import get_dossier_cache, CachedDossier, fetch_dossier as cached_fetch_dossier
 
 configure_logging()
 log = logging.getLogger("vvp")
@@ -649,23 +650,49 @@ async def ui_fetch_dossier(
     - Inline revocation status from dossier TEL data
     """
     from app.vvp.dossier.parser import parse_dossier
+    from app.vvp.dossier import build_dag
     from app.vvp.acdc import parse_acdc
     from app.vvp.ui.credential_viewmodel import build_credential_card_vm, build_issuer_identity_map_async
     from app.vvp.keri.tel_client import TELClient, CredentialStatus
 
     start_time = time.time()
+    cache_hit = False
 
     try:
-        # Fetch raw dossier bytes
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(evd_url)
-            raw_bytes = resp.content
-            raw_text = resp.text
+        # Check dossier cache first (§5.1.1-2.7)
+        dossier_cache = get_dossier_cache()
+        cached = await dossier_cache.get(evd_url)
+
+        if cached:
+            # Cache hit - use cached data
+            cache_hit = True
+            raw_bytes = cached.raw_content
+            raw_text = raw_bytes.decode("utf-8")
+            nodes = list(cached.dag.nodes.values())
+            signatures = {}  # Signatures not stored in cache
+            log.info(f"UI dossier cache hit: {evd_url[:50]}...")
+        else:
+            # Cache miss - fetch from network
+            raw_bytes = await cached_fetch_dossier(evd_url)
+            raw_text = raw_bytes.decode("utf-8")
+            nodes, signatures = parse_dossier(raw_bytes)
+
+            # Store in cache
+            dag = build_dag(nodes)
+            contained_saids = set(dag.nodes.keys())
+            cached_dossier = CachedDossier(
+                dag=dag,
+                raw_content=raw_bytes,
+                fetch_timestamp=time.time(),
+                content_type="application/json+cesr",
+                contained_saids=contained_saids,
+            )
+            await dossier_cache.put(evd_url, cached_dossier)
+            log.info(f"UI dossier cached: {evd_url[:50]}... (saids={len(contained_saids)})")
 
         fetch_elapsed = time.time() - start_time
 
-        # Use the existing CESR-aware dossier parser
-        nodes, signatures = parse_dossier(raw_bytes)
+        # Note: nodes and signatures already populated from cache or fresh parse above
 
         # Collect all SAIDs for edge availability checking
         all_saids = {node.said for node in nodes}
