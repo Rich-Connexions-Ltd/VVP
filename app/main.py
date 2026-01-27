@@ -1248,6 +1248,7 @@ async def ui_verify_result(
     passport_jwt: str = Form(...),
     evd_url: str = Form(""),
     call_id: str = Form(""),
+    use_jwt_time: str = Form(""),
 ):
     """Perform full verification and return HTML with delegation chain info.
 
@@ -1256,6 +1257,10 @@ async def ui_verify_result(
     - Delegation chain visualization (if delegated identifier)
     - Validation summary and error buckets
     - Per-credential validation checks
+
+    Args:
+        use_jwt_time: If "on" or "true", use the JWT's iat as reference time
+            for expiry validation. This allows testing with old JWTs.
 
     The delegation chain is attached to credentials where the issuer AID
     matches the signer AID (from PASSporT kid).
@@ -1338,8 +1343,14 @@ async def ui_verify_result(
         )
 
         # Run verification
+        # If use_jwt_time is set, use the JWT's iat as reference time
+        # This allows testing with old JWTs that would otherwise be expired
+        reference_time = None
+        if use_jwt_time in ("on", "true", "1") and passport_iat:
+            reference_time = passport_iat
+
         verify_start = time.time()
-        req_id, verify_response = await verify_vvp(verify_req, vvp_identity_header)
+        req_id, verify_response = await verify_vvp(verify_req, vvp_identity_header, reference_time=reference_time)
         verify_latency = int((time.time() - verify_start) * 1000)
 
         evidence_records.append(EvidenceFetchRecord(

@@ -635,6 +635,7 @@ def propagate_status(node: ClaimNode) -> ClaimStatus:
 async def verify_vvp(
     req: VerifyRequest,
     vvp_identity_header: Optional[str] = None,
+    reference_time: Optional[int] = None,
 ) -> Tuple[str, VerifyResponse]:
     """Orchestrate VVP verification per spec §9.
 
@@ -659,6 +660,8 @@ async def verify_vvp(
     Args:
         req: VerifyRequest with passport_jwt and context
         vvp_identity_header: Raw VVP-Identity header value from HTTP request
+        reference_time: Optional reference timestamp for expiry checks (testing only).
+            If provided, used instead of current time for PASSporT expiry validation.
 
     Returns:
         Tuple of (request_id, VerifyResponse)
@@ -701,7 +704,7 @@ async def verify_vvp(
 
     if passport and vvp_identity and not passport_fatal:
         try:
-            validate_passport_binding(passport, vvp_identity)
+            validate_passport_binding(passport, vvp_identity, now=reference_time)
             passport_claim.add_evidence("binding_valid")
         except PassportError as e:
             errors.append(to_error_detail(e))
