@@ -119,8 +119,9 @@ def _find_delegation_target(
         return None
 
     # Check for delegation edge (various naming conventions)
+    # Note: "issuer" edge is used by some delegation credentials (e.g., delsig)
     for edge_name, edge_ref in de.edges.items():
-        if edge_name.lower() in ('delegation', 'd', 'delegate', 'delegator'):
+        if edge_name.lower() in ('delegation', 'd', 'delegate', 'delegator', 'issuer'):
             # Extract target SAID from edge reference
             target_said = None
             if isinstance(edge_ref, str):

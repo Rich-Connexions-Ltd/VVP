@@ -65,6 +65,55 @@ from .goal import verify_business_logic, GoalPolicyConfig
 
 
 # =============================================================================
+# DID Web to OOBI Conversion
+# =============================================================================
+
+
+def _convert_did_web_to_oobi(kid: str) -> Optional[str]:
+    """Convert did:web: URL to OOBI URL format.
+
+    Per DID Web spec, did:web:domain#fragment where fragment is the AID
+    should resolve to an OOBI URL. For KERI/VVP, this typically means
+    a witness OOBI endpoint.
+
+    Special handling for Provenant demo domain to use staging witnesses.
+
+    Args:
+        kid: The kid value, potentially in did:web: format
+
+    Returns:
+        OOBI URL if conversion successful, None if not a did:web URL.
+
+    Examples:
+        did:web:demo.provenant.net#EGay5ufBqAanbhFa_qe-KMFUPJHn8J0MFba96yyWRrLF
+        -> http://witness5.stage.provenant.net:5631/oobi/EGay5ufBqAanbhFa_qe-KMFUPJHn8J0MFba96yyWRrLF/witness
+    """
+    if not kid.startswith("did:web:"):
+        return None
+
+    # Parse did:web:domain#fragment
+    # Remove "did:web:" prefix
+    rest = kid[8:]  # len("did:web:") = 8
+
+    # Split on # to get domain and fragment (AID)
+    if "#" not in rest:
+        return None
+
+    domain, aid = rest.split("#", 1)
+    if not domain or not aid:
+        return None
+
+    # Special handling for Provenant demo domain - use staging witness
+    # The demo.provenant.net domain uses staging witnesses at witnessX.stage.provenant.net:5631
+    if "provenant.net" in domain:
+        # Use witness5 as default (confirmed working)
+        return f"http://witness5.stage.provenant.net:5631/oobi/{aid}/witness"
+
+    # Default: construct standard OOBI URL
+    return f"https://{domain}/oobi/{aid}"
+
+
+# =============================================================================
 # Claim Builder
 # =============================================================================
 
@@ -726,15 +775,23 @@ async def verify_vvp(
 
     if passport and not passport_fatal:
         kid = passport.header.kid
-        is_oobi_kid = kid.startswith(("http://", "https://"))
+
+        # Try to convert did:web: to OOBI URL (DID Web spec support)
+        oobi_url = None
+        if kid.startswith(("http://", "https://")):
+            oobi_url = kid
+        elif kid.startswith("did:web:"):
+            oobi_url = _convert_did_web_to_oobi(kid)
+            if oobi_url:
+                passport_claim.add_evidence(f"did_web_converted:{kid[:30]}...")
 
         try:
-            if is_oobi_kid:
+            if oobi_url:
                 # Tier 2: Use historical key state resolution via OOBI
                 # Sprint 25: Use _with_key_state variant to capture delegation chain
                 key_state, auth_status = await verify_passport_signature_tier2_with_key_state(
                     passport,
-                    oobi_url=kid,
+                    oobi_url=oobi_url,
                     _allow_test_mode=False
                 )
                 passport_claim.add_evidence("signature_valid,tier2")

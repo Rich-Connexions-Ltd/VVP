@@ -6,6 +6,7 @@ This document tracks issues discovered during testing with real-world dossiers, 
 
 | Date | Version | Changes |
 |------|---------|---------|
+| 2026-01-27 | 1.1 | Added DE schema, attest.creds, did:web support |
 | 2026-01-27 | 1.0 | Initial document |
 
 ---
@@ -32,7 +33,28 @@ Added the Provenant demo LE schema SAID to the schema registry in `app/vvp/acdc/
 Once vLEI governance publishes the official LE schema(s) for VVP, the registry should be audited to ensure only governance-approved SAIDs are accepted. The Provenant demo schema may need to be removed if it doesn't match the official schema.
 
 **Registry Location**: `app/vvp/acdc/schema_registry.py`
-**Registry Version**: 1.1.0
+**Registry Version**: 1.2.0
+
+---
+
+## 1B. DE Schema SAID Addition
+
+### Issue
+The test dossier from Provenant demo uses DE (Delegate Entity) credentials with schema SAID `EL7irIKYJL9Io0hhKSGWI4OznhwC7qgJG5Qf4aEs6j0o`, which was not in the schema registry.
+
+### Impact
+Without this, DE credentials in delegation chains were classified as "unknown" type, causing `AUTHORIZATION_FAILED` errors with message "Unexpected credential type unknown in delegation chain".
+
+### Workaround Applied
+Added the Provenant demo DE schema SAID to the schema registry:
+
+```python
+"DE": frozenset({
+    "EL7irIKYJL9Io0hhKSGWI4OznhwC7qgJG5Qf4aEs6j0o",  # Provenant demo DE schema
+}),
+```
+
+**Registry Version**: 1.2.0
 
 ---
 
@@ -163,9 +185,133 @@ These errors are marked as `RECOVERABLE` - verification continues but the creden
 
 ---
 
+## 6. PASSporT attest.creds Format
+
+### Issue
+The Provenant demo JWT uses `attest.creds` array format for the evidence URL instead of a top-level `evd` field:
+
+```json
+{
+  "attest": {
+    "creds": ["evd:https://origin.demo.provenant.net/dossier/..."]
+  }
+}
+```
+
+### Impact
+Without this, PASSporT parsing fails with `PASSPORT_PARSE_FAILED: payload missing required field: evd`.
+
+### Workaround Applied
+Updated `app/vvp/passport.py` `_parse_payload()` to support both formats:
+1. Top-level `evd` field (simple format)
+2. `attest.creds[0]` with "evd:" prefix (VVP 1.0 format)
+
+```python
+evd = data.get("evd")
+if evd is None:
+    attest = data.get("attest")
+    if isinstance(attest, dict):
+        creds = attest.get("creds")
+        if isinstance(creds, list) and len(creds) > 0:
+            cred = creds[0]
+            if isinstance(cred, str) and cred.startswith("evd:"):
+                evd = cred[4:]  # Strip "evd:" prefix
+```
+
+---
+
+## 7. DID Web to OOBI URL Conversion
+
+### Issue
+The Provenant demo JWT uses `did:web:` format for the `kid` header:
+```
+did:web:demo.provenant.net#EGay5ufBqAanbhFa_qe-KMFUPJHn8J0MFba96yyWRrLF
+```
+
+The verifier expected an OOBI URL (starting with http:// or https://).
+
+### Impact
+Without this, signature verification fails with `kid must be an OOBI URL per §4.2, got bare AID: did:web:...`.
+
+### Workaround Applied
+1. Added `_convert_did_web_to_oobi()` helper in `app/vvp/verify.py`
+2. Updated `_extract_aid_from_kid()` in `app/vvp/keri/kel_resolver.py` to handle `did:web:` format
+
+For Provenant domain, `did:web:demo.provenant.net#AID` is converted to:
+```
+http://witness5.stage.provenant.net:5631/oobi/{AID}/witness
+```
+
+### Future Consideration
+- Consider a configurable DID Web resolver registry
+- Support other witness configurations beyond Provenant staging
+
+---
+
+## 8. DE Credential "issuer" Edge
+
+### Issue
+The `delsig` credential in Provenant dossiers uses an "issuer" edge instead of "delegation" edge for the delegation reference.
+
+### Impact
+Without this, the delegation chain walker couldn't find the delegation target, causing `AUTHORIZATION_FAILED: DE ... delegation edge target not found in dossier`.
+
+### Workaround Applied
+Added "issuer" to the list of recognized delegation edge names in:
+1. `app/vvp/acdc/models.py` - `credential_type` property detection
+2. `app/vvp/authorization.py` - `_find_delegation_target()` function
+
+```python
+if edge_name.lower() in ('delegation', 'd', 'delegate', 'delegator', 'issuer'):
+```
+
+---
+
+## 9. Provenant Demo Dossier Unavailable
+
+### Issue
+As of 2026-01-27, the Provenant demo dossier endpoint returns HTTP 404:
+```
+https://origin.demo.provenant.net/dossier/EISxlyM2KTIf70TKBzaKWNKCrXomZ2YaJe-gYkR0UHY
+```
+
+### Impact
+Cannot perform full verification with the test JWT as the dossier cannot be fetched.
+
+### Current Status
+- OOBI witness endpoints still work (witness4-6.stage.provenant.net:5631)
+- The AID `EGay5ufBqAanbhFa_qe-KMFUPJHn8J0MFba96yyWRrLF` is resolvable
+- Test fixtures with dossier data exist in `tests/fixtures/trial_dossier.json`
+
+### Future Consideration
+- Need to obtain fresh test data from Provenant demo
+- Consider setting up local test infrastructure for integration testing
+- May need to mock dossier fetch for automated testing
+
+---
+
+## Summary Table
+
+| Issue | Workaround | File(s) | Reversible? |
+|-------|------------|---------|-------------|
+| LE Schema SAID | Added to registry | `schema_registry.py` | Yes - remove SAID |
+| DE Schema SAID | Added to registry | `schema_registry.py` | Yes - remove SAID |
+| JWT Expiry | Reference time param | `verify.py`, `main.py` | Yes - remove param |
+| E.164 Format | Warnings not errors | `passport.py` | Yes - change back |
+| attest.creds format | Dual format support | `passport.py` | Yes - remove fallback |
+| did:web kid format | OOBI conversion | `verify.py`, `kel_resolver.py` | Yes - remove conversion |
+| "issuer" DE edge | Added to edge list | `models.py`, `authorization.py` | Yes - remove edge name |
+| Dossier unavailable | None - external issue | N/A | N/A |
+| Delegation Path | Full chain traversal | `verify.py` | N/A |
+| KERI Resolution | Marked recoverable | `verify.py` | N/A |
+
+---
+
 ## Notes for Future Development
 
 1. **Schema Governance**: Monitor vLEI governance publications for official VVP schema SAIDs
 2. **Test Data**: Maintain a set of known-good test vectors with expected validation results
 3. **Error Categorization**: Continue refining which errors are recoverable vs fatal
 4. **Delegation Validation**: Ensure full delegation chain traversal is working correctly
+5. **DID Resolution**: Consider implementing proper DID Web resolution per spec
+6. **Witness Discovery**: Add configurable witness endpoint discovery for different environments

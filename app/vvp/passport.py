@@ -304,7 +304,22 @@ def _parse_payload(data: dict[str, Any]) -> tuple[PassportPayload, list[str]]:
     # Required by local policy (VVP-draft)
     orig = _require_dict(data, "orig", "payload")
     dest = _require_dict(data, "dest", "payload")
-    evd = _require_string(data, "evd", "payload")
+
+    # Evidence URL: support both formats
+    # 1. Top-level "evd" field (simple format)
+    # 2. "attest.creds[0]" with "evd:" prefix (VVP 1.0 format)
+    evd = data.get("evd")
+    if evd is None:
+        # Try attest.creds format
+        attest = data.get("attest")
+        if isinstance(attest, dict):
+            creds = attest.get("creds")
+            if isinstance(creds, list) and len(creds) > 0:
+                cred = creds[0]
+                if isinstance(cred, str) and cred.startswith("evd:"):
+                    evd = cred[4:]  # Strip "evd:" prefix
+    if evd is None or not isinstance(evd, str) or evd == "":
+        raise PassportError.parse_failed("payload missing required field: evd (or attest.creds)")
 
     # Validate phone number fields per VVP §4.2
     warnings.extend(_validate_orig_tn_field(orig))

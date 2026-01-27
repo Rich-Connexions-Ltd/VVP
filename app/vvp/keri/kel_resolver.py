@@ -326,6 +326,14 @@ def _extract_aid(kid: str) -> str:
             return aid
         raise ResolutionFailedError(f"Could not extract AID from OOBI URL: {kid}")
 
+    # Check for did:web: format (e.g., did:web:domain#AID)
+    if kid.startswith("did:web:"):
+        if "#" in kid:
+            aid = kid.split("#", 1)[1]
+            if aid and aid[0] in "BDEFGHJKLMNOPQRSTUVWXYZ":
+                return aid
+        raise ResolutionFailedError(f"Could not extract AID from did:web URL: {kid[:30]}...")
+
     # Otherwise, treat as bare AID
     # KERI AIDs start with derivation codes (B, D, E, etc.)
     if kid and kid[0] in "BDEFGHJKLMNOPQRSTUVWXYZ":

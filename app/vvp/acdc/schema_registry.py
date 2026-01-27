@@ -4,14 +4,14 @@ Per VVP §6.3.x, credentials must use recognized schema SAIDs from the
 vLEI governance framework. This module provides a versioned registry
 of known schema SAIDs for validation.
 
-Registry Version: 1.1.0
+Registry Version: 1.2.0
 Last Updated: 2026-01-27
 """
 
 from typing import Dict, FrozenSet
 
 # Registry version for tracking updates
-SCHEMA_REGISTRY_VERSION = "1.1.0"
+SCHEMA_REGISTRY_VERSION = "1.2.0"
 
 # Known vLEI governance schema SAIDs
 # These are the official schema SAIDs from the vLEI ecosystem
@@ -30,8 +30,9 @@ KNOWN_SCHEMA_SAIDS: Dict[str, FrozenSet[str]] = {
 
     # Delegate Entity (DE)
     # Source: VVP Draft - pending vLEI governance publication
-    # Policy: Accept any schema until governance publishes official SAIDs
-    "DE": frozenset(),
+    "DE": frozenset({
+        "EL7irIKYJL9Io0hhKSGWI4OznhwC7qgJG5Qf4aEs6j0o",  # Provenant demo DE schema (TN Allocator, delsig)
+    }),
 
     # TN Allocation
     # Source: VVP Draft - pending vLEI governance publication
@@ -43,7 +44,7 @@ KNOWN_SCHEMA_SAIDS: Dict[str, FrozenSet[str]] = {
 SCHEMA_SOURCE: Dict[str, str] = {
     "LE": "vLEI Governance Framework v1.0; Provenant demo (EJrcLKzq...)",
     "APE": "Pending - accept any until governance publishes",
-    "DE": "Pending - accept any until governance publishes",
+    "DE": "Provenant demo DE schema (EL7irIKYJ...)",
     "TNAlloc": "Pending - accept any until governance publishes",
 }
 

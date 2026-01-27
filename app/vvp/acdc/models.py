@@ -67,8 +67,8 @@ class ACDC:
             if self.edges:
                 if "vetting" in self.edges or "le" in self.edges:
                     return "APE"  # Auth Phone Entity
-                if "delegation" in self.edges:
-                    return "DE"  # Delegate Entity
+                if "delegation" in self.edges or "issuer" in self.edges:
+                    return "DE"  # Delegate Entity (delegation or issuer edge)
                 # TNAlloc typically has JL/jurisdiction edge to parent
                 if "jl" in self.edges or "jurisdiction" in self.edges:
                     return "TNAlloc"
@@ -87,8 +87,8 @@ class ACDC:
         if self.edges:
             if "vetting" in self.edges or "le" in self.edges:
                 return "APE"  # Auth Phone Entity
-            if "delegation" in self.edges:
-                return "DE"  # Delegate Entity
+            if "delegation" in self.edges or "issuer" in self.edges:
+                return "DE"  # Delegate Entity (delegation or issuer edge)
 
         return "unknown"
 
