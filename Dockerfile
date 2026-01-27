@@ -5,8 +5,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && rm -rf /var/lib/apt/lists/*
 WORKDIR /srv
 COPY pyproject.toml /srv/pyproject.toml
-RUN pip install --no-cache-dir -U pip && pip install --no-cache-dir .
 COPY app /srv/app
+RUN pip install --no-cache-dir -U pip && pip install --no-cache-dir .
 COPY web /srv/web
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8000
