@@ -34,6 +34,7 @@ from .api_models import (
     derive_overall_status,
     DelegationChainResponse,
     DelegationNodeResponse,
+    ToIPWarningDetail,
 )
 from .header import parse_vvp_identity, VVPIdentity
 from .passport import parse_passport, validate_passport_binding, Passport
@@ -880,6 +881,12 @@ async def verify_vvp(
                     if acdc_signatures:
                         dossier_claim.add_evidence(f"cesr_sigs={len(acdc_signatures)}")
 
+                    # Log ToIP spec warnings (non-blocking)
+                    if dag.warnings:
+                        for w in dag.warnings:
+                            log.info(f"ToIP warning: {w.code.value} - {w.message}")
+                        dossier_claim.add_evidence(f"toip_warnings={len(dag.warnings)}")
+
                     # §5.1.1-2.7: Store in cache on successful parse/validate
                     contained_saids = set(dag.nodes.keys())
                     cached_dossier = CachedDossier(
@@ -1413,6 +1420,19 @@ async def verify_vvp(
     claims = [root_claim]
     overall_status = derive_overall_status(claims, errors if errors else None)
 
+    # Convert ToIP warnings from dag to API response format
+    toip_warnings = None
+    if dag and dag.warnings:
+        toip_warnings = [
+            ToIPWarningDetail(
+                code=w.code.value,
+                message=w.message,
+                said=w.said,
+                field_path=w.field_path,
+            )
+            for w in dag.warnings
+        ]
+
     return request_id, VerifyResponse(
         request_id=request_id,
         overall_status=overall_status,
@@ -1421,4 +1441,5 @@ async def verify_vvp(
         has_variant_limitations=has_variant_limitations,
         delegation_chain=delegation_chain_data,
         signer_aid=signer_aid,
+        toip_warnings=toip_warnings,
     )

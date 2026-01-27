@@ -15,7 +15,7 @@ from .cache import (
 )
 from .exceptions import DossierError, FetchError, GraphError, ParseError
 from .fetch import fetch_dossier
-from .models import ACDCNode, DossierDAG
+from .models import ACDCNode, DossierDAG, DossierWarning, ToIPWarningCode
 from .parser import parse_acdc, parse_dossier
 from .validator import build_dag, detect_cycle, find_root, validate_dag
 
@@ -28,6 +28,8 @@ __all__ = [
     # Models
     "ACDCNode",
     "DossierDAG",
+    "DossierWarning",
+    "ToIPWarningCode",
     # Cache
     "CachedDossier",
     "CacheMetrics",

@@ -1,5 +1,70 @@
 # VVP Verifier Change Log
 
+## ToIP Dossier Specification Warnings
+
+**Date:** 2026-01-27
+**Commit:** 64ef545
+
+### Files Changed
+
+| File | Action | Description |
+|------|--------|-------------|
+| `app/vvp/dossier/models.py` | Modified | Added `ToIPWarningCode` enum (6 codes) and `DossierWarning` dataclass; added `warnings` field to `DossierDAG` |
+| `app/vvp/dossier/validator.py` | Modified | Added `_collect_toip_warnings()` and 6 helper functions for warning detection |
+| `app/vvp/dossier/__init__.py` | Modified | Exported `DossierWarning` and `ToIPWarningCode` |
+| `app/vvp/api_models.py` | Modified | Added `ToIPWarningDetail` model and `toip_warnings` field to `VerifyResponse` |
+| `app/vvp/verify.py` | Modified | Propagate DAG warnings to API response with logging |
+| `app/Documentation/VVP_Verifier_Specification_v1.5.md` | Modified | Added §6.1C Edge Structure, §6.1D Dossier Versioning, updated §5A Step 8 |
+| `tests/test_dossier.py` | Modified | Added `TestToIPWarnings` class with 15 test cases |
+| `app/Documentation/PLAN_ToIP_Warnings.md` | Created | Archived implementation plan |
+
+### Summary
+
+Implemented non-blocking warnings for ToIP Verifiable Dossiers Specification v0.6 compliance. Where ToIP requirements are stricter than VVP, warnings are emitted but verification is not failed. This provides transparency for dossier producers without breaking compatibility.
+
+**Warning Codes:**
+
+| Code | Condition |
+|------|-----------|
+| `EDGE_MISSING_SCHEMA` | Edge has `n` but no `s` (schema SAID) |
+| `EDGE_NON_OBJECT_FORMAT` | Edge is direct SAID string, not `{n,s}` object |
+| `DOSSIER_HAS_ISSUEE` | Root dossier ACDC has issuee (`a.i`) or registry (`ri`) field |
+| `DOSSIER_HAS_PREV_EDGE` | Dossier has `prev` edge indicating versioning |
+| `EVIDENCE_IN_ATTRIBUTES` | Evidence-like data in attributes (`a`) instead of edges (`e`) |
+| `JOINT_ISSUANCE_OPERATOR` | Joint issuance operators (`thr`/`fin`/`rev`) detected |
+
+**Key Design Decisions:**
+
+1. **Non-blocking warnings**: Warnings do not affect validation result per §6.1C-D
+2. **DAG-level collection**: Warnings collected during `validate_dag()` and stored on `DossierDAG.warnings`
+3. **API propagation**: Warnings serialized to `VerifyResponse.toip_warnings` as optional array
+4. **Immutable warnings**: `DossierWarning` is a frozen dataclass for thread safety
+
+**Spec Updates:**
+
+- §6.1C Edge Structure: Documents ToIP edge format requirements and warning behavior
+- §6.1D Dossier Versioning: Documents `prev` edge handling and SHOULD requirements
+- §5A Step 8: Added two-layer verification model (cryptographic vs semantic)
+
+### Checklist Items Completed
+
+- ToIP warning infrastructure added to dossier validation layer
+- API response extended with `toip_warnings` field (backwards compatible)
+- VVP Specification v1.5 updated with new sections
+
+### Test Results
+
+```
+1214 passed, 19 warnings in 66.90s
+```
+
+### Review History
+
+- Rev 0: CHANGES_REQUESTED - Missing `prev` edge warning, no warning for direct SAID strings
+- Rev 1: APPROVED - Added `DOSSIER_HAS_PREV_EDGE` and `EDGE_NON_OBJECT_FORMAT` codes
+
+---
+
 ## Sprint 25: Delegation Chain UI Visibility
 
 **Date:** 2026-01-27

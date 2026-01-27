@@ -232,6 +232,19 @@ class DelegationChainResponse(BaseModel):
 # §4.3 Response Models
 # =============================================================================
 
+class ToIPWarningDetail(BaseModel):
+    """ToIP Verifiable Dossiers Specification warning detail.
+
+    These warnings indicate non-compliance with ToIP stricter requirements
+    but do NOT fail VVP verification. Per VVP Spec §6.1C-D.
+    """
+
+    code: str
+    message: str
+    said: Optional[str] = None
+    field_path: Optional[str] = None
+
+
 class VerifyResponse(BaseModel):
     """Response schema for /verify endpoint per §4.2, §4.3
 
@@ -248,7 +261,10 @@ class VerifyResponse(BaseModel):
             resolves a delegated identifier (Sprint 25). None for non-delegated.
         signer_aid: AID of the PASSporT signer (extracted from kid). Used for
             credential-to-delegation mapping in UI (Sprint 25).
+        toip_warnings: ToIP Verifiable Dossiers Specification compliance warnings.
+            These are informational only and do not affect verification status.
     """
+
     request_id: str
     overall_status: ClaimStatus
     claims: Optional[List[ClaimNode]] = None
@@ -256,6 +272,7 @@ class VerifyResponse(BaseModel):
     has_variant_limitations: bool = False
     delegation_chain: Optional[DelegationChainResponse] = None
     signer_aid: Optional[str] = None
+    toip_warnings: Optional[List[ToIPWarningDetail]] = None
 
 
 # =============================================================================

@@ -521,16 +521,31 @@ Failure: `PASSPORT_SIG_INVALID` error, `signature_valid` claim INVALID.
 
 ### Step 8: Dossier Validation (§5.1.1-2.8)
 
-If dossier requires validation:
+Dossier validation comprises two layers (per ToIP Verifiable Dossiers Specification §4.5):
 
-- MUST verify signature on each ACDC in dossier against issuer key state at issuance time (§5.1.1-2.8.1)
+**Layer 1: Cryptographic Validation (Universal)**
+
+This layer is application-agnostic and verifies the integrity of the dossier structure:
+
+- MUST verify SAID integrity for the dossier ACDC and all evidence ACDCs
+- MUST verify signature on each ACDC against issuer key state at issuance time (§5.1.1-2.8.1)
 - Key state proven by KEL, checked against independent witnesses (§5.1.1-2.8.2)
 - Issuance recorded explicitly in KEL event sequence
+- MUST validate DAG structure (no cycles, valid root per §6.1)
+
+Failure: `ACDC_SAID_MISMATCH`, `ACDC_PROOF_MISSING`, or `DOSSIER_GRAPH_INVALID` error.
+
+**Layer 2: Semantic Validation (Application-Specific)**
+
+This layer applies VVP-specific rules to interpret the dossier contents:
+
 - MUST validate data structures against declared schema (§5.1.1-2.8.3)
 - MUST perform full traversal of cryptographically verifiable evidence chain to root of trust
 - MUST verify correct relationships among evidence artifacts
+- MUST verify edge labels correspond to expected VVP credential types (TNAlloc, LegalEntity, Brand, etc.)
+- SHOULD verify schema SAIDs match VVP-defined credential schemas
 
-Failure: `ACDC_SAID_MISMATCH`, `ACDC_PROOF_MISSING`, or `DOSSIER_GRAPH_INVALID` error.
+Note: A generic dossier verifier can perform Layer 1 for any dossier, but Layer 2 requires VVP-specific business logic. This separation enables reusable cryptographic validation while allowing application-specific interpretation.
 
 ### Step 9: Revocation Status Check (§5.1.1-2.9)
 
@@ -750,7 +765,15 @@ Per VVP §5.4, the verification algorithm supports evaluation at arbitrary past 
 
 ### 6.1 Dossier Graph
 
-The dossier is a **directed acyclic graph (DAG)**.
+A **dossier** is itself a valid ACDC that serves as a **curator's attestation** over a collection of evidence. The dossier ACDC's `e` (edges) block references other ACDCs that constitute the evidence graph. (Reference: ToIP Verifiable Dossiers Specification v0.6)
+
+Key distinctions:
+- **Dossier ACDC** (root): Issued by the party assembling evidence; typically has NO issuee
+- **Evidence ACDCs** (leaves): Credentials with issuees (e.g., TNAlloc, LegalEntity, Brand)
+
+The issuer's signature attests to the **composition and integrity** of the collection, not necessarily the veracity of claims within the individual evidence items. This issuer-centric model distinguishes a dossier from a traditional credential.
+
+The dossier forms a **directed acyclic graph (DAG)**:
 
 - Cycles are INVALID and MUST yield the error code DOSSIER_GRAPH_INVALID.
 - The graph root MUST be explicit (the `root` field). If multiple entry points exist and no single root can be selected deterministically, the dossier MUST be treated as invalid (DOSSIER_GRAPH_INVALID), unless local policy explicitly supports multiple roots by returning multiple root claims.
@@ -805,6 +828,61 @@ class ACDCNode:
   - maximum response size
 - SAID recomputation MUST be performed using the **most compact form** algorithm. (spec-body.md: "Most compact form SAID")
 - Verifiers MUST support valid ACDC variants (compact / partial / aggregate) and MUST NOT require a fully expanded JSON representation. (spec-body.md: "ACDC Variants")
+
+---
+
+### 6.1C Edge Structure (Normative)
+
+Each edge in the dossier's `e` (edges) block links to evidence ACDCs. Per the ToIP Verifiable Dossiers Specification, edges MUST be structured as follows:
+
+```json
+"e": {
+  "d": "EaBc...",
+  "tnAlloc": {
+    "n": "EXyz...",
+    "s": "ESchemaAbc..."
+  },
+  "legalEntity": {
+    "n": "ELei...",
+    "s": "ESchemaDef..."
+  }
+}
+```
+
+Edge field requirements:
+- `d` (REQUIRED): SAID of the edges block itself
+- Each named edge (e.g., `tnAlloc`, `legalEntity`) MUST be a JSON object containing:
+  - `n` (REQUIRED): SAID of the referenced ACDC (the evidence artifact)
+  - `s` (RECOMMENDED): SAID of the schema to which the referenced ACDC conforms
+
+The `s` field enables verifiers to correctly parse and interpret the evidence. Verifiers SHOULD log a warning when `s` is absent but MUST NOT reject the dossier solely for this reason.
+
+Evidence placement:
+- Evidence MUST be referenced via edges in the `e` block
+- The `a` (attributes) block is for **proximate metadata** about the dossier itself, NOT for evidence
+- Verifiers SHOULD log a warning if evidence-like structures appear in the `a` block
+
+---
+
+### 6.1D Dossier Versioning (Informative)
+
+A dossier MAY link to a prior version via a `prev` edge in the edges block. This creates a verifiable chain of the dossier's history. (Reference: ToIP Verifiable Dossiers Specification §4.1.3)
+
+```json
+"e": {
+  "d": "EaBc...",
+  "prev": {
+    "n": "EPriorDossierSaid...",
+    "s": "EDossierSchema..."
+  },
+  "tnAlloc": { ... }
+}
+```
+
+For VVP real-time call verification:
+- Verifiers MAY ignore the `prev` edge and process only the current dossier version
+- Version traversal is primarily relevant for audit, compliance, and forensic scenarios
+- If `prev` is present, verifiers SHOULD record its presence in verification logs
 
 ---
 

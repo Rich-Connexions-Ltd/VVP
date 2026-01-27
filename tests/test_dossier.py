@@ -20,9 +20,11 @@ from app.vvp.dossier import (
     ACDCNode,
     DossierDAG,
     DossierError,
+    DossierWarning,
     FetchError,
     GraphError,
     ParseError,
+    ToIPWarningCode,
     build_dag,
     detect_cycle,
     find_root,
@@ -908,3 +910,260 @@ class TestCESRSignatureExtraction:
         assert nodes[0].said == "ESAID_TEST_123"
         assert "ESAID_TEST_123" in signatures
         assert signatures["ESAID_TEST_123"] == b"signature_bytes_64_chars_padded_to_match_ed25519_length_here___"
+
+
+# =============================================================================
+# ToIP Verifiable Dossiers Specification Warnings (§6.1C-D)
+# =============================================================================
+
+
+class TestToIPWarnings:
+    """Tests for ToIP Verifiable Dossiers spec warnings.
+
+    These warnings are informational and do NOT fail validation.
+    Per VVP Spec §6.1C-D.
+    """
+
+    def test_edge_missing_schema_warning(self):
+        """Edge with 'n' but no 's' generates EDGE_MISSING_SCHEMA warning."""
+        acdc = {
+            "d": "ESAID_ROOT",
+            "i": "EISSUER",
+            "s": "ESCHEMA",
+            "e": {"d": "ESAID_E_BLOCK", "child": {"n": "ECHILD_SAID"}},  # No 's' field
+        }
+        nodes, _ = parse_dossier(json.dumps(acdc).encode())
+        dag = build_dag(nodes)
+        validate_dag(dag)
+
+        assert len(dag.warnings) >= 1
+        schema_warnings = [w for w in dag.warnings if w.code == ToIPWarningCode.EDGE_MISSING_SCHEMA]
+        assert len(schema_warnings) == 1
+        assert "child" in schema_warnings[0].message
+        assert schema_warnings[0].field_path == "e.child"
+
+    def test_edge_with_schema_no_warning(self):
+        """Edge with both 'n' and 's' generates no EDGE_MISSING_SCHEMA warning."""
+        acdc = {
+            "d": "ESAID_ROOT",
+            "i": "EISSUER",
+            "s": "ESCHEMA",
+            "e": {"d": "ESAID_E_BLOCK", "child": {"n": "ECHILD_SAID", "s": "ECHILD_SCHEMA"}},
+        }
+        nodes, _ = parse_dossier(json.dumps(acdc).encode())
+        dag = build_dag(nodes)
+        validate_dag(dag)
+
+        # Should have no EDGE_MISSING_SCHEMA warnings
+        schema_warnings = [w for w in dag.warnings if w.code == ToIPWarningCode.EDGE_MISSING_SCHEMA]
+        assert len(schema_warnings) == 0
+
+    def test_root_issuee_warning(self):
+        """Root ACDC with issuee field (a.i) generates DOSSIER_HAS_ISSUEE warning."""
+        acdc = {
+            "d": "ESAID_ROOT",
+            "i": "EISSUER",
+            "s": "ESCHEMA",
+            "a": {"i": "EISSUEE_AID", "name": "Test"},  # Has issuee in attributes
+        }
+        nodes, _ = parse_dossier(json.dumps(acdc).encode())
+        dag = build_dag(nodes)
+        validate_dag(dag)
+
+        issuee_warnings = [w for w in dag.warnings if w.code == ToIPWarningCode.DOSSIER_HAS_ISSUEE]
+        assert len(issuee_warnings) == 1
+        assert "a.i" in issuee_warnings[0].field_path
+
+    def test_root_registry_id_warning(self):
+        """Root ACDC with ri field generates DOSSIER_HAS_ISSUEE warning."""
+        acdc = {
+            "d": "ESAID_ROOT",
+            "i": "EISSUER",
+            "s": "ESCHEMA",
+            "ri": "EREGISTRY_SAID",
+        }
+        nodes, _ = parse_dossier(json.dumps(acdc).encode())
+        dag = build_dag(nodes)
+        validate_dag(dag)
+
+        ri_warnings = [w for w in dag.warnings if w.code == ToIPWarningCode.DOSSIER_HAS_ISSUEE]
+        assert len(ri_warnings) == 1
+        assert ri_warnings[0].field_path == "ri"
+
+    def test_evidence_in_attributes_warning(self):
+        """Evidence-like field in attributes generates EVIDENCE_IN_ATTRIBUTES warning."""
+        acdc = {
+            "d": "ESAID_ROOT",
+            "i": "EISSUER",
+            "s": "ESCHEMA",
+            "a": {"name": "Test", "proof_digest": "abc123"},  # Evidence-like field
+        }
+        nodes, _ = parse_dossier(json.dumps(acdc).encode())
+        dag = build_dag(nodes)
+        validate_dag(dag)
+
+        evidence_warnings = [w for w in dag.warnings if w.code == ToIPWarningCode.EVIDENCE_IN_ATTRIBUTES]
+        assert len(evidence_warnings) == 1
+        assert "proof_digest" in evidence_warnings[0].message
+
+    def test_joint_issuance_operator_warning(self):
+        """Joint issuance operator in rules generates JOINT_ISSUANCE_OPERATOR warning."""
+        acdc = {
+            "d": "ESAID_ROOT",
+            "i": "EISSUER",
+            "s": "ESCHEMA",
+            "r": {"thr": {"n": 2, "m": 3}},  # Threshold operator
+        }
+        nodes, _ = parse_dossier(json.dumps(acdc).encode())
+        dag = build_dag(nodes)
+        validate_dag(dag)
+
+        joint_warnings = [w for w in dag.warnings if w.code == ToIPWarningCode.JOINT_ISSUANCE_OPERATOR]
+        assert len(joint_warnings) == 1
+        assert "thr" in joint_warnings[0].message
+
+    def test_warnings_do_not_fail_validation(self):
+        """Multiple warnings should NOT cause validation to fail."""
+        # ACDC with multiple warning conditions
+        acdc = {
+            "d": "ESAID_ROOT",
+            "i": "EISSUER",
+            "s": "ESCHEMA",
+            "a": {"i": "EISSUEE", "signature_hash": "data"},  # issuee + evidence-like
+            "e": {"d": "ESAID_E", "child": {"n": "ECHILD"}},  # missing schema
+            "ri": "EREGISTRY",  # registry ID
+            "r": {"fin": {}},  # finalization operator
+        }
+        nodes, _ = parse_dossier(json.dumps(acdc).encode())
+        dag = build_dag(nodes)
+
+        # Should NOT raise - warnings are non-blocking
+        validate_dag(dag)
+
+        # But should have multiple warnings
+        assert len(dag.warnings) >= 4
+        assert dag.root_said == "ESAID_ROOT"
+
+    def test_non_root_issuee_no_warning(self):
+        """Non-root ACDC with issuee should NOT generate DOSSIER_HAS_ISSUEE warning."""
+        data = [
+            {
+                "d": "ESAID_ROOT",
+                "i": "EISSUER",
+                "s": "ESCHEMA",
+                "e": {"d": "ESAID_E", "child": {"n": "ESAID_CHILD", "s": "ESCH"}},
+            },
+            {
+                "d": "ESAID_CHILD",
+                "i": "EISSUER",
+                "s": "ESCHEMA",
+                "a": {"i": "EISSUEE"},  # Child has issuee - OK for evidence credentials
+            },
+        ]
+        nodes, _ = parse_dossier(json.dumps(data).encode())
+        dag = build_dag(nodes)
+        validate_dag(dag)
+
+        # The child's issuee should NOT generate a warning
+        issuee_warnings = [w for w in dag.warnings if w.code == ToIPWarningCode.DOSSIER_HAS_ISSUEE]
+        assert len(issuee_warnings) == 0
+
+    def test_warning_has_said(self):
+        """Warnings should include the SAID of the credential that triggered them."""
+        acdc = {
+            "d": "ESAID_SPECIFIC",
+            "i": "EISSUER",
+            "s": "ESCHEMA",
+            "e": {"d": "ESAID_E", "child": {"n": "ECHILD"}},
+        }
+        nodes, _ = parse_dossier(json.dumps(acdc).encode())
+        dag = build_dag(nodes)
+        validate_dag(dag)
+
+        assert len(dag.warnings) >= 1
+        for w in dag.warnings:
+            assert w.said == "ESAID_SPECIFIC"
+
+    def test_dossier_dag_warnings_field_default(self):
+        """DossierDAG.warnings should default to empty list."""
+        dag = DossierDAG()
+        assert dag.warnings == []
+
+    def test_dossier_warning_is_frozen(self):
+        """DossierWarning should be immutable (frozen dataclass)."""
+        warning = DossierWarning(
+            code=ToIPWarningCode.EDGE_MISSING_SCHEMA,
+            message="Test warning",
+            said="ESAID",
+            field_path="e.test",
+        )
+        with pytest.raises(Exception):  # FrozenInstanceError or AttributeError
+            warning.message = "Changed"
+
+    def test_edge_direct_said_string_warning(self):
+        """Edge as direct SAID string generates EDGE_NON_OBJECT_FORMAT warning."""
+        acdc = {
+            "d": "ESAID_ROOT",
+            "i": "EISSUER",
+            "s": "ESCHEMA",
+            "e": {"d": "ESAID_E_BLOCK", "child": "ECHILD_SAID_DIRECT"},  # Direct string, not {n,s}
+        }
+        nodes, _ = parse_dossier(json.dumps(acdc).encode())
+        dag = build_dag(nodes)
+        validate_dag(dag)
+
+        string_warnings = [w for w in dag.warnings if w.code == ToIPWarningCode.EDGE_NON_OBJECT_FORMAT]
+        assert len(string_warnings) == 1
+        assert "child" in string_warnings[0].message
+        assert "direct SAID string" in string_warnings[0].message
+        assert string_warnings[0].field_path == "e.child"
+
+    def test_edge_object_format_no_string_warning(self):
+        """Edge as proper object format should NOT generate EDGE_NON_OBJECT_FORMAT warning."""
+        acdc = {
+            "d": "ESAID_ROOT",
+            "i": "EISSUER",
+            "s": "ESCHEMA",
+            "e": {"d": "ESAID_E_BLOCK", "child": {"n": "ECHILD_SAID", "s": "ESCHEMA_CHILD"}},
+        }
+        nodes, _ = parse_dossier(json.dumps(acdc).encode())
+        dag = build_dag(nodes)
+        validate_dag(dag)
+
+        string_warnings = [w for w in dag.warnings if w.code == ToIPWarningCode.EDGE_NON_OBJECT_FORMAT]
+        assert len(string_warnings) == 0
+
+    def test_prev_edge_warning(self):
+        """Dossier with 'prev' edge generates DOSSIER_HAS_PREV_EDGE warning."""
+        acdc = {
+            "d": "ESAID_ROOT",
+            "i": "EISSUER",
+            "s": "ESCHEMA",
+            "e": {
+                "d": "ESAID_E_BLOCK",
+                "prev": {"n": "ESAID_PREVIOUS_VERSION", "s": "ESCHEMA"},
+            },
+        }
+        nodes, _ = parse_dossier(json.dumps(acdc).encode())
+        dag = build_dag(nodes)
+        validate_dag(dag)
+
+        prev_warnings = [w for w in dag.warnings if w.code == ToIPWarningCode.DOSSIER_HAS_PREV_EDGE]
+        assert len(prev_warnings) == 1
+        assert "prev" in prev_warnings[0].message
+        assert prev_warnings[0].field_path == "e.prev"
+
+    def test_no_prev_edge_no_warning(self):
+        """Dossier without 'prev' edge should NOT generate DOSSIER_HAS_PREV_EDGE warning."""
+        acdc = {
+            "d": "ESAID_ROOT",
+            "i": "EISSUER",
+            "s": "ESCHEMA",
+            "e": {"d": "ESAID_E_BLOCK", "child": {"n": "ECHILD", "s": "ESCHEMA"}},
+        }
+        nodes, _ = parse_dossier(json.dumps(acdc).encode())
+        dag = build_dag(nodes)
+        validate_dag(dag)
+
+        prev_warnings = [w for w in dag.warnings if w.code == ToIPWarningCode.DOSSIER_HAS_PREV_EDGE]
+        assert len(prev_warnings) == 0
