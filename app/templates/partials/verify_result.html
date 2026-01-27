@@ -1,0 +1,128 @@
+{# Verification Result Display with Delegation Chain #}
+{#
+   Sprint 25: Full verification result display including:
+   - Overall status banner
+   - Delegation chain banner (when present)
+   - Validation summary
+   - Credential cards with delegation info
+   - Error buckets
+
+   Context variables:
+   - verify_response: VerifyResponse from verify_vvp()
+   - credential_vms: List of CredentialCardViewModel
+   - dossier_vm: DossierViewModel with validation summary
+   - delegation_info: DelegationChainInfo (dossier-level)
+   - error: Error message string (if verification failed)
+#}
+{% if error %}
+<div class="alert alert-danger">
+    <strong>Verification Error</strong>
+    <p>{{ error }}</p>
+</div>
+{% else %}
+
+{# Overall Status Banner #}
+{% if verify_response %}
+<div class="verify-banner {{ verify_response.overall_status.value | lower }}" style="padding:1rem;margin-bottom:1rem;border-radius:0.5rem;{% if verify_response.overall_status.value == 'VALID' %}background:rgba(40,167,69,0.15);border:1px solid rgba(40,167,69,0.4);{% elif verify_response.overall_status.value == 'INVALID' %}background:rgba(220,53,69,0.15);border:1px solid rgba(220,53,69,0.4);{% else %}background:rgba(255,193,7,0.15);border:1px solid rgba(255,193,7,0.4);{% endif %}">
+    <h3 style="margin:0;display:flex;align-items:center;gap:0.5rem;">
+        {% if verify_response.overall_status.value == 'VALID' %}
+        <span style="color:#28a745;">&#x2713;</span>
+        {% elif verify_response.overall_status.value == 'INVALID' %}
+        <span style="color:#dc3545;">&#x2717;</span>
+        {% else %}
+        <span style="color:#ffc107;">?</span>
+        {% endif %}
+        Verification: <span class="badge badge-{{ 'success' if verify_response.overall_status.value == 'VALID' else ('danger' if verify_response.overall_status.value == 'INVALID' else 'warning') }}">{{ verify_response.overall_status.value }}</span>
+    </h3>
+    {% if verify_response.has_variant_limitations %}
+    <small style="color:var(--vvp-text-muted, #6c757d);">Some credentials have variant limitations (compact/partial)</small>
+    {% endif %}
+</div>
+{% endif %}
+
+{# Delegation Banner (when present at dossier level) #}
+{% if delegation_info and delegation_info.depth > 0 %}
+<div class="delegation-banner" style="padding:0.75rem;margin-bottom:1rem;border-radius:0.5rem;background:rgba(23,162,184,0.1);border:1px solid rgba(23,162,184,0.3);">
+    <strong style="display:flex;align-items:center;gap:0.5rem;">
+        <span style="font-size:1.2em;">&#x1F517;</span>
+        Delegated Identity
+        <span class="badge badge-info">Depth {{ delegation_info.depth }}</span>
+        {% if delegation_info.is_valid %}
+        <span class="badge badge-success">Chain Valid</span>
+        {% elif delegation_info.chain and delegation_info.chain[0].authorization_status == 'INVALID' %}
+        <span class="badge badge-danger">Chain Invalid</span>
+        {% else %}
+        <span class="badge badge-warning">Chain Indeterminate</span>
+        {% endif %}
+    </strong>
+    <div style="margin-top:0.5rem;font-size:0.9em;color:var(--vvp-text-muted, #6c757d);">
+        The signer's identity is established through a {{ delegation_info.depth }}-level delegation chain.
+    </div>
+    {# Inline delegation chain visualization #}
+    <div class="chain-path" style="display:flex;flex-wrap:wrap;align-items:center;gap:0.5rem;margin-top:0.5rem;">
+        {% for node in delegation_info.chain %}
+        <div class="chain-node" style="padding:0.25rem 0.5rem;background:{% if node.is_root %}rgba(40,167,69,0.1){% else %}rgba(0,0,0,0.05){% endif %};border-radius:0.25rem;font-size:0.85em;">
+            {% if node.display_name %}<strong>{{ node.display_name }}</strong> {% endif %}
+            <code style="font-size:0.8em;">{{ node.aid_short }}</code>
+            {% if node.is_root %}<span class="badge badge-success" style="font-size:0.7em;margin-left:0.25rem;">ROOT</span>{% endif %}
+        </div>
+        {% if not loop.last %}<span style="color:var(--vvp-text-muted, #6c757d);">&#x2192;</span>{% endif %}
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+{# Dossier Validation Summary #}
+{% if dossier_vm and dossier_vm.validation_summary %}
+{% with summary=dossier_vm.validation_summary %}
+{% include "partials/validation_summary.html" %}
+{% endwith %}
+{% endif %}
+
+{# Error Buckets #}
+{% if dossier_vm and dossier_vm.error_buckets %}
+{% with error_buckets=dossier_vm.error_buckets %}
+{% include "partials/error_buckets.html" %}
+{% endwith %}
+{% endif %}
+
+{# Credential Cards #}
+{% if credential_vms %}
+<h4 style="margin-top:1.5rem;">Credentials ({{ credential_vms | length }})</h4>
+<div style="display:flex;flex-wrap:wrap;gap:1rem;">
+    {% for vm in credential_vms %}
+    {% include "partials/credential_card.html" %}
+    {% endfor %}
+</div>
+{% elif verify_response %}
+<div class="alert alert-info" style="margin-top:1rem;">
+    <p>No dossier credentials available for display. The verification result is based on PASSporT validation only.</p>
+</div>
+{% endif %}
+
+{# Claim Tree (collapsible) #}
+{% if verify_response and verify_response.claims %}
+<details style="margin-top:1.5rem;">
+    <summary>Claim Tree ({{ verify_response.claims | length }} root claims)</summary>
+    <div class="code-block" style="margin-top:0.5rem;padding:1rem;background:var(--vvp-bg-code, #f8f9fa);border-radius:0.25rem;overflow-x:auto;">
+        <pre style="margin:0;white-space:pre-wrap;">{{ verify_response.claims | tojson(indent=2) }}</pre>
+    </div>
+</details>
+{% endif %}
+
+{# Verification Errors #}
+{% if verify_response and verify_response.errors %}
+<details style="margin-top:1rem;" open>
+    <summary style="color:var(--vvp-danger, #dc3545);">Verification Errors ({{ verify_response.errors | length }})</summary>
+    <ul style="margin-top:0.5rem;">
+        {% for err in verify_response.errors %}
+        <li>
+            <code>{{ err.code }}</code>: {{ err.message }}
+            {% if err.recoverable %}<span class="badge badge-warning" style="font-size:0.7em;">Recoverable</span>{% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+</details>
+{% endif %}
+
+{% endif %}

@@ -181,6 +181,54 @@ ERROR_RECOVERABILITY: Dict[str, bool] = {
 
 
 # =============================================================================
+# Sprint 25: Delegation Chain Response Models
+# =============================================================================
+
+
+class DelegationNodeResponse(BaseModel):
+    """Single node in delegation chain for API response.
+
+    Represents one identifier in a multi-level delegation chain from
+    leaf (delegated) to root (non-delegated).
+
+    Attributes:
+        aid: Full AID string.
+        aid_short: Truncated AID for display (first 16 chars + "...").
+        display_name: Human-readable name if resolved from LE credential.
+        is_root: True if this is the non-delegated root of the chain.
+        authorization_status: Authorization check result - VALID, INVALID, or INDETERMINATE.
+    """
+
+    aid: str
+    aid_short: str
+    display_name: Optional[str] = None
+    is_root: bool = False
+    authorization_status: str = "INDETERMINATE"
+
+
+class DelegationChainResponse(BaseModel):
+    """Complete delegation chain for API response.
+
+    Provides visibility into multi-level KERI delegation validation.
+    The chain runs from the delegated identifier (leaf) to the
+    non-delegated root.
+
+    Attributes:
+        chain: List of DelegationNodeResponse from leaf to root.
+        depth: Number of delegation levels (0 = non-delegated).
+        root_aid: AID of the non-delegated root.
+        is_valid: True if entire chain validates (authorization passed).
+        errors: List of validation error messages.
+    """
+
+    chain: List[DelegationNodeResponse] = Field(default_factory=list)
+    depth: int = 0
+    root_aid: Optional[str] = None
+    is_valid: bool = False
+    errors: List[str] = Field(default_factory=list)
+
+
+# =============================================================================
 # §4.3 Response Models
 # =============================================================================
 
@@ -196,12 +244,18 @@ class VerifyResponse(BaseModel):
             that may limit verification completeness (per §1.4). When True,
             some claims may be INDETERMINATE due to unverifiable external refs
             or redacted fields.
+        delegation_chain: Delegation chain details when Tier 2 verification
+            resolves a delegated identifier (Sprint 25). None for non-delegated.
+        signer_aid: AID of the PASSporT signer (extracted from kid). Used for
+            credential-to-delegation mapping in UI (Sprint 25).
     """
     request_id: str
     overall_status: ClaimStatus
     claims: Optional[List[ClaimNode]] = None
     errors: Optional[List[ErrorDetail]] = None
     has_variant_limitations: bool = False
+    delegation_chain: Optional[DelegationChainResponse] = None
+    signer_aid: Optional[str] = None
 
 
 # =============================================================================

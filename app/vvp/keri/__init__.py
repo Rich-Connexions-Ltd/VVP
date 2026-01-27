@@ -15,7 +15,11 @@ from .exceptions import (
     OOBIContentInvalidError,
 )
 from .key_parser import parse_kid_to_verkey, VerificationKey
-from .signature import verify_passport_signature, verify_passport_signature_tier2
+from .signature import (
+    verify_passport_signature,
+    verify_passport_signature_tier2,
+    verify_passport_signature_tier2_with_key_state,
+)
 from .kel_resolver import KeyState, resolve_key_state, resolve_key_state_tier1_fallback
 from .kel_parser import KELEvent, WitnessReceipt, EventType, parse_kel_stream, validate_kel_chain
 from .oobi import OOBIResult, dereference_oobi
@@ -37,6 +41,7 @@ __all__ = [
     "verify_passport_signature",
     # Tier 2
     "verify_passport_signature_tier2",
+    "verify_passport_signature_tier2_with_key_state",
     "KeyState",
     "resolve_key_state",
     "resolve_key_state_tier1_fallback",

@@ -1,0 +1,31 @@
+{# Error/Warning Buckets per §2.2 #}
+{#
+   Separates INVALID (errors) from INDETERMINATE (warnings) for clear display.
+   Each bucket is collapsible with remediation hints where available.
+
+   Per VVP spec §2.2:
+   - INVALID means verification definitively failed
+   - INDETERMINATE means verification could not be completed
+
+   Context variables:
+   - error_buckets: List of ErrorBucket objects
+#}
+{% for bucket in error_buckets %}
+{% if bucket.items %}
+<details class="error-bucket {{ bucket.bucket_type }}" open>
+    <summary>
+        {% if bucket.bucket_type == 'error' %}&#x26A0;{% else %}&#x2139;{% endif %}
+        {{ bucket.title }} ({{ bucket.items | length }})
+    </summary>
+    <ul class="bucket-items">
+        {% for item in bucket.items %}
+        <li>
+            <span>{{ item.message }}</span>
+            {% if item.spec_ref %}<small style="color:var(--vvp-muted);">({{ item.spec_ref }})</small>{% endif %}
+            {% if item.remedy_hint %}<div class="item-remedy">&#x2192; {{ item.remedy_hint }}</div>{% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+</details>
+{% endif %}
+{% endfor %}

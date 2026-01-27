@@ -15,10 +15,29 @@ Per Sprint 21 plan (PLAN_Credential_Card_UI.md):
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from app.core.config import TRUSTED_ROOT_AIDS
 from app.vvp.acdc.models import ACDC, ACDCChainResult
+
+
+# =============================================================================
+# Sprint 24: Evidence Status Enum
+# =============================================================================
+
+
+class EvidenceStatus(str, Enum):
+    """Evidence fetch status values.
+
+    Used consistently across EvidenceFetchRecord, timeline rendering, and CSS badges.
+    Per Sprint 24 plan: normalized status enum for evidence retrieval operations.
+    """
+
+    SUCCESS = "SUCCESS"  # Fetch succeeded
+    FAILED = "FAILED"  # Fetch failed with error
+    CACHED = "CACHED"  # Served from cache
+    INDETERMINATE = "INDETERMINATE"  # Could not determine (e.g., schema unavailable)
 
 
 # =============================================================================
@@ -129,6 +148,8 @@ class VariantLimitations:
         redacted_fields: Field names that have placeholder values.
         is_compact: True if attributes is a SAID reference (not expanded).
         is_partial: True if some fields have placeholder values.
+        verification_impact: Impact description (e.g., "Status INDETERMINATE per §2.2").
+        remediation_hints: List of suggested actions to resolve limitations.
     """
 
     has_variant_limitations: bool = False
@@ -136,6 +157,8 @@ class VariantLimitations:
     redacted_fields: List[str] = field(default_factory=list)
     is_compact: bool = False
     is_partial: bool = False
+    verification_impact: Optional[str] = None
+    remediation_hints: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -178,6 +201,227 @@ class VCardInfo:
     raw_lines: List[str] = field(default_factory=list)
 
 
+# =============================================================================
+# Sprint 24: Validation & Evidence View-Model Dataclasses
+# =============================================================================
+
+
+@dataclass
+class ValidationCheckResult:
+    """Single validation check result for dashboard strip.
+
+    Represents one category of validation (Signature, Schema, Chain, etc.)
+    with its outcome and display metadata.
+
+    Attributes:
+        name: Check category name (e.g., "Signature", "Schema", "Delegation").
+        status: VALID, INVALID, or INDETERMINATE.
+        short_reason: Brief reason for the status.
+        spec_ref: VVP spec section reference (e.g., "§5.0").
+        severity: CSS class key: "success", "error", or "warning".
+    """
+
+    name: str
+    status: str
+    short_reason: str
+    spec_ref: Optional[str] = None
+    severity: str = "success"
+
+
+@dataclass
+class ValidationSummary:
+    """Top-level validation dashboard aggregating all checks.
+
+    Provides an at-a-glance summary of validation outcomes across
+    all categories (chain, schema, revocation, delegation, etc.).
+
+    Attributes:
+        checks: List of individual ValidationCheckResult items.
+        overall_status: Worst status across all checks (INVALID > INDETERMINATE > VALID).
+        failure_count: Number of INVALID checks.
+        warning_count: Number of INDETERMINATE checks.
+    """
+
+    checks: List[ValidationCheckResult] = field(default_factory=list)
+    overall_status: str = "VALID"
+    failure_count: int = 0
+    warning_count: int = 0
+
+
+@dataclass
+class ErrorBucketItem:
+    """Single error or warning with optional remediation hint.
+
+    Used to display actionable error information in the UI.
+
+    Attributes:
+        message: Error or warning message.
+        spec_ref: VVP spec section reference (e.g., "§2.2").
+        remedy_hint: Suggested action to resolve the issue.
+    """
+
+    message: str
+    spec_ref: Optional[str] = None
+    remedy_hint: Optional[str] = None
+
+
+@dataclass
+class ErrorBucket:
+    """Grouped errors (INVALID) or warnings (INDETERMINATE).
+
+    Per §2.2, INDETERMINATE is semantically different from INVALID.
+    This dataclass separates them for clear UI display.
+
+    Attributes:
+        title: Bucket header ("Failures" or "Uncertainties").
+        bucket_type: CSS class key: "error" or "warning".
+        items: List of ErrorBucketItem in this bucket.
+    """
+
+    title: str
+    bucket_type: str
+    items: List[ErrorBucketItem] = field(default_factory=list)
+
+
+@dataclass
+class SchemaValidationInfo:
+    """Schema validation details for a credential.
+
+    Provides visibility into schema validation status, registry source,
+    and any field-level validation errors.
+
+    Attributes:
+        schema_said: Schema SAID (self-addressing identifier).
+        registry_source: Source of schema ("GLEIF", "Pending", "Fetched").
+        validation_status: VALID, INVALID, or INDETERMINATE.
+        has_governance: True if schema is in governance registry.
+        field_errors: List of field-level validation errors.
+        validated_count: Number of fields that passed validation.
+        total_required: Total required fields in schema.
+    """
+
+    schema_said: str
+    registry_source: str
+    validation_status: str
+    has_governance: bool = False
+    field_errors: List[str] = field(default_factory=list)
+    validated_count: int = 0
+    total_required: int = 0
+
+
+@dataclass
+class EvidenceFetchRecord:
+    """Single evidence fetch operation for timeline display.
+
+    Records details of each evidence retrieval operation for
+    debugging and transparency.
+
+    Attributes:
+        source_type: Type of evidence (OOBI, SCHEMA, TEL, DOSSIER, KEY_STATE).
+        url: Fetch URL or identifier.
+        status: Fetch outcome (uses EvidenceStatus enum).
+        latency_ms: Fetch latency in milliseconds.
+        cache_hit: True if served from cache.
+        cache_ttl_remaining: Seconds until cache expiry (if cached).
+        error: Error message if fetch failed.
+    """
+
+    source_type: str
+    url: str
+    status: EvidenceStatus
+    latency_ms: Optional[int] = None
+    cache_hit: bool = False
+    cache_ttl_remaining: Optional[int] = None
+    error: Optional[str] = None
+
+
+@dataclass
+class EvidenceTimeline:
+    """Timeline of all evidence fetch operations.
+
+    Aggregates fetch records for display in the UI evidence panel.
+
+    Attributes:
+        records: List of EvidenceFetchRecord in chronological order.
+        total_fetch_time_ms: Sum of all fetch latencies.
+        cache_hit_rate: Percentage of cache hits (0.0 to 1.0).
+        failed_count: Number of failed fetches.
+    """
+
+    records: List[EvidenceFetchRecord] = field(default_factory=list)
+    total_fetch_time_ms: int = 0
+    cache_hit_rate: float = 0.0
+    failed_count: int = 0
+
+
+@dataclass
+class DelegationNode:
+    """Node in a delegation chain visualization.
+
+    Represents one identifier in a multi-level delegation chain
+    from leaf (delegated) to root (non-delegated).
+
+    Attributes:
+        aid: Full AID string.
+        aid_short: Truncated AID for display.
+        display_name: Human-readable name if resolved.
+        is_root: True if this is the non-delegated root.
+        authorization_status: VALID, INVALID, or INDETERMINATE.
+    """
+
+    aid: str
+    aid_short: str
+    display_name: Optional[str] = None
+    is_root: bool = False
+    authorization_status: str = "INDETERMINATE"
+
+
+@dataclass
+class DelegationChainInfo:
+    """Complete delegation chain from leaf to root.
+
+    Provides visibility into multi-level delegation validation
+    for the UI delegation panel.
+
+    Attributes:
+        chain: List of DelegationNode from leaf to root.
+        depth: Number of delegation levels.
+        root_aid: AID of the non-delegated root.
+        is_valid: True if entire chain validates.
+        errors: List of validation errors.
+    """
+
+    chain: List[DelegationNode] = field(default_factory=list)
+    depth: int = 0
+    root_aid: Optional[str] = None
+    is_valid: bool = False
+    errors: List[str] = field(default_factory=list)
+
+
+@dataclass
+class DossierViewModel:
+    """Top-level view model for dossier display.
+
+    Aggregates all credentials with dossier-wide validation summary,
+    evidence timeline, and error buckets.
+
+    Attributes:
+        evd_url: Evidence URL where dossier was fetched from.
+        credentials: List of CredentialCardViewModel for each credential.
+        validation_summary: Dossier-wide validation summary.
+        evidence_timeline: Fetch timeline for all evidence retrieval.
+        error_buckets: Separated failures and uncertainties.
+        total_time_ms: Total processing time in milliseconds.
+    """
+
+    evd_url: str
+    credentials: List["CredentialCardViewModel"] = field(default_factory=list)
+    validation_summary: Optional[ValidationSummary] = None
+    evidence_timeline: Optional[EvidenceTimeline] = None
+    error_buckets: List[ErrorBucket] = field(default_factory=list)
+    total_time_ms: int = 0
+
+
 @dataclass
 class CredentialCardViewModel:
     """Normalized view model for credential card rendering.
@@ -201,6 +445,10 @@ class CredentialCardViewModel:
         raw: Original data for debug panel.
         raw_contents: All fields with tooltips for Raw Contents section.
         vcard: Parsed vCard data (if credential has vcard attribute).
+        chain_status: Explicit chain validation result (from ACDCChainResult.status).
+        schema_info: Schema validation details (Sprint 24).
+        delegation_info: Delegation chain info (Sprint 24).
+        validation_checks: Per-credential validation checks (Sprint 24).
     """
 
     said: str
@@ -218,6 +466,11 @@ class CredentialCardViewModel:
     raw: RawACDCData
     raw_contents: List[AttributeDisplay] = field(default_factory=list)
     vcard: Optional[VCardInfo] = None
+    # Sprint 24 additions
+    chain_status: str = "INDETERMINATE"
+    schema_info: Optional[SchemaValidationInfo] = None
+    delegation_info: Optional[DelegationChainInfo] = None
+    validation_checks: List[ValidationCheckResult] = field(default_factory=list)
 
 
 # =============================================================================
@@ -1237,4 +1490,267 @@ def build_credential_card_vm(
         raw=raw,
         raw_contents=raw_contents,
         vcard=vcard_info,
+        # Sprint 24: Explicit chain validation result for validation summary
+        chain_status=status,
     )
+
+
+# =============================================================================
+# Sprint 24: Validation Summary & Error Bucket Builders
+# =============================================================================
+
+
+def build_schema_info(
+    acdc: ACDC,
+    schema_doc: Optional[Dict[str, Any]],
+    errors: List[str],
+) -> SchemaValidationInfo:
+    """Build schema validation info from validation results.
+
+    Args:
+        acdc: Parsed ACDC credential.
+        schema_doc: Fetched schema document, or None if unavailable.
+        errors: List of schema validation error messages.
+
+    Returns:
+        SchemaValidationInfo with registry source and validation status.
+    """
+    from app.vvp.acdc.schema_registry import has_governance_schemas, is_known_schema
+
+    cred_type = acdc.credential_type
+    schema_said = acdc.schema_said
+
+    # Determine registry source
+    if has_governance_schemas(cred_type) and is_known_schema(cred_type, schema_said):
+        registry_source = "GLEIF"
+    elif schema_doc:
+        registry_source = "Fetched"
+    else:
+        registry_source = "Pending"
+
+    # Determine validation status
+    if errors:
+        validation_status = "INVALID"
+    elif schema_doc:
+        validation_status = "VALID"
+    else:
+        validation_status = "INDETERMINATE"
+
+    return SchemaValidationInfo(
+        schema_said=schema_said,
+        registry_source=registry_source,
+        validation_status=validation_status,
+        has_governance=has_governance_schemas(cred_type),
+        field_errors=errors,
+    )
+
+
+def build_validation_summary(
+    credential_vms: List[CredentialCardViewModel],
+) -> ValidationSummary:
+    """Aggregate validation checks across all credentials.
+
+    Creates a dossier-level summary by examining each credential's
+    chain_status, schema_info, and revocation state.
+
+    Args:
+        credential_vms: List of credential view models.
+
+    Returns:
+        ValidationSummary with aggregated checks and overall status.
+    """
+    checks: List[ValidationCheckResult] = []
+
+    # Chain validation - use explicit chain_status field (per reviewer feedback)
+    chain_statuses = [vm.chain_status for vm in credential_vms]
+    if "INVALID" in chain_statuses:
+        chain_result, severity = "INVALID", "error"
+    elif "INDETERMINATE" in chain_statuses:
+        chain_result, severity = "INDETERMINATE", "warning"
+    else:
+        chain_result, severity = "VALID", "success"
+
+    checks.append(
+        ValidationCheckResult(
+            name="Chain",
+            status=chain_result,
+            short_reason=f"{len(credential_vms)} credentials",
+            spec_ref="§5.1.1",
+            severity=severity,
+        )
+    )
+
+    # Schema validation - use schema_info.validation_status
+    schema_statuses = [
+        vm.schema_info.validation_status
+        for vm in credential_vms
+        if vm.schema_info
+    ]
+    if "INVALID" in schema_statuses:
+        schema_result, severity = "INVALID", "error"
+    elif "INDETERMINATE" in schema_statuses:
+        schema_result, severity = "INDETERMINATE", "warning"
+    elif schema_statuses:
+        schema_result, severity = "VALID", "success"
+    else:
+        schema_result, severity = "INDETERMINATE", "warning"
+
+    checks.append(
+        ValidationCheckResult(
+            name="Schema",
+            status=schema_result,
+            short_reason=f"{len(schema_statuses)} schemas",
+            spec_ref="§6.3",
+            severity=severity,
+        )
+    )
+
+    # Revocation
+    rev_states = [vm.revocation.state for vm in credential_vms]
+    if "REVOKED" in rev_states:
+        rev_status, severity = "INVALID", "error"
+    elif "UNKNOWN" in rev_states:
+        rev_status, severity = "INDETERMINATE", "warning"
+    else:
+        rev_status, severity = "VALID", "success"
+
+    checks.append(
+        ValidationCheckResult(
+            name="Revocation",
+            status=rev_status,
+            short_reason="TEL checked",
+            spec_ref="§5.1.1-2.9",
+            severity=severity,
+        )
+    )
+
+    # Calculate totals
+    failures = sum(1 for c in checks if c.severity == "error")
+    warnings = sum(1 for c in checks if c.severity == "warning")
+    overall = "INVALID" if failures else ("INDETERMINATE" if warnings else "VALID")
+
+    return ValidationSummary(
+        checks=checks,
+        overall_status=overall,
+        failure_count=failures,
+        warning_count=warnings,
+    )
+
+
+def build_delegation_chain_info(
+    delegation_response: Optional["DelegationChainResponse"],
+    issuer_identities: Optional[Dict[str, IssuerIdentity]] = None,
+) -> Optional[DelegationChainInfo]:
+    """Convert API DelegationChainResponse to UI DelegationChainInfo.
+
+    Sprint 25: Maps the API response model to the UI view model,
+    enriching nodes with resolved identity information from LE credentials.
+
+    Args:
+        delegation_response: API response from verify_vvp(), or None.
+        issuer_identities: Optional AID→IssuerIdentity mapping from
+            build_issuer_identity_map() for resolving display names.
+
+    Returns:
+        DelegationChainInfo for template rendering, or None if no delegation.
+    """
+    # Import here to avoid circular dependency
+    from app.vvp.api_models import DelegationChainResponse
+
+    if not delegation_response or not delegation_response.chain:
+        return None
+
+    nodes: List[DelegationNode] = []
+    for node in delegation_response.chain:
+        # Resolve display name from identity map
+        display_name = None
+        if issuer_identities and node.aid in issuer_identities:
+            display_name = issuer_identities[node.aid].legal_name
+
+        nodes.append(DelegationNode(
+            aid=node.aid,
+            aid_short=node.aid_short,
+            display_name=display_name,
+            is_root=node.is_root,
+            authorization_status=node.authorization_status,
+        ))
+
+    return DelegationChainInfo(
+        chain=nodes,
+        depth=delegation_response.depth,
+        root_aid=delegation_response.root_aid,
+        is_valid=delegation_response.is_valid,
+        errors=delegation_response.errors,
+    )
+
+
+def build_error_buckets(
+    credential_vms: List[CredentialCardViewModel],
+) -> List[ErrorBucket]:
+    """Separate errors and warnings into buckets with remediation hints.
+
+    Per §2.2:
+    - INVALID = definitively failed (error bucket)
+    - INDETERMINATE = could not complete (warning bucket)
+
+    Args:
+        credential_vms: List of credential view models.
+
+    Returns:
+        List of ErrorBucket (failures and uncertainties).
+    """
+    failures: List[ErrorBucketItem] = []
+    uncertainties: List[ErrorBucketItem] = []
+
+    for vm in credential_vms:
+        # Use chain_status for accurate chain-specific reporting
+        if vm.chain_status == "INVALID":
+            failures.append(
+                ErrorBucketItem(
+                    message=f"Credential {vm.said[:16]}... chain INVALID",
+                    spec_ref="§2.2",
+                )
+            )
+        elif vm.chain_status == "INDETERMINATE":
+            remedy = None
+            if vm.limitations.is_compact:
+                remedy = "Fetch expanded credential from issuer"
+            elif vm.limitations.missing_edge_targets:
+                remedy = f"Fetch missing: {vm.limitations.missing_edge_targets[0][:16]}..."
+            uncertainties.append(
+                ErrorBucketItem(
+                    message=f"Credential {vm.said[:16]}... chain INDETERMINATE",
+                    spec_ref="§2.2",
+                    remedy_hint=remedy,
+                )
+            )
+
+        # Schema validation errors
+        if vm.schema_info and vm.schema_info.validation_status == "INVALID":
+            for err in vm.schema_info.field_errors:
+                failures.append(
+                    ErrorBucketItem(
+                        message=f"Schema error in {vm.said[:16]}...: {err}",
+                        spec_ref="§6.3",
+                    )
+                )
+
+        # Revocation errors
+        if vm.revocation.state == "REVOKED":
+            failures.append(
+                ErrorBucketItem(
+                    message=f"Credential {vm.said[:16]}... has been REVOKED",
+                    spec_ref="§5.1.1-2.9",
+                )
+            )
+
+    buckets: List[ErrorBucket] = []
+    if failures:
+        buckets.append(
+            ErrorBucket(title="Failures", bucket_type="error", items=failures)
+        )
+    if uncertainties:
+        buckets.append(
+            ErrorBucket(title="Uncertainties", bucket_type="warning", items=uncertainties)
+        )
+    return buckets

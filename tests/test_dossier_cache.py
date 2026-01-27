@@ -773,7 +773,7 @@ class TestDossierCacheIntegration:
 
         # Mock other dependencies to allow verify_vvp to proceed
         with patch("app.vvp.verify.fetch_dossier", mock_fetch):
-            with patch("app.vvp.verify.verify_passport_signature_tier2"):
+            with patch("app.vvp.verify.verify_passport_signature_tier2_with_key_state", return_value=(MagicMock(aid="ETest...", delegation_chain=None), "VALID")):
                 with patch("app.vvp.keri.kel_resolver.resolve_key_state") as mock_key_state:
                     mock_ks = MagicMock()
                     mock_ks.signing_keys = [b"x" * 32]
@@ -876,7 +876,7 @@ class TestDossierCacheIntegration:
 
         # Mock other dependencies
         with patch("app.vvp.verify.fetch_dossier", mock_fetch):
-            with patch("app.vvp.verify.verify_passport_signature_tier2"):
+            with patch("app.vvp.verify.verify_passport_signature_tier2_with_key_state", return_value=(MagicMock(aid="ETest...", delegation_chain=None), "VALID")):
                 with patch("app.vvp.keri.kel_resolver.resolve_key_state") as mock_key_state:
                     mock_ks = MagicMock()
                     mock_ks.signing_keys = [b"x" * 32]

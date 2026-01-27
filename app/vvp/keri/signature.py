@@ -58,34 +58,18 @@ def verify_passport_signature(passport: Passport) -> None:
         )
 
 
-async def verify_passport_signature_tier2(
+async def _verify_passport_signature_tier2_impl(
     passport: Passport,
     reference_time: Optional[datetime] = None,
     oobi_url: Optional[str] = None,
     min_witnesses: Optional[int] = None,
     _allow_test_mode: bool = False
-) -> None:
-    """Verify PASSporT signature using historical key state (Tier 2).
+) -> tuple:
+    """Internal Tier 2 implementation returning (KeyState, authorization_status).
 
-    Resolves the key state at reference time T (default: passport iat),
-    validates the KEL chain, and verifies the signature against the
-    historical key state.
-
-    Per spec §5A Step 4: "Resolve issuer key state at reference time T"
-
-    For delegated identifiers (dip/drt events), this function also:
-    - Resolves the full delegation chain to the non-delegated root
-    - Validates each delegation is properly authorized by anchor events
-    Per KERI spec, delegated identifiers require authorization from their
-    delegator via an interaction event containing a seal.
-
-    WARNING: This function is TEST-ONLY. It does NOT support:
-    - CESR binary format (rejects application/json+cesr responses)
-    - KERI-compliant signature canonicalization (uses JSON sorted-keys)
-
-    These limitations mean it cannot verify real KERI events from production
-    witnesses. Enable TIER2_KEL_RESOLUTION_ENABLED only for testing with
-    synthetic fixtures.
+    Refactored as shared implementation per Sprint 25 plan to avoid duplication.
+    Both verify_passport_signature_tier2() and verify_passport_signature_tier2_with_key_state()
+    use this internal function.
 
     Args:
         passport: Parsed Passport with raw_header, raw_payload, signature.
@@ -93,6 +77,11 @@ async def verify_passport_signature_tier2(
         oobi_url: Optional OOBI URL for fetching KEL.
         min_witnesses: Minimum witness receipts required.
         _allow_test_mode: Internal flag to bypass feature gate in tests.
+
+    Returns:
+        Tuple of (KeyState, authorization_status) where:
+        - KeyState: Resolved key state with delegation_chain populated if delegated
+        - authorization_status: "VALID", "INVALID", or "INDETERMINATE"
 
     Raises:
         ResolutionFailedError: If TIER2_KEL_RESOLUTION_ENABLED is False.
@@ -130,6 +119,9 @@ async def verify_passport_signature_tier2(
         min_witnesses=min_witnesses,
         _allow_test_mode=_allow_test_mode
     )
+
+    # Track authorization status for delegation (VALID if non-delegated)
+    authorization_status = "VALID"
 
     # Validate delegation chain if this is a delegated identifier
     # Per KERI spec, delegated identifiers (dip/drt) must have their
@@ -202,23 +194,28 @@ async def verify_passport_signature_tier2(
 
                 if not is_authorized:
                     if auth_status == ClaimStatus.INVALID:
+                        authorization_status = "INVALID"
                         raise KELChainInvalidError(
                             f"Delegation not authorized: {'; '.join(auth_errors)}"
                         )
                     else:
                         # INDETERMINATE - delegator KEL may be incomplete
+                        authorization_status = "INDETERMINATE"
                         raise ResolutionFailedError(
                             f"Cannot verify delegation authorization: {'; '.join(auth_errors)}"
                         )
 
         except KELChainInvalidError:
             # Re-raise KEL chain errors as-is (maps to INVALID)
+            authorization_status = "INVALID"
             raise
         except ResolutionFailedError:
             # Re-raise resolution errors as-is (maps to INDETERMINATE)
+            authorization_status = "INDETERMINATE"
             raise
         except Exception as e:
             # Unexpected delegation error - wrap in ResolutionFailedError
+            authorization_status = "INDETERMINATE"
             raise ResolutionFailedError(
                 f"Delegation validation failed: {e}"
             )
@@ -249,3 +246,99 @@ async def verify_passport_signature_tier2(
             f"at reference time {reference_time.isoformat()} "
             f"(key state seq={key_state.sequence})"
         )
+
+    return key_state, authorization_status
+
+
+async def verify_passport_signature_tier2(
+    passport: Passport,
+    reference_time: Optional[datetime] = None,
+    oobi_url: Optional[str] = None,
+    min_witnesses: Optional[int] = None,
+    _allow_test_mode: bool = False
+) -> None:
+    """Verify PASSporT signature using historical key state (Tier 2).
+
+    Resolves the key state at reference time T (default: passport iat),
+    validates the KEL chain, and verifies the signature against the
+    historical key state.
+
+    Per spec §5A Step 4: "Resolve issuer key state at reference time T"
+
+    For delegated identifiers (dip/drt events), this function also:
+    - Resolves the full delegation chain to the non-delegated root
+    - Validates each delegation is properly authorized by anchor events
+    Per KERI spec, delegated identifiers require authorization from their
+    delegator via an interaction event containing a seal.
+
+    WARNING: This function is TEST-ONLY. It does NOT support:
+    - CESR binary format (rejects application/json+cesr responses)
+    - KERI-compliant signature canonicalization (uses JSON sorted-keys)
+
+    These limitations mean it cannot verify real KERI events from production
+    witnesses. Enable TIER2_KEL_RESOLUTION_ENABLED only for testing with
+    synthetic fixtures.
+
+    Args:
+        passport: Parsed Passport with raw_header, raw_payload, signature.
+        reference_time: Reference time T (defaults to passport.payload.iat).
+        oobi_url: Optional OOBI URL for fetching KEL.
+        min_witnesses: Minimum witness receipts required.
+        _allow_test_mode: Internal flag to bypass feature gate in tests.
+
+    Raises:
+        ResolutionFailedError: If TIER2_KEL_RESOLUTION_ENABLED is False.
+        SignatureInvalidError: Signature cryptographically invalid (→ INVALID).
+        KELChainInvalidError: KEL chain validation failed (→ INVALID).
+        KeyNotYetValidError: No valid key state at reference time (→ INVALID).
+        ResolutionFailedError: Could not resolve key state (→ INDETERMINATE).
+    """
+    # Delegate to shared implementation
+    await _verify_passport_signature_tier2_impl(
+        passport=passport,
+        reference_time=reference_time,
+        oobi_url=oobi_url,
+        min_witnesses=min_witnesses,
+        _allow_test_mode=_allow_test_mode
+    )
+
+
+async def verify_passport_signature_tier2_with_key_state(
+    passport: Passport,
+    reference_time: Optional[datetime] = None,
+    oobi_url: Optional[str] = None,
+    min_witnesses: Optional[int] = None,
+    _allow_test_mode: bool = False
+) -> tuple:
+    """Verify PASSporT signature and return KeyState with authorization status.
+
+    Sprint 25: Enables caller to access KeyState.delegation_chain and the
+    authorization outcome without catching exceptions. Used by UI endpoints
+    to surface delegation chain visualization.
+
+    Args:
+        passport: Parsed Passport with raw_header, raw_payload, signature.
+        reference_time: Reference time T (defaults to passport.payload.iat).
+        oobi_url: Optional OOBI URL for fetching KEL.
+        min_witnesses: Minimum witness receipts required.
+        _allow_test_mode: Internal flag to bypass feature gate in tests.
+
+    Returns:
+        Tuple of (KeyState, authorization_status) where:
+        - KeyState: Resolved key state with delegation_chain populated if delegated
+        - authorization_status: "VALID", "INVALID", or "INDETERMINATE"
+
+    Raises:
+        ResolutionFailedError: If TIER2_KEL_RESOLUTION_ENABLED is False.
+        SignatureInvalidError: Signature cryptographically invalid (→ INVALID).
+        KELChainInvalidError: KEL chain validation failed (→ INVALID).
+        KeyNotYetValidError: No valid key state at reference time (→ INVALID).
+        ResolutionFailedError: Could not resolve key state (→ INDETERMINATE).
+    """
+    return await _verify_passport_signature_tier2_impl(
+        passport=passport,
+        reference_time=reference_time,
+        oobi_url=oobi_url,
+        min_witnesses=min_witnesses,
+        _allow_test_mode=_allow_test_mode
+    )

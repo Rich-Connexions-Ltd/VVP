@@ -1,5 +1,82 @@
 # VVP Verifier Change Log
 
+## Sprint 25: Delegation Chain UI Visibility
+
+**Date:** 2026-01-27
+**Commit:** fe4eea6
+
+### Files Changed
+
+| File | Action | Description |
+|------|--------|-------------|
+| `app/vvp/api_models.py` | Modified | Added `DelegationNodeResponse`, `DelegationChainResponse` models; extended `VerifyResponse` with `delegation_chain` and `signer_aid` fields |
+| `app/vvp/keri/signature.py` | Modified | Refactored Tier 2 verification with shared `_verify_passport_signature_tier2_impl()`, added `verify_passport_signature_tier2_with_key_state()` |
+| `app/vvp/keri/__init__.py` | Modified | Exported `verify_passport_signature_tier2_with_key_state` |
+| `app/vvp/verify.py` | Modified | Added `_build_delegation_response()` helper, captures delegation chain and signer AID in verification flow |
+| `app/vvp/ui/credential_viewmodel.py` | Modified | Added `build_delegation_chain_info()` function for API→UI view model conversion |
+| `app/main.py` | Modified | Added `/ui/verify-result` endpoint with proper VVP-Identity header construction |
+| `app/templates/partials/verify_result.html` | Created | Verification result template with delegation chain visualization |
+| `tests/test_delegation_ui.py` | Created | 20 unit tests for delegation UI models and functions |
+| `tests/test_verify.py` | Modified | Updated mocks for new `verify_passport_signature_tier2_with_key_state` function |
+| `tests/test_dossier_cache.py` | Modified | Updated mocks for new function signature |
+| `tests/vectors/runner.py` | Modified | Updated mocks for new function signature |
+| `app/Documentation/PLAN_Sprint25.md` | Created | Archived implementation plan |
+
+### Summary
+
+Surfaces delegation chain information in the UI when verification results are available. The backend already computes delegation chain data during Tier 2 signature verification, but this data was previously lost.
+
+**Key Features:**
+
+1. **API Response Extension:**
+   - `DelegationNodeResponse` model for individual chain nodes
+   - `DelegationChainResponse` model for complete chain with validation status
+   - `VerifyResponse.delegation_chain` optional field (backwards compatible)
+   - `VerifyResponse.signer_aid` for credential-to-delegation mapping
+
+2. **Tier 2 Verification Refactor:**
+   - Shared `_verify_passport_signature_tier2_impl()` to avoid duplication
+   - New `verify_passport_signature_tier2_with_key_state()` returns (KeyState, auth_status)
+   - Proper INVALID vs INDETERMINATE status mapping based on authorization result
+
+3. **Delegation Status Mapping (per reviewer feedback):**
+   - `chain.valid=True, auth_status="VALID"` → VALID
+   - `chain.valid=True, auth_status="INVALID"` → INVALID (definitive failure)
+   - `chain.valid=True, auth_status="INDETERMINATE"` → INDETERMINATE (incomplete)
+   - `chain.valid=False` → INVALID (chain structure invalid)
+
+4. **UI Verify Result Endpoint (`/ui/verify-result`):**
+   - Parses PASSporT JWT to extract `kid` and `iat` for VVP-Identity header (§5.2)
+   - Performs full verification via `verify_vvp()`
+   - Builds delegation_info and attaches to credentials where issuer == signer_aid
+   - Returns delegation banner and chain visualization
+
+5. **Credential-to-Delegation Mapping:**
+   - Delegation applies to the PASSporT signer (kid AID)
+   - Attached to credentials where issuer AID matches signer AID
+   - Dossier-level banner shown when no credential matches
+
+### Checklist Items Completed
+
+- UI: Delegation chain visualization on verification results
+- API: Delegation chain data in VerifyResponse
+- Backend: Capture delegation data during Tier 2 verification
+
+### Test Results
+
+```
+1198 passed, 20 warnings in 69.86s
+```
+
+### Review History
+
+- Plan Rev 0: CHANGES_REQUESTED - Status mapping and credential mapping issues
+- Plan Rev 1: APPROVED
+- Code Rev 0: CHANGES_REQUESTED - VVP-Identity header used evd_url instead of kid
+- Code Rev 1 (Sprint 25.1): APPROVED - Fixed to parse PASSporT JWT for kid/iat
+
+---
+
 ## Sprint 24: UI Enhancement - Evidence, Validation & Schema Visibility
 
 **Date:** 2026-01-27

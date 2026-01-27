@@ -133,10 +133,14 @@ class VectorRunner:
         async def mock_verify_tier2(passport, oobi_url=None, _allow_test_mode=False):
             if sig_should_fail:
                 raise SignatureInvalidError("signature verification failed (mocked)")
-            return None
+            # Return tuple (KeyState, auth_status) for verify_passport_signature_tier2_with_key_state
+            mock_key_state = MagicMock()
+            mock_key_state.aid = "ETest123456789012345"
+            mock_key_state.delegation_chain = None
+            return (mock_key_state, "VALID")
 
         stack.enter_context(
-            patch("app.vvp.verify.verify_passport_signature_tier2", mock_verify_tier2)
+            patch("app.vvp.verify.verify_passport_signature_tier2_with_key_state", mock_verify_tier2)
         )
 
         # 5. Mock chain validation for Tier 1 vectors (no real ACDC validation)
@@ -184,7 +188,7 @@ class VectorRunner:
                 )
 
             stack.enter_context(
-                patch("app.vvp.verify.verify_passport_signature_tier2", mock_sig_verify_before_inception)
+                patch("app.vvp.verify.verify_passport_signature_tier2_with_key_state", mock_sig_verify_before_inception)
             )
 
         # 8b. Mock key state error (for v12 - key rotated before T)
@@ -200,7 +204,7 @@ class VectorRunner:
                 )
 
             stack.enter_context(
-                patch("app.vvp.verify.verify_passport_signature_tier2", mock_sig_verify_key_rotated)
+                patch("app.vvp.verify.verify_passport_signature_tier2_with_key_state", mock_sig_verify_key_rotated)
             )
 
         # 9. Mock SAID validation (for v07 - SAID mismatch)

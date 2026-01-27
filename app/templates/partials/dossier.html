@@ -23,6 +23,27 @@
 <h3>Dossier Contents</h3>
 <p><small>{{ (credential_vms or acdcs) | length }} credential(s) found{% if total_time %} &mdash; retrieved in {{ total_time }}s{% if fetch_time and fetch_time != total_time %} (fetch: {{ fetch_time }}s){% endif %}{% endif %}</small></p>
 
+{# Sprint 24: Dossier-level Validation Summary #}
+{% if dossier_vm and dossier_vm.validation_summary %}
+{% with summary=dossier_vm.validation_summary %}
+{% include "partials/validation_summary.html" %}
+{% endwith %}
+{% endif %}
+
+{# Sprint 24: Error Buckets #}
+{% if dossier_vm and dossier_vm.error_buckets %}
+{% with error_buckets=dossier_vm.error_buckets %}
+{% include "partials/error_buckets.html" %}
+{% endwith %}
+{% endif %}
+
+{# Sprint 24: Evidence Timeline #}
+{% if dossier_vm and dossier_vm.evidence_timeline %}
+{% with timeline=dossier_vm.evidence_timeline %}
+{% include "partials/evidence_timeline.html" %}
+{% endwith %}
+{% endif %}
+
 {% if credential_vms %}
 {# Sprint 21/22: Use view-model path for enhanced display #}
 <div style="display:flex;flex-wrap:wrap;gap:1rem;">

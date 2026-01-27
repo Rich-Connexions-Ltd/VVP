@@ -1,0 +1,48 @@
+{# Evidence Fetch Timeline #}
+{#
+   Displays timeline of evidence fetch operations with latency and cache metrics.
+   Auto-expands if there are failed fetches to highlight issues.
+
+   Uses EvidenceStatus enum values:
+   - SUCCESS: Fetch completed successfully
+   - CACHED: Served from cache (fast path)
+   - INDETERMINATE: Could not determine (schema unavailable, etc.)
+   - FAILED: Fetch failed with error
+
+   Context variables:
+   - timeline: EvidenceTimeline object with records list
+#}
+{% if timeline %}
+<details class="evidence-timeline" {% if timeline.failed_count > 0 %}open{% endif %}>
+    <summary>
+        Evidence Timeline
+        <span class="badge badge-muted">{{ timeline.records | length }}</span>
+        <span class="timeline-stats">{{ timeline.total_fetch_time_ms }}ms | {{ (timeline.cache_hit_rate * 100) | round(0) }}% cached</span>
+    </summary>
+    {# Legend for status badges (per reviewer recommendation) #}
+    <div style="font-size:0.75em;color:var(--vvp-muted);margin-bottom:0.5rem;">
+        <span class="badge badge-success" style="font-size:0.9em;">OK</span> Fetched
+        <span class="badge badge-info" style="font-size:0.9em;">CACHED</span> From cache
+        <span class="badge badge-warning" style="font-size:0.9em;">INDET</span> Unavailable
+        <span class="badge badge-danger" style="font-size:0.9em;">FAIL</span> Error
+    </div>
+    <table class="timeline-table">
+        <thead><tr><th>Type</th><th>URL</th><th>Status</th><th>Time</th></tr></thead>
+        <tbody>
+            {% for r in timeline.records %}
+            <tr>
+                <td><span class="badge badge-{{ r.source_type | lower }}">{{ r.source_type }}</span></td>
+                <td><code title="{{ r.url }}" style="font-size:0.75em;">{{ r.url[:35] }}{% if r.url | length > 35 %}...{% endif %}</code></td>
+                <td>
+                    {% if r.status.value == 'SUCCESS' %}<span class="badge badge-success">OK</span>
+                    {% elif r.status.value == 'CACHED' %}<span class="badge badge-info">CACHED</span>
+                    {% elif r.status.value == 'INDETERMINATE' %}<span class="badge badge-warning" title="{{ r.error or 'Unavailable' }}">INDET</span>
+                    {% else %}<span class="badge badge-danger" title="{{ r.error }}">FAIL</span>{% endif %}
+                </td>
+                <td>{{ r.latency_ms or '-' }}ms</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</details>
+{% endif %}

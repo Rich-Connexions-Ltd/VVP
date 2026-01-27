@@ -1,0 +1,34 @@
+{# Delegation Chain Visualization #}
+{#
+   Displays the multi-level delegation chain from leaf to root.
+   Visual flow: Leaf credential -> ... -> Root (non-delegated).
+   Auto-expands if chain validation failed.
+
+   Context variables:
+   - delegation_info: DelegationChainInfo object with chain list
+#}
+{% if delegation_info and delegation_info.depth > 0 %}
+<details class="delegation-chain" {% if not delegation_info.is_valid %}open{% endif %}>
+    <summary>
+        Delegation Chain
+        <span class="badge badge-{{ 'success' if delegation_info.is_valid else 'warning' }}">Depth {{ delegation_info.depth }}</span>
+    </summary>
+    <div class="chain-path">
+        {% for node in delegation_info.chain %}
+        <div class="chain-node {{ 'root' if node.is_root else '' }}">
+            {% if node.display_name %}<strong>{{ node.display_name }}</strong><br>{% endif %}
+            <code style="font-size:0.8em;">{{ node.aid_short }}</code>
+            <br><span class="badge badge-{{ 'success' if node.authorization_status == 'VALID' else 'warning' }}" style="font-size:0.7em;">{{ node.authorization_status }}</span>
+        </div>
+        {% if not loop.last %}<div class="chain-arrow">&#x2193;</div>{% endif %}
+        {% endfor %}
+    </div>
+    {% if delegation_info.errors %}
+    <div style="margin-top:0.5rem;padding:0.5rem;background:rgba(255,193,7,0.2);border-radius:0.25rem;">
+        <ul style="margin:0;padding-left:1rem;font-size:0.85em;">
+            {% for err in delegation_info.errors %}<li>{{ err }}</li>{% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+</details>
+{% endif %}

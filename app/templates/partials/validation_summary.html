@@ -1,0 +1,21 @@
+{# Validation Summary Dashboard Strip #}
+{#
+   Displays a horizontal strip of validation check results for quick overview.
+   Each check shows status (checkmark/X/?) with severity-based styling.
+
+   Context variables:
+   - summary: ValidationSummary object with checks list
+#}
+{% if summary %}
+<div class="validation-summary-strip">
+    {% for check in summary.checks %}
+    <div class="validation-check {{ check.severity }}" title="{{ check.short_reason }}{% if check.spec_ref %} ({{ check.spec_ref }}){% endif %}">
+        <span style="font-weight:bold;width:1.2em;">
+            {% if check.severity == 'success' %}&#x2713;{% elif check.severity == 'error' %}&#x2717;{% else %}?{% endif %}
+        </span>
+        <span>{{ check.name }}</span>
+        <span class="badge badge-{{ check.severity }}">{{ check.status }}</span>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}

@@ -1,0 +1,36 @@
+{# Schema Validation Panel #}
+{#
+   Displays schema validation status with registry source and field errors.
+   Auto-expands if there are validation errors to highlight issues.
+
+   Context variables:
+   - schema_info: SchemaValidationInfo object
+#}
+{% if schema_info %}
+<details class="schema-panel" {% if schema_info.field_errors %}open{% endif %}>
+    <summary>
+        Schema
+        <span class="badge badge-{{ 'success' if schema_info.validation_status == 'VALID' else ('danger' if schema_info.validation_status == 'INVALID' else 'warning') }}">{{ schema_info.validation_status }}</span>
+    </summary>
+    <dl class="attrs-grid">
+        <dt>SAID</dt>
+        <dd><code style="font-size:0.8em;">{{ schema_info.schema_said[:20] }}...</code></dd>
+        <dt>Registry</dt>
+        <dd><span class="badge badge-{{ 'success' if schema_info.has_governance else 'muted' }}">{{ schema_info.registry_source }}</span></dd>
+        {% if schema_info.total_required > 0 %}
+        <dt>Fields</dt>
+        <dd>{{ schema_info.validated_count }} / {{ schema_info.total_required }} validated</dd>
+        {% endif %}
+    </dl>
+    {% if schema_info.field_errors %}
+    <div class="schema-errors">
+        <small><strong>Errors:</strong></small>
+        <ul style="margin:0.25rem 0 0 1rem;padding:0;font-size:0.85em;">
+            {% for error in schema_info.field_errors %}
+            <li><code>{{ error }}</code></li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+</details>
+{% endif %}

@@ -32,12 +32,15 @@ from .api_models import (
     ErrorCode,
     ERROR_RECOVERABILITY,
     derive_overall_status,
+    DelegationChainResponse,
+    DelegationNodeResponse,
 )
 from .header import parse_vvp_identity, VVPIdentity
 from .passport import parse_passport, validate_passport_binding, Passport
 from .keri import (
     verify_passport_signature,
     verify_passport_signature_tier2,
+    verify_passport_signature_tier2_with_key_state,
     SignatureInvalidError,
     ResolutionFailedError,
     KeyNotYetValidError,
@@ -291,6 +294,56 @@ def _get_acdc_issuee(acdc: "ACDC") -> Optional[str]:
     if isinstance(attrs, dict):
         return attrs.get("i")
     return None
+
+
+def _build_delegation_response(
+    chain: "DelegationChain",
+    authorization_status: str,
+) -> DelegationChainResponse:
+    """Convert backend DelegationChain to API response model.
+
+    Sprint 25: Maps the internal DelegationChain dataclass to the API
+    response model for UI consumption.
+
+    Args:
+        chain: Backend DelegationChain from KeyState.
+        authorization_status: Result of validate_delegation_authorization():
+            - "VALID": Anchor found and signature verified
+            - "INVALID": Anchor signature invalid or missing SAID
+            - "INDETERMINATE": Delegator KEL unavailable
+
+    Note: Per reviewer finding, status mapping must distinguish definitive
+    failures (INVALID) from incomplete resolution (INDETERMINATE).
+
+    Returns:
+        DelegationChainResponse ready for API serialization.
+    """
+    # Determine per-node status: VALID if chain valid AND authorization passed
+    if chain.valid and authorization_status == "VALID":
+        node_status = "VALID"
+    elif authorization_status == "INVALID" or not chain.valid:
+        # Definitive failure: bad signature, missing SAID, or chain invalid
+        node_status = "INVALID"
+    else:
+        # Could not complete: delegator unavailable, KEL incomplete
+        node_status = "INDETERMINATE"
+
+    nodes = []
+    for aid in chain.delegates:
+        nodes.append(DelegationNodeResponse(
+            aid=aid,
+            aid_short=f"{aid[:16]}...",
+            is_root=(aid == chain.root_aid),
+            authorization_status=node_status,
+        ))
+
+    return DelegationChainResponse(
+        chain=nodes,
+        depth=len(chain.delegates) - 1 if chain.delegates else 0,
+        root_aid=chain.root_aid,
+        is_valid=(chain.valid and authorization_status == "VALID"),
+        errors=chain.errors,
+    )
 
 
 def _find_signer_de_credential(
@@ -661,6 +714,11 @@ async def verify_vvp(
     # Per §4.2, kid MUST be an OOBI URL. Bare AIDs are non-compliant and
     # result in INVALID status. When kid is an OOBI URL, we use Tier 2
     # verification with historical key state resolution.
+    #
+    # Sprint 25: Track delegation chain data for UI visualization
+    delegation_chain_data: Optional[DelegationChainResponse] = None
+    signer_aid: Optional[str] = None
+
     if passport and not passport_fatal:
         kid = passport.header.kid
         is_oobi_kid = kid.startswith(("http://", "https://"))
@@ -668,12 +726,24 @@ async def verify_vvp(
         try:
             if is_oobi_kid:
                 # Tier 2: Use historical key state resolution via OOBI
-                await verify_passport_signature_tier2(
+                # Sprint 25: Use _with_key_state variant to capture delegation chain
+                key_state, auth_status = await verify_passport_signature_tier2_with_key_state(
                     passport,
                     oobi_url=kid,
                     _allow_test_mode=False
                 )
                 passport_claim.add_evidence("signature_valid,tier2")
+
+                # Sprint 25: Capture signer AID for credential mapping
+                signer_aid = key_state.aid
+
+                # Sprint 25: Build delegation chain response if present
+                if key_state.delegation_chain and key_state.delegation_chain.delegates:
+                    delegation_chain_data = _build_delegation_response(
+                        key_state.delegation_chain,
+                        auth_status,
+                    )
+                    passport_claim.add_evidence(f"delegation_depth={delegation_chain_data.depth}")
             else:
                 # §4.2: kid MUST be an OOBI URL - bare AIDs are non-compliant
                 # Mark as INVALID rather than silently falling back to Tier 1
@@ -1285,4 +1355,6 @@ async def verify_vvp(
         claims=claims,
         errors=errors if errors else None,
         has_variant_limitations=has_variant_limitations,
+        delegation_chain=delegation_chain_data,
+        signer_aid=signer_aid,
     )

@@ -652,11 +652,24 @@ async def ui_fetch_dossier(
     from app.vvp.dossier.parser import parse_dossier
     from app.vvp.dossier import build_dag
     from app.vvp.acdc import parse_acdc
-    from app.vvp.ui.credential_viewmodel import build_credential_card_vm, build_issuer_identity_map_async
+    from app.vvp.ui.credential_viewmodel import (
+        build_credential_card_vm,
+        build_issuer_identity_map_async,
+        build_validation_summary,
+        build_error_buckets,
+        build_schema_info,
+        EvidenceStatus,
+        EvidenceFetchRecord,
+        EvidenceTimeline,
+        DossierViewModel,
+        ValidationCheckResult,
+    )
     from app.vvp.keri.tel_client import TELClient, CredentialStatus
 
     start_time = time.time()
     cache_hit = False
+    # Sprint 24: Track evidence fetch operations for timeline display
+    evidence_records: list[EvidenceFetchRecord] = []
 
     try:
         # Check dossier cache first (§5.1.1-2.7)
@@ -671,9 +684,19 @@ async def ui_fetch_dossier(
             nodes = list(cached.dag.nodes.values())
             signatures = {}  # Signatures not stored in cache
             log.info(f"UI dossier cache hit: {evd_url[:50]}...")
+            # Sprint 24: Record cache hit
+            evidence_records.append(EvidenceFetchRecord(
+                source_type="DOSSIER",
+                url=evd_url,
+                status=EvidenceStatus.CACHED,
+                latency_ms=0,
+                cache_hit=True,
+            ))
         else:
             # Cache miss - fetch from network
+            fetch_start = time.time()
             raw_bytes = await cached_fetch_dossier(evd_url)
+            fetch_latency = int((time.time() - fetch_start) * 1000)
             raw_text = raw_bytes.decode("utf-8")
             nodes, signatures = parse_dossier(raw_bytes)
 
@@ -689,6 +712,14 @@ async def ui_fetch_dossier(
             )
             await dossier_cache.put(evd_url, cached_dossier)
             log.info(f"UI dossier cached: {evd_url[:50]}... (saids={len(contained_saids)})")
+            # Sprint 24: Record fetch success
+            evidence_records.append(EvidenceFetchRecord(
+                source_type="DOSSIER",
+                url=evd_url,
+                status=EvidenceStatus.SUCCESS,
+                latency_ms=fetch_latency,
+                cache_hit=False,
+            ))
 
         fetch_elapsed = time.time() - start_time
 
@@ -701,12 +732,14 @@ async def ui_fetch_dossier(
         tel_client = TELClient(timeout=2.0)
         revocation_cache: dict[str, dict] = {}
         for node in nodes:
+            tel_start = time.time()
             try:
                 result = tel_client.parse_dossier_tel(
                     dossier_data=raw_text,
                     credential_said=node.said,
                     registry_said=node.raw.get("ri") if node.raw else None,
                 )
+                tel_latency = int((time.time() - tel_start) * 1000)
                 if result.status != CredentialStatus.UNKNOWN:
                     revocation_cache[node.said] = {
                         "status": result.status.value,
@@ -714,8 +747,35 @@ async def ui_fetch_dossier(
                         "source": result.source or "dossier",
                         "error": result.error,
                     }
+                    # Sprint 24: Record successful TEL parse
+                    evidence_records.append(EvidenceFetchRecord(
+                        source_type="TEL",
+                        url=f"tel:{node.said[:16]}...",
+                        status=EvidenceStatus.SUCCESS,
+                        latency_ms=tel_latency,
+                        cache_hit=False,
+                    ))
+                else:
+                    # Sprint 24: Record INDETERMINATE if no TEL data found
+                    evidence_records.append(EvidenceFetchRecord(
+                        source_type="TEL",
+                        url=f"tel:{node.said[:16]}...",
+                        status=EvidenceStatus.INDETERMINATE,
+                        latency_ms=tel_latency,
+                        cache_hit=False,
+                        error="No TEL data in dossier",
+                    ))
             except Exception as e:
                 log.debug(f"TEL parse failed for {node.said[:16]}: {e}")
+                # Sprint 24: Record failed TEL parse
+                evidence_records.append(EvidenceFetchRecord(
+                    source_type="TEL",
+                    url=f"tel:{node.said[:16]}...",
+                    status=EvidenceStatus.FAILED,
+                    latency_ms=int((time.time() - tel_start) * 1000),
+                    cache_hit=False,
+                    error=str(e),
+                ))
 
         # Build view-models for each credential (Sprint 21/22 enhanced display)
         credential_vms = []
@@ -766,6 +826,70 @@ async def ui_fetch_dossier(
                         available_saids=all_saids,
                         issuer_identities=issuer_identities,
                     )
+
+                    # Sprint 24: Build schema_info for each credential
+                    # Note: No schema doc fetching in UI path; use registry check only
+                    schema_start = time.time()
+                    schema_info = build_schema_info(acdc, schema_doc=None, errors=[])
+                    schema_latency = int((time.time() - schema_start) * 1000)
+                    vm.schema_info = schema_info
+
+                    # Sprint 24: Record schema evidence (registry check)
+                    evidence_records.append(EvidenceFetchRecord(
+                        source_type="SCHEMA",
+                        url=f"schema:{acdc.schema_said[:16]}...",
+                        status=(EvidenceStatus.SUCCESS if schema_info.has_governance
+                               else EvidenceStatus.INDETERMINATE),
+                        latency_ms=schema_latency,
+                        cache_hit=False,
+                        error=None if schema_info.has_governance else "Schema not in governance registry",
+                    ))
+
+                    # Sprint 24: Build per-credential validation_checks
+                    checks = []
+
+                    # Chain status check
+                    chain_severity = ("success" if vm.chain_status == "VALID"
+                                     else "error" if vm.chain_status == "INVALID"
+                                     else "warning")
+                    checks.append(ValidationCheckResult(
+                        name="Chain",
+                        status=vm.chain_status,
+                        short_reason="Credential chain",
+                        spec_ref="§5.1.1",
+                        severity=chain_severity,
+                    ))
+
+                    # Schema status check
+                    schema_severity = ("success" if schema_info.validation_status == "VALID"
+                                      else "error" if schema_info.validation_status == "INVALID"
+                                      else "warning")
+                    checks.append(ValidationCheckResult(
+                        name="Schema",
+                        status=schema_info.validation_status,
+                        short_reason=schema_info.registry_source,
+                        spec_ref="§6.3",
+                        severity=schema_severity,
+                    ))
+
+                    # Revocation status check
+                    rev_state = vm.revocation.state
+                    rev_severity = ("success" if rev_state == "ACTIVE"
+                                   else "error" if rev_state == "REVOKED"
+                                   else "warning")
+                    rev_status = ("VALID" if rev_state == "ACTIVE"
+                                 else "INVALID" if rev_state == "REVOKED"
+                                 else "INDETERMINATE")
+                    checks.append(ValidationCheckResult(
+                        name="Revocation",
+                        status=rev_status,
+                        short_reason=rev_state,
+                        spec_ref="§5.1.1-2.9",
+                        severity=rev_severity,
+                    ))
+
+                    vm.validation_checks = checks
+
                     credential_vms.append(vm)
                 except Exception as e:
                     log.warning(f"Failed to build view-model for {said[:16]}: {e}")
@@ -776,12 +900,42 @@ async def ui_fetch_dossier(
                 credential_vms.append(acdc_dict)
 
         total_elapsed = time.time() - start_time
+        total_elapsed_ms = int(total_elapsed * 1000)
+
+        # Sprint 24: Build evidence timeline from records
+        cache_hits = sum(1 for r in evidence_records if r.cache_hit)
+        failed_count = sum(1 for r in evidence_records if r.status == EvidenceStatus.FAILED)
+        evidence_timeline = EvidenceTimeline(
+            records=evidence_records,
+            total_fetch_time_ms=total_elapsed_ms,
+            cache_hit_rate=cache_hits / max(len(evidence_records), 1),
+            failed_count=failed_count,
+        )
+
+        # Sprint 24: Filter to only CredentialCardViewModel instances for validation summary
+        # (legacy dict fallbacks don't have the required fields)
+        vm_only = [vm for vm in credential_vms if hasattr(vm, "chain_status")]
+
+        # Sprint 24: Build validation summary and error buckets
+        validation_summary = build_validation_summary(vm_only) if vm_only else None
+        error_buckets = build_error_buckets(vm_only) if vm_only else []
+
+        # Sprint 24: Build top-level dossier view model
+        dossier_vm = DossierViewModel(
+            evd_url=evd_url,
+            credentials=vm_only,
+            validation_summary=validation_summary,
+            evidence_timeline=evidence_timeline,
+            error_buckets=error_buckets,
+            total_time_ms=total_elapsed_ms,
+        )
 
         return templates.TemplateResponse(
             "partials/dossier.html",
             {
                 "request": request,
                 "credential_vms": credential_vms,
+                "dossier_vm": dossier_vm,  # Sprint 24: top-level view model
                 "acdcs": acdcs_for_graph,  # Keep for graph building
                 "kid_url": kid_url,
                 "dossier_stream": raw_text,
@@ -1075,6 +1229,309 @@ async def ui_revocation_badge(
         return templates.TemplateResponse(
             "partials/revocation_badge.html",
             {"request": request, "revocation": revocation},
+        )
+
+
+@app.post("/ui/verify-result")
+async def ui_verify_result(
+    request: Request,
+    passport_jwt: str = Form(...),
+    evd_url: str = Form(""),
+    call_id: str = Form(""),
+):
+    """Perform full verification and return HTML with delegation chain info.
+
+    Sprint 25: Combines /verify with UI view-model building to surface:
+    - Complete claim tree
+    - Delegation chain visualization (if delegated identifier)
+    - Validation summary and error buckets
+    - Per-credential validation checks
+
+    The delegation chain is attached to credentials where the issuer AID
+    matches the signer AID (from PASSporT kid).
+    """
+    from app.vvp.api_models import (
+        VerifyRequest,
+        CallContext,
+    )
+    from app.vvp.header import parse_vvp_identity, VVPIdentity
+    from app.vvp.dossier.parser import parse_dossier
+    from app.vvp.dossier import build_dag
+    from app.vvp.acdc import parse_acdc
+    from app.vvp.ui.credential_viewmodel import (
+        build_credential_card_vm,
+        build_issuer_identity_map_async,
+        build_validation_summary,
+        build_error_buckets,
+        build_schema_info,
+        build_delegation_chain_info,
+        EvidenceStatus,
+        EvidenceFetchRecord,
+        EvidenceTimeline,
+        DossierViewModel,
+        ValidationCheckResult,
+    )
+    from app.vvp.keri.tel_client import TELClient, CredentialStatus
+
+    start_time = time.time()
+    evidence_records: list[EvidenceFetchRecord] = []
+
+    try:
+        # Sprint 25.1 fix: Parse PASSporT to extract kid for VVP-Identity header
+        # Per §5.2, the VVP-Identity kid must match the PASSporT kid
+        vvp_identity_header = None
+        passport_kid = None
+        passport_iat = None
+
+        try:
+            # Parse JWT to extract kid from header
+            jwt_parts = passport_jwt.split(".")
+            if len(jwt_parts) >= 2:
+                import base64
+                # Decode header
+                header_padded = jwt_parts[0] + "=" * (-len(jwt_parts[0]) % 4)
+                header_bytes = base64.urlsafe_b64decode(header_padded)
+                header_dict = json.loads(header_bytes)
+                passport_kid = header_dict.get("kid")
+
+                # Decode payload to get iat
+                payload_padded = jwt_parts[1] + "=" * (-len(jwt_parts[1]) % 4)
+                payload_bytes = base64.urlsafe_b64decode(payload_padded)
+                payload_dict = json.loads(payload_bytes)
+                passport_iat = payload_dict.get("iat")
+        except Exception as e:
+            log.warning(f"Failed to parse PASSporT for VVP-Identity: {e}")
+
+        # Build VVP-Identity header using PASSporT kid (not evd_url)
+        if passport_kid and evd_url:
+            vvp_identity_header = f"kid={passport_kid};ppt=vvp;evd={evd_url}"
+            if passport_iat:
+                vvp_identity_header += f";iat={passport_iat}"
+
+        # Build request
+        verify_req = VerifyRequest(
+            passport_jwt=passport_jwt,
+            context=CallContext(
+                call_id=call_id or "ui-verify",
+                received_at=datetime.now(timezone.utc).isoformat(),
+            )
+        )
+
+        # Run verification
+        verify_start = time.time()
+        req_id, verify_response = await verify_vvp(verify_req, vvp_identity_header)
+        verify_latency = int((time.time() - verify_start) * 1000)
+
+        evidence_records.append(EvidenceFetchRecord(
+            source_type="VERIFY",
+            url="/verify",
+            status=EvidenceStatus.SUCCESS if verify_response.overall_status.value != "INVALID" else EvidenceStatus.FAILED,
+            latency_ms=verify_latency,
+            cache_hit=False,
+        ))
+
+        # Parse dossier for credential display (if evd_url provided)
+        credential_vms = []
+        dossier_vm = None
+
+        if evd_url:
+            try:
+                # Fetch dossier
+                fetch_start = time.time()
+                raw_bytes = await cached_fetch_dossier(evd_url)
+                fetch_latency = int((time.time() - fetch_start) * 1000)
+                raw_text = raw_bytes.decode("utf-8")
+                nodes, signatures = parse_dossier(raw_bytes)
+
+                evidence_records.append(EvidenceFetchRecord(
+                    source_type="DOSSIER",
+                    url=evd_url,
+                    status=EvidenceStatus.SUCCESS,
+                    latency_ms=fetch_latency,
+                    cache_hit=False,
+                ))
+
+                # Collect all SAIDs for edge availability checking
+                all_saids = {node.said for node in nodes}
+
+                # Parse TEL data from dossier for revocation status
+                tel_client = TELClient(timeout=2.0)
+                revocation_cache: dict[str, dict] = {}
+                for node in nodes:
+                    try:
+                        result = tel_client.parse_dossier_tel(
+                            dossier_data=raw_text,
+                            credential_said=node.said,
+                            registry_said=node.raw.get("ri") if node.raw else None,
+                        )
+                        if result.status != CredentialStatus.UNKNOWN:
+                            revocation_cache[node.said] = {
+                                "status": result.status.value,
+                                "checked_at": datetime.now(timezone.utc).isoformat(),
+                                "source": result.source or "dossier",
+                                "error": result.error,
+                            }
+                    except Exception:
+                        pass
+
+                # Parse all ACDCs
+                parsed_acdcs = []
+                for node in nodes:
+                    acdc_dict = node.raw.copy() if node.raw else {}
+                    acdc_dict["d"] = node.said
+                    acdc_dict["i"] = node.issuer
+                    acdc_dict["s"] = node.schema
+                    if node.attributes:
+                        acdc_dict["a"] = node.attributes
+                    if node.edges:
+                        acdc_dict["e"] = node.edges
+
+                    try:
+                        acdc = parse_acdc(acdc_dict)
+                        parsed_acdcs.append((acdc, acdc_dict, node.said))
+                    except Exception as e:
+                        log.warning(f"Failed to parse ACDC {node.said[:16]}: {e}")
+
+                # Build issuer identity map
+                issuer_identities = await build_issuer_identity_map_async(
+                    [acdc for acdc, _, _ in parsed_acdcs if acdc is not None],
+                    oobi_url=evd_url if evd_url else None,
+                    discover_missing=True,
+                )
+
+                # Build delegation info from verify response
+                delegation_info = build_delegation_chain_info(
+                    verify_response.delegation_chain,
+                    issuer_identities,
+                )
+
+                # Build view-models for each credential
+                for acdc, acdc_dict, said in parsed_acdcs:
+                    if acdc is None:
+                        continue
+
+                    revocation_result = revocation_cache.get(said)
+
+                    try:
+                        vm = build_credential_card_vm(
+                            acdc=acdc,
+                            chain_result=None,
+                            revocation_result=revocation_result,
+                            available_saids=all_saids,
+                            issuer_identities=issuer_identities,
+                        )
+
+                        # Build schema info
+                        schema_info = build_schema_info(acdc, schema_doc=None, errors=[])
+                        vm.schema_info = schema_info
+
+                        # Sprint 25: Attach delegation_info to credentials where issuer == signer_aid
+                        if delegation_info and verify_response.signer_aid:
+                            if vm.issuer.aid == verify_response.signer_aid:
+                                vm.delegation_info = delegation_info
+
+                        # Build per-credential validation checks
+                        checks = []
+                        chain_severity = ("success" if vm.chain_status == "VALID"
+                                         else "error" if vm.chain_status == "INVALID"
+                                         else "warning")
+                        checks.append(ValidationCheckResult(
+                            name="Chain",
+                            status=vm.chain_status,
+                            short_reason="Credential chain",
+                            spec_ref="§5.1.1",
+                            severity=chain_severity,
+                        ))
+
+                        schema_severity = ("success" if schema_info.validation_status == "VALID"
+                                          else "error" if schema_info.validation_status == "INVALID"
+                                          else "warning")
+                        checks.append(ValidationCheckResult(
+                            name="Schema",
+                            status=schema_info.validation_status,
+                            short_reason=schema_info.registry_source,
+                            spec_ref="§6.3",
+                            severity=schema_severity,
+                        ))
+
+                        rev_state = vm.revocation.state
+                        rev_severity = ("success" if rev_state == "ACTIVE"
+                                       else "error" if rev_state == "REVOKED"
+                                       else "warning")
+                        rev_status = ("VALID" if rev_state == "ACTIVE"
+                                     else "INVALID" if rev_state == "REVOKED"
+                                     else "INDETERMINATE")
+                        checks.append(ValidationCheckResult(
+                            name="Revocation",
+                            status=rev_status,
+                            short_reason=rev_state,
+                            spec_ref="§5.1.1-2.9",
+                            severity=rev_severity,
+                        ))
+
+                        vm.validation_checks = checks
+                        credential_vms.append(vm)
+
+                    except Exception as e:
+                        log.warning(f"Failed to build view-model for {said[:16]}: {e}")
+
+                total_elapsed_ms = int((time.time() - start_time) * 1000)
+
+                # Build evidence timeline
+                cache_hits = sum(1 for r in evidence_records if r.cache_hit)
+                failed_count = sum(1 for r in evidence_records if r.status == EvidenceStatus.FAILED)
+                evidence_timeline = EvidenceTimeline(
+                    records=evidence_records,
+                    total_fetch_time_ms=total_elapsed_ms,
+                    cache_hit_rate=cache_hits / max(len(evidence_records), 1),
+                    failed_count=failed_count,
+                )
+
+                # Build validation summary and error buckets
+                validation_summary = build_validation_summary(credential_vms) if credential_vms else None
+                error_buckets = build_error_buckets(credential_vms) if credential_vms else []
+
+                # Build dossier view model
+                dossier_vm = DossierViewModel(
+                    evd_url=evd_url,
+                    credentials=credential_vms,
+                    validation_summary=validation_summary,
+                    evidence_timeline=evidence_timeline,
+                    error_buckets=error_buckets,
+                    total_time_ms=total_elapsed_ms,
+                )
+
+            except Exception as e:
+                log.error(f"Failed to fetch/parse dossier for verify-result: {e}")
+                evidence_records.append(EvidenceFetchRecord(
+                    source_type="DOSSIER",
+                    url=evd_url,
+                    status=EvidenceStatus.FAILED,
+                    error=str(e),
+                ))
+
+        return templates.TemplateResponse(
+            "partials/verify_result.html",
+            {
+                "request": request,
+                "verify_response": verify_response,
+                "credential_vms": credential_vms,
+                "dossier_vm": dossier_vm,
+                "delegation_info": build_delegation_chain_info(
+                    verify_response.delegation_chain,
+                    issuer_identities if 'issuer_identities' in dir() else None,
+                ) if verify_response.delegation_chain else None,
+            },
+        )
+
+    except Exception as e:
+        log.error(f"Verification failed: {e}")
+        return templates.TemplateResponse(
+            "partials/verify_result.html",
+            {
+                "request": request,
+                "error": str(e),
+            },
         )
 
 
