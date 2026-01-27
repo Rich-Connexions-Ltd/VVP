@@ -3,7 +3,7 @@
 ## Sprint 25: Delegation Chain UI Visibility
 
 **Date:** 2026-01-27
-**Commit:** fe4eea6
+**Commit:** d4df2ae
 
 ### Files Changed
 
