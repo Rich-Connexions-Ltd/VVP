@@ -1131,3 +1131,151 @@ class TestMultiLeafChainAggregation:
             # chain_verified should be INVALID (aggregate requires all chains)
             assert chain_claim is not None
             assert chain_claim.status == ClaimStatus.INVALID
+
+
+# =============================================================================
+# Issuer Identity Tests
+# =============================================================================
+
+
+class TestIssuerIdentitiesInResponse:
+    """Test issuer_identities field in VerifyResponse."""
+
+    @pytest.mark.asyncio
+    async def test_issuer_identities_populated_from_dossier(self):
+        """issuer_identities includes identities extracted from dossier credentials."""
+        from app.vvp.acdc import ACDCChainResult
+        from app.vvp.dossier.models import ACDCNode
+
+        context = CallContext(call_id="test-123", received_at="2024-01-01T00:00:00Z")
+
+        with (
+            patch("app.vvp.verify.parse_vvp_identity") as mock_vvp,
+            patch("app.vvp.verify.parse_passport") as mock_passport,
+            patch("app.vvp.verify.validate_passport_binding") as mock_binding,
+            patch("app.vvp.verify.verify_passport_signature_tier2_with_key_state") as mock_sig,
+            patch("app.vvp.verify.fetch_dossier") as mock_fetch,
+            patch("app.vvp.verify.parse_dossier") as mock_parse,
+            patch("app.vvp.verify.build_dag") as mock_build,
+            patch("app.vvp.verify.validate_dag") as mock_validate,
+            patch("app.vvp.verify._find_leaf_credentials") as mock_find_leaves,
+            patch("app.vvp.verify._convert_dag_to_acdcs") as mock_convert,
+            patch("app.vvp.acdc.validate_credential_chain") as mock_chain,
+            patch("app.vvp.verify.validate_authorization") as mock_auth,
+        ):
+            mock_vvp.return_value = MagicMock(evd="http://example.com/dossier")
+            signer_aid = "EAbc123456789012345"
+            mock_passport.return_value = MagicMock(
+                header=MagicMock(kid=f"http://witness.example.com/oobi/{signer_aid}/witness/EXyz"),
+                payload=MagicMock(orig={"tn": ["+15551234567"]}, card=None, goal=None)
+            )
+            mock_binding.return_value = None
+            mock_sig.return_value = (MagicMock(aid=signer_aid, delegation_chain=None), "VALID")
+            mock_fetch.return_value = b'[]'
+
+            # Create a node with identity info (legalName)
+            issuee_aid = "EIssuee12345678901234567890123456789012"
+            node = ACDCNode(
+                said="ESAID1234567890123456789012345678901234567",
+                issuer="EIssuer12345678901234567890123456789012",
+                schema="ESchema12345678901234567890123456789012",
+                attributes={"legalName": "Test Corp", "issuee": issuee_aid},
+                edges=None,
+                raw={"v": "ACDC10JSON", "a": {"legalName": "Test Corp", "issuee": issuee_aid}}
+            )
+            mock_parse.return_value = ([node], {})
+
+            # Mock DAG with the node
+            mock_dag = MagicMock()
+            mock_dag.root_said = node.said
+            mock_dag.is_aggregate = False
+            mock_dag.nodes = {node.said: node}
+            mock_build.return_value = mock_dag
+            mock_validate.return_value = None
+
+            mock_find_leaves.return_value = [node.said]
+
+            # Mock ACDC conversion
+            mock_acdc = MagicMock()
+            mock_acdc.said = node.said
+            mock_convert.return_value = {node.said: mock_acdc}
+
+            # Chain validation succeeds
+            mock_chain.return_value = ACDCChainResult(
+                chain=[mock_acdc],
+                root_aid="EGLEIF0000000000",
+                validated=True,
+                status="VALID",
+                has_variant_limitations=False
+            )
+
+            # Mock authorization
+            from app.vvp.authorization import AuthorizationClaimBuilder
+            mock_party = AuthorizationClaimBuilder("party_authorized")
+            mock_tn = AuthorizationClaimBuilder("tn_rights_valid")
+            mock_auth.return_value = (mock_party, mock_tn)
+
+            req = VerifyRequest(passport_jwt="test", context=context)
+            req_id, resp = await verify_vvp(req, "valid-header")
+
+            # issuer_identities should be populated
+            assert resp.issuer_identities is not None
+            assert issuee_aid in resp.issuer_identities
+            identity = resp.issuer_identities[issuee_aid]
+            assert identity.legal_name == "Test Corp"
+            assert identity.identity_source == "dossier"
+
+    @pytest.mark.asyncio
+    async def test_issuer_identities_none_when_dossier_empty(self):
+        """issuer_identities is None when dossier has no identity credentials."""
+        context = CallContext(call_id="test-123", received_at="2024-01-01T00:00:00Z")
+
+        with (
+            patch("app.vvp.verify.parse_vvp_identity") as mock_vvp,
+            patch("app.vvp.verify.parse_passport") as mock_passport,
+            patch("app.vvp.verify.validate_passport_binding") as mock_binding,
+            patch("app.vvp.verify.verify_passport_signature_tier2_with_key_state") as mock_sig,
+            patch("app.vvp.verify.fetch_dossier") as mock_fetch,
+            patch("app.vvp.verify.parse_dossier") as mock_parse,
+            patch("app.vvp.verify.build_dag") as mock_build,
+            patch("app.vvp.verify.validate_dag") as mock_validate,
+            patch("app.vvp.verify._find_leaf_credentials") as mock_find_leaves,
+            patch("app.vvp.verify._convert_dag_to_acdcs") as mock_convert,
+            patch("app.vvp.acdc.validate_credential_chain") as mock_chain,
+            patch("app.vvp.verify.validate_authorization") as mock_auth,
+        ):
+            mock_vvp.return_value = MagicMock(evd="http://example.com/dossier")
+            signer_aid = "EAbc123456789012345"
+            mock_passport.return_value = MagicMock(
+                header=MagicMock(kid=f"http://witness.example.com/oobi/{signer_aid}/witness/EXyz"),
+                payload=MagicMock(orig={"tn": ["+15551234567"]}, card=None, goal=None)
+            )
+            mock_binding.return_value = None
+            mock_sig.return_value = (MagicMock(aid=signer_aid, delegation_chain=None), "VALID")
+            mock_fetch.return_value = b'[]'
+            # Empty dossier - no credentials
+            mock_parse.return_value = ([], {})
+
+            # Empty DAG (no nodes)
+            mock_dag = MagicMock()
+            mock_dag.root_said = None
+            mock_dag.is_aggregate = False
+            mock_dag.nodes = {}  # Empty - no credentials
+            mock_build.return_value = mock_dag
+            mock_validate.return_value = None
+
+            mock_find_leaves.return_value = []
+            mock_convert.return_value = {}
+            mock_chain.return_value = None
+
+            # Mock authorization
+            from app.vvp.authorization import AuthorizationClaimBuilder
+            mock_party = AuthorizationClaimBuilder("party_authorized")
+            mock_tn = AuthorizationClaimBuilder("tn_rights_valid")
+            mock_auth.return_value = (mock_party, mock_tn)
+
+            req = VerifyRequest(passport_jwt="test", context=context)
+            req_id, resp = await verify_vvp(req, "valid-header")
+
+            # issuer_identities should be None when no identity credentials found
+            assert resp.issuer_identities is None
