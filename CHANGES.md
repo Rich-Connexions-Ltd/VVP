@@ -3,7 +3,7 @@
 ## Sprint 24: UI Enhancement - Evidence, Validation & Schema Visibility
 
 **Date:** 2026-01-27
-**Commit:** 57d9bfa
+**Commit:** cfdcce6
 
 ### Files Changed
 
