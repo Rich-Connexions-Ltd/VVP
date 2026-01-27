@@ -1114,9 +1114,9 @@ class TestOrigTnValidation:
             passport = parse_passport(jwt)
             assert passport.payload.orig["tn"] == [phone]
 
-    def test_orig_tn_non_e164_rejected(self):
-        """orig.tn[0] not in E.164 format → PASSPORT_PARSE_FAILED."""
-        invalid_numbers = [
+    def test_orig_tn_non_e164_warns(self):
+        """orig.tn[0] not in E.164 format → parses with warning."""
+        non_e164_numbers = [
             "12025551234",        # Missing +
             "+02025551234",       # Leading zero after +
             "2025551234",         # No country code
@@ -1126,14 +1126,15 @@ class TestOrigTnValidation:
             "+",                  # No digits
             "",                   # Empty
         ]
-        for phone in invalid_numbers:
+        for phone in non_e164_numbers:
             payload = valid_payload()
             payload["orig"] = {"tn": [phone]}  # Single-element array
             jwt = make_jwt(valid_header(), payload)
-            with pytest.raises(PassportError) as exc:
-                parse_passport(jwt)
-            assert exc.value.code == ErrorCode.PASSPORT_PARSE_FAILED
-            assert "E.164" in exc.value.message or "orig.tn" in exc.value.message
+            # Should parse successfully but with warning
+            passport = parse_passport(jwt)
+            assert passport.payload.orig["tn"] == [phone]
+            assert len(passport.warnings) > 0
+            assert any("E.164" in w for w in passport.warnings)
 
     def test_orig_tn_missing_rejected(self):
         """orig without tn field → PASSPORT_PARSE_FAILED."""
@@ -1186,15 +1187,16 @@ class TestDestTnValidation:
         assert exc.value.code == ErrorCode.PASSPORT_PARSE_FAILED
         assert "empty" in exc.value.message.lower()
 
-    def test_dest_tn_non_e164_rejected(self):
-        """dest.tn with invalid E.164 number → PASSPORT_PARSE_FAILED."""
+    def test_dest_tn_non_e164_warns(self):
+        """dest.tn with invalid E.164 number → parses with warning."""
         payload = valid_payload()
         payload["dest"] = {"tn": ["12025555678"]}  # Missing +
         jwt = make_jwt(valid_header(), payload)
-        with pytest.raises(PassportError) as exc:
-            parse_passport(jwt)
-        assert exc.value.code == ErrorCode.PASSPORT_PARSE_FAILED
-        assert "E.164" in exc.value.message
+        # Should parse successfully but with warning
+        passport = parse_passport(jwt)
+        assert passport.payload.dest["tn"] == ["12025555678"]
+        assert len(passport.warnings) > 0
+        assert any("E.164" in w for w in passport.warnings)
 
     def test_dest_tn_missing_rejected(self):
         """dest without tn field → PASSPORT_PARSE_FAILED."""

@@ -12,14 +12,14 @@
 {% endif %}
 
 {% if validation_errors %}
-<article aria-invalid="true" style="border-color: #d97706; background-color: #fef3c7;">
-    <header style="color: #92400e;">Validation Warning</header>
+<article aria-invalid="true" style="border-color: #dc3545; background-color: #f8d7da;">
+    <header style="color: #721c24;">Validation Error</header>
     <p>JWT decoded successfully but failed VVP spec validation:</p>
     <table style="width: 100%; border-collapse: collapse; margin-top: 0.5rem;">
         <thead>
-            <tr style="background-color: #fef3c7;">
-                <th style="text-align: left; padding: 0.5rem; border-bottom: 1px solid #d97706;">Spec</th>
-                <th style="text-align: left; padding: 0.5rem; border-bottom: 1px solid #d97706;">Error</th>
+            <tr style="background-color: #f8d7da;">
+                <th style="text-align: left; padding: 0.5rem; border-bottom: 1px solid #dc3545;">Spec</th>
+                <th style="text-align: left; padding: 0.5rem; border-bottom: 1px solid #dc3545;">Error</th>
             </tr>
         </thead>
         <tbody>
@@ -29,13 +29,45 @@
                     {% if err.spec_section %}
                     <strong>{{ err.spec_section }}</strong>
                     {% if err.spec_description %}
-                    <br><small style="color: #92400e;">{{ err.spec_description }}</small>
+                    <br><small style="color: #721c24;">{{ err.spec_description }}</small>
                     {% endif %}
                     {% else %}
                     <em>Unknown</em>
                     {% endif %}
                 </td>
                 <td style="padding: 0.5rem;">{{ err.message }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</article>
+{% endif %}
+
+{% if validation_warnings %}
+<article style="border-color: #d97706; background-color: #fef3c7;">
+    <header style="color: #92400e;">Format Warning</header>
+    <p>PASSporT parsed successfully but has format recommendations:</p>
+    <table style="width: 100%; border-collapse: collapse; margin-top: 0.5rem;">
+        <thead>
+            <tr style="background-color: #fef3c7;">
+                <th style="text-align: left; padding: 0.5rem; border-bottom: 1px solid #d97706;">Spec</th>
+                <th style="text-align: left; padding: 0.5rem; border-bottom: 1px solid #d97706;">Warning</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for warn in validation_warnings %}
+            <tr>
+                <td style="padding: 0.5rem; vertical-align: top; white-space: nowrap;">
+                    {% if warn.spec_section %}
+                    <strong>{{ warn.spec_section }}</strong>
+                    {% if warn.spec_description %}
+                    <br><small style="color: #92400e;">{{ warn.spec_description }}</small>
+                    {% endif %}
+                    {% else %}
+                    <em>Recommendation</em>
+                    {% endif %}
+                </td>
+                <td style="padding: 0.5rem;">{{ warn.message }}</td>
             </tr>
         {% endfor %}
         </tbody>

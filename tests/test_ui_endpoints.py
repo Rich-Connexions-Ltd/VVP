@@ -257,23 +257,24 @@ class TestTrialPASSporT:
         assert "447884666200" in response.text  # orig.tn
         assert "447769710285" in response.text  # dest.tn
 
-    def test_trial_passport_shows_validation_error(self):
-        """Trial PASSporT has orig.tn as array, should show validation error."""
+    def test_trial_passport_shows_format_warning(self):
+        """Trial PASSporT has non-E.164 phone numbers (missing +), shows warning."""
         response = client.post("/ui/parse-jwt", data={"jwt": TRIAL_PASSPORT_JWT})
 
         assert response.status_code == 200
-        # Should show validation warning for orig.tn being an array
-        assert "Validation Warning" in response.text
-        # Should flag the orig.tn issue
-        assert "orig.tn" in response.text.lower() or "array" in response.text.lower()
+        # Should parse successfully
+        # Phone numbers are shown (non-E.164 but accepted with warning)
+        assert "447884666200" in response.text
+        # Warning about E.164 format should be shown
+        assert "E.164" in response.text or "warning" in response.text.lower()
 
-    def test_trial_passport_shows_spec_reference(self):
-        """Trial PASSporT validation error should include spec reference."""
+    def test_trial_passport_shows_evd_url(self):
+        """Trial PASSporT evd field should be visible."""
         response = client.post("/ui/parse-jwt", data={"jwt": TRIAL_PASSPORT_JWT})
 
         assert response.status_code == 200
-        # Should show §4.2 spec reference for phone number validation
-        assert "§4.2" in response.text
+        # Should show evidence URL
+        assert "origin.demo.provenant.net" in response.text
 
     def test_trial_passport_shows_vcard(self):
         """Trial PASSporT contains vCard data that should be displayed."""

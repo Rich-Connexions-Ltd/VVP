@@ -564,10 +564,18 @@ async def ui_parse_jwt(request: Request, jwt: str = Form(...)):
         )
 
     # Step 2: Validate with domain layer (collect errors with spec references)
+    validation_warnings: list[dict] = []  # Warnings (non-fatal, e.g., E.164 format)
     try:
         passport = parse_passport(jwt)
         # If validation passes, use validated signature (bytes -> hex)
         signature_str = passport.signature.hex()
+        # Collect any warnings (e.g., non-E.164 phone numbers)
+        for warning in passport.warnings:
+            validation_warnings.append({
+                "message": warning,
+                "spec_section": "§4.2",
+                "spec_description": "E.164 phone number format recommended",
+            })
     except PassportError as e:
         spec_ref = _get_spec_reference(e.message)
         validation_errors.append({
@@ -610,6 +618,7 @@ async def ui_parse_jwt(request: Request, jwt: str = Form(...)):
             "iat_formatted": iat_formatted,
             "exp_formatted": exp_formatted,
             "validation_errors": validation_errors,
+            "validation_warnings": validation_warnings,
         },
     )
 

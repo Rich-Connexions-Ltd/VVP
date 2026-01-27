@@ -64,6 +64,7 @@ class Passport:
     signature: bytes
     raw_header: str      # Base64url-encoded header (for signature verification)
     raw_payload: str     # Base64url-encoded payload (for signature verification)
+    warnings: tuple[str, ...] = ()  # Validation warnings (e.g., non-E.164 phone numbers)
 
 
 def parse_passport(jwt: Optional[str]) -> Passport:
@@ -112,7 +113,7 @@ def parse_passport(jwt: Optional[str]) -> Passport:
 
     # Step 6: Decode and parse payload
     payload_data = _decode_jwt_part(raw_payload, "payload")
-    payload = _parse_payload(payload_data)
+    payload, warnings = _parse_payload(payload_data)
 
     # Step 7: Decode signature (keep as bytes for Phase 4)
     signature = _decode_signature(raw_signature)
@@ -123,6 +124,7 @@ def parse_passport(jwt: Optional[str]) -> Passport:
         signature=signature,
         raw_header=raw_header,
         raw_payload=raw_payload,
+        warnings=tuple(warnings),
     )
 
 
@@ -288,8 +290,14 @@ def _parse_header(data: dict[str, Any]) -> PassportHeader:
     return PassportHeader(alg=alg, ppt=ppt, kid=kid, typ=typ)
 
 
-def _parse_payload(data: dict[str, Any]) -> PassportPayload:
-    """Parse and validate JWT payload fields."""
+def _parse_payload(data: dict[str, Any]) -> tuple[PassportPayload, list[str]]:
+    """Parse and validate JWT payload fields.
+
+    Returns:
+        Tuple of (PassportPayload, list of warning messages).
+    """
+    warnings = []
+
     # Required by spec §5.2A
     iat = _require_integer(data, "iat", "payload")
 
@@ -299,8 +307,8 @@ def _parse_payload(data: dict[str, Any]) -> PassportPayload:
     evd = _require_string(data, "evd", "payload")
 
     # Validate phone number fields per VVP §4.2
-    _validate_orig_tn_field(orig)
-    _validate_dest_tn_field(dest)
+    warnings.extend(_validate_orig_tn_field(orig))
+    warnings.extend(_validate_dest_tn_field(dest))
 
     # Optional fields
     iss = data.get("iss")
@@ -320,7 +328,7 @@ def _parse_payload(data: dict[str, Any]) -> PassportPayload:
     if origid is not None and not isinstance(origid, str):
         origid = None
 
-    return PassportPayload(
+    payload = PassportPayload(
         iat=iat,
         orig=orig,
         dest=dest,
@@ -332,6 +340,7 @@ def _parse_payload(data: dict[str, Any]) -> PassportPayload:
         call_reason=call_reason,
         origid=origid,
     )
+    return payload, warnings
 
 
 def _validate_algorithm(alg: str) -> None:
@@ -380,20 +389,25 @@ def _validate_phone_format(phone: str) -> bool:
     return bool(E164_PATTERN.match(phone))
 
 
-def _validate_orig_tn_field(orig: dict) -> None:
+def _validate_orig_tn_field(orig: dict) -> list[str]:
     """Validate orig.tn field per VVP §4.2.
 
     Per spec:
     - orig.tn MUST be an array containing exactly one phone number
-    - The single phone number MUST be in E.164 format
+    - The single phone number SHOULD be in E.164 format (warning if not)
 
     Args:
         orig: The orig claim object.
 
+    Returns:
+        List of warning messages (empty if fully compliant).
+
     Raises:
         PassportError: If orig.tn is missing, not a single-element array,
-                       or not valid E.164.
+                       or element is not a string.
     """
+    warnings = []
+
     if "tn" not in orig:
         raise PassportError.parse_failed("payload orig.tn is required")
 
@@ -417,26 +431,35 @@ def _validate_orig_tn_field(orig: dict) -> None:
             f"orig.tn[0] must be a string, got {type(phone).__name__}"
         )
 
+    # E.164 format is recommended but not required - warn if not compliant
     if not _validate_phone_format(phone):
-        raise PassportError.parse_failed(
-            f"orig.tn[0] must be E.164 format (+[1-9][0-9]{{1,14}}), got '{phone}'"
+        warnings.append(
+            f"orig.tn[0] is not E.164 format (+[1-9][0-9]{{1,14}}): '{phone}'"
         )
 
+    return warnings
 
-def _validate_dest_tn_field(dest: dict) -> None:
+
+def _validate_dest_tn_field(dest: dict) -> list[str]:
     """Validate dest.tn field per RFC8225.
 
     Per RFC8225:
     - dest.tn MUST be an array of phone numbers
-    - Each phone number MUST be in E.164 format
+    - Each phone number SHOULD be in E.164 format (warning if not)
     - Array must not be empty
 
     Args:
         dest: The dest claim object.
 
+    Returns:
+        List of warning messages (empty if fully compliant).
+
     Raises:
-        PassportError: If dest.tn is missing, not an array, empty, or contains invalid numbers.
+        PassportError: If dest.tn is missing, not an array, empty,
+                       or contains non-string elements.
     """
+    warnings = []
+
     if "tn" not in dest:
         raise PassportError.parse_failed("payload dest.tn is required")
 
@@ -457,10 +480,13 @@ def _validate_dest_tn_field(dest: dict) -> None:
             raise PassportError.parse_failed(
                 f"dest.tn[{i}] must be a string, got {type(phone).__name__}"
             )
+        # E.164 format is recommended but not required - warn if not compliant
         if not _validate_phone_format(phone):
-            raise PassportError.parse_failed(
-                f"dest.tn[{i}] must be E.164 format, got '{phone}'"
+            warnings.append(
+                f"dest.tn[{i}] is not E.164 format: '{phone}'"
             )
+
+    return warnings
 
 
 def _validate_expiry(passport: Passport, now: int) -> None:
