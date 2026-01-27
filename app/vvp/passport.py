@@ -384,34 +384,42 @@ def _validate_orig_tn_field(orig: dict) -> None:
     """Validate orig.tn field per VVP §4.2.
 
     Per spec:
-    - orig.tn MUST be a single phone number (string, not array)
-    - Phone number MUST be in E.164 format
+    - orig.tn MUST be an array containing exactly one phone number
+    - The single phone number MUST be in E.164 format
 
     Args:
         orig: The orig claim object.
 
     Raises:
-        PassportError: If orig.tn is missing, an array, or not valid E.164.
+        PassportError: If orig.tn is missing, not a single-element array,
+                       or not valid E.164.
     """
     if "tn" not in orig:
         raise PassportError.parse_failed("payload orig.tn is required")
 
     tn = orig["tn"]
 
-    # orig.tn MUST be a single string, not an array
-    if isinstance(tn, list):
+    # orig.tn MUST be an array
+    if not isinstance(tn, list):
         raise PassportError.parse_failed(
-            "orig.tn must be a single phone number (string), not an array"
+            f"orig.tn must be an array, got {type(tn).__name__}"
         )
 
-    if not isinstance(tn, str):
+    # orig.tn array MUST contain exactly one element
+    if len(tn) != 1:
         raise PassportError.parse_failed(
-            f"orig.tn must be a string, got {type(tn).__name__}"
+            f"orig.tn must contain exactly one phone number, got {len(tn)}"
         )
 
-    if not _validate_phone_format(tn):
+    phone = tn[0]
+    if not isinstance(phone, str):
         raise PassportError.parse_failed(
-            f"orig.tn must be E.164 format (+[1-9][0-9]{{1,14}}), got '{tn}'"
+            f"orig.tn[0] must be a string, got {type(phone).__name__}"
+        )
+
+    if not _validate_phone_format(phone):
+        raise PassportError.parse_failed(
+            f"orig.tn[0] must be E.164 format (+[1-9][0-9]{{1,14}}), got '{phone}'"
         )
 
 

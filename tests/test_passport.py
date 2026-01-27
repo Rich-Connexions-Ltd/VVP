@@ -59,7 +59,7 @@ def valid_payload(iat: int = None) -> dict:
         iat = int(time.time())
     return {
         "iat": iat,
-        "orig": {"tn": "+12025551234"},
+        "orig": {"tn": ["+12025551234"]},  # Single-element array per §4.2
         "dest": {"tn": ["+12025555678"]},
         "evd": "oobi:http://example.com/oobi/EExampleAID123",
     }
@@ -1051,20 +1051,23 @@ class TestTypValidation:
 
 
 class TestOrigTnValidation:
-    """Tests for orig.tn field validation per VVP §4.2."""
+    """Tests for orig.tn field validation per VVP §4.2.
 
-    def test_orig_tn_single_string_valid(self):
-        """orig.tn as single phone string → Valid."""
+    Per spec, orig.tn MUST be an array containing exactly one E.164 phone number.
+    """
+
+    def test_orig_tn_single_element_array_valid(self):
+        """orig.tn as single-element array → Valid."""
         payload = valid_payload()
-        payload["orig"] = {"tn": "+12025551234"}
+        payload["orig"] = {"tn": ["+12025551234"]}  # Single-element array
         jwt = make_jwt(valid_header(), payload)
         passport = parse_passport(jwt)
-        assert passport.payload.orig["tn"] == "+12025551234"
+        assert passport.payload.orig["tn"] == ["+12025551234"]
 
-    def test_orig_tn_array_rejected(self):
-        """orig.tn as array → PASSPORT_PARSE_FAILED."""
+    def test_orig_tn_string_rejected(self):
+        """orig.tn as bare string (not array) → PASSPORT_PARSE_FAILED."""
         payload = valid_payload()
-        payload["orig"] = {"tn": ["+12025551234"]}  # Array, not string
+        payload["orig"] = {"tn": "+12025551234"}  # String, not array
         jwt = make_jwt(valid_header(), payload)
         with pytest.raises(PassportError) as exc:
             parse_passport(jwt)
@@ -1072,8 +1075,29 @@ class TestOrigTnValidation:
         assert "orig.tn" in exc.value.message
         assert "array" in exc.value.message.lower()
 
+    def test_orig_tn_multiple_elements_rejected(self):
+        """orig.tn with multiple elements → PASSPORT_PARSE_FAILED."""
+        payload = valid_payload()
+        payload["orig"] = {"tn": ["+12025551234", "+12025555678"]}  # Two elements
+        jwt = make_jwt(valid_header(), payload)
+        with pytest.raises(PassportError) as exc:
+            parse_passport(jwt)
+        assert exc.value.code == ErrorCode.PASSPORT_PARSE_FAILED
+        assert "orig.tn" in exc.value.message
+        assert "exactly one" in exc.value.message.lower()
+
+    def test_orig_tn_empty_array_rejected(self):
+        """orig.tn as empty array → PASSPORT_PARSE_FAILED."""
+        payload = valid_payload()
+        payload["orig"] = {"tn": []}  # Empty array
+        jwt = make_jwt(valid_header(), payload)
+        with pytest.raises(PassportError) as exc:
+            parse_passport(jwt)
+        assert exc.value.code == ErrorCode.PASSPORT_PARSE_FAILED
+        assert "orig.tn" in exc.value.message
+
     def test_orig_tn_e164_valid(self):
-        """orig.tn in E.164 format → Valid."""
+        """orig.tn[0] in E.164 format → Valid."""
         # Test various valid E.164 numbers
         valid_numbers = [
             "+12025551234",      # US number
@@ -1084,14 +1108,14 @@ class TestOrigTnValidation:
         ]
         for phone in valid_numbers:
             payload = valid_payload()
-            payload["orig"] = {"tn": phone}
+            payload["orig"] = {"tn": [phone]}  # Single-element array
             payload["dest"] = {"tn": ["+12025555678"]}
             jwt = make_jwt(valid_header(), payload)
             passport = parse_passport(jwt)
-            assert passport.payload.orig["tn"] == phone
+            assert passport.payload.orig["tn"] == [phone]
 
     def test_orig_tn_non_e164_rejected(self):
-        """orig.tn not in E.164 format → PASSPORT_PARSE_FAILED."""
+        """orig.tn[0] not in E.164 format → PASSPORT_PARSE_FAILED."""
         invalid_numbers = [
             "12025551234",        # Missing +
             "+02025551234",       # Leading zero after +
@@ -1104,7 +1128,7 @@ class TestOrigTnValidation:
         ]
         for phone in invalid_numbers:
             payload = valid_payload()
-            payload["orig"] = {"tn": phone}
+            payload["orig"] = {"tn": [phone]}  # Single-element array
             jwt = make_jwt(valid_header(), payload)
             with pytest.raises(PassportError) as exc:
                 parse_passport(jwt)

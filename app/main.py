@@ -480,9 +480,10 @@ SPEC_SECTION_MAP = {
     "max-age exceeded": ("§5.2B", "Token age exceeds max-age policy"),
 
     # Phone number validation
-    "orig.tn must be a single phone number": ("§4.2", "orig.tn must be a single string, not array"),
-    "orig.tn must be a string": ("§4.2", "orig.tn must be a string type"),
-    "orig.tn must be E.164": ("§4.2", "Phone numbers must be E.164 format"),
+    "orig.tn must be an array": ("§4.2", "orig.tn must be an array with single phone number"),
+    "orig.tn must contain exactly one": ("§4.2", "orig.tn array must contain exactly one phone number"),
+    "orig.tn[0] must be a string": ("§4.2", "orig.tn[0] must be a string type"),
+    "orig.tn[0] must be E.164": ("§4.2", "Phone numbers must be E.164 format"),
     "dest.tn must be an array": ("RFC8225", "dest.tn must be an array per RFC8225"),
     "dest.tn array must not be empty": ("RFC8225", "dest.tn array cannot be empty"),
     "dest.tn[": ("§4.2", "Each dest.tn entry must be valid E.164"),
@@ -1303,10 +1304,20 @@ async def ui_verify_result(
             log.warning(f"Failed to parse PASSporT for VVP-Identity: {e}")
 
         # Build VVP-Identity header using PASSporT kid (not evd_url)
-        if passport_kid and evd_url:
-            vvp_identity_header = f"kid={passport_kid};ppt=vvp;evd={evd_url}"
-            if passport_iat:
-                vvp_identity_header += f";iat={passport_iat}"
+        # VVP-Identity header is a base64url-encoded JSON object per §4.1A
+        if passport_kid and evd_url and passport_iat:
+            import base64
+            identity_obj = {
+                "kid": passport_kid,
+                "ppt": "vvp",
+                "evd": evd_url,
+                "iat": passport_iat,
+            }
+            identity_json = json.dumps(identity_obj, separators=(',', ':'))
+            # Base64url encode without padding
+            vvp_identity_header = base64.urlsafe_b64encode(
+                identity_json.encode('utf-8')
+            ).decode('utf-8').rstrip('=')
 
         # Build request
         verify_req = VerifyRequest(
@@ -1510,11 +1521,15 @@ async def ui_verify_result(
                     error=str(e),
                 ))
 
+        # Convert verify_response to dict for Jinja2 serialization
+        # (ClaimNode objects are not JSON serializable by default)
+        verify_response_dict = verify_response.model_dump(mode='json')
+
         return templates.TemplateResponse(
             "partials/verify_result.html",
             {
                 "request": request,
-                "verify_response": verify_response,
+                "verify_response": verify_response_dict,
                 "credential_vms": credential_vms,
                 "dossier_vm": dossier_vm,
                 "delegation_info": build_delegation_chain_info(

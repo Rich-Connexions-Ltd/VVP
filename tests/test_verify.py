@@ -498,7 +498,7 @@ class TestVerifyVVPIntegration:
             signer_aid = "EAbc123456789012345"
             mock_passport.return_value = MagicMock(
                 header=MagicMock(kid=f"http://witness.example.com/oobi/{signer_aid}/witness/EXyz"),
-                payload=MagicMock(orig={"tn": "+15551234567"}, card=None, goal=None)
+                payload=MagicMock(orig={"tn": ["+15551234567"]}, card=None, goal=None)
             )
             mock_binding.return_value = None
             mock_sig.return_value = (MagicMock(aid="ETest123...", delegation_chain=None), "VALID")
@@ -550,7 +550,7 @@ class TestVerifyVVPIntegration:
             # Explicitly set card=None and goal=None to prevent brand/business claims
             mock_passport.return_value = MagicMock(
                 header=MagicMock(kid="http://witness.example.com/oobi/EAbc123456789012345/witness/EXyz"),
-                payload=MagicMock(orig={"tn": "+15551234567"}, card=None, goal=None)
+                payload=MagicMock(orig={"tn": ["+15551234567"]}, card=None, goal=None)
             )
             mock_binding.return_value = None
             mock_sig.return_value = (MagicMock(aid="ETest123...", delegation_chain=None), "VALID")
@@ -606,7 +606,7 @@ class TestVerifyVVPIntegration:
             # Explicitly set card=None and goal=None to prevent brand/business claims
             mock_passport.return_value = MagicMock(
                 header=MagicMock(kid="http://witness.example.com/oobi/EAbc123456789012345678901234567890/witness/EXyz"),
-                payload=MagicMock(orig={"tn": "+15551234567"}, card=None, goal=None)
+                payload=MagicMock(orig={"tn": ["+15551234567"]}, card=None, goal=None)
             )
             mock_binding.return_value = None
             mock_sig.return_value = (MagicMock(aid="ETest123...", delegation_chain=None), "VALID")
@@ -694,7 +694,7 @@ class TestSIPContextAlignmentConfig:
         passport_iat = int(invite_time.timestamp()) + 45  # 45 second drift
 
         mock_passport = MagicMock()
-        mock_passport.payload.orig = {"tn": "+15551234567"}
+        mock_passport.payload.orig = {"tn": ["+15551234567"]}
         mock_passport.payload.dest = {"tn": ["+15559876543"]}
         mock_passport.payload.iat = passport_iat
 
@@ -980,7 +980,7 @@ class TestMultiLeafChainAggregation:
             signer_aid = "EAbc123456789012345"
             mock_passport.return_value = MagicMock(
                 header=MagicMock(kid=f"http://witness.example.com/oobi/{signer_aid}/witness/EXyz"),
-                payload=MagicMock(orig={"tn": "+15551234567"}, card=None, goal=None)
+                payload=MagicMock(orig={"tn": ["+15551234567"]}, card=None, goal=None)
             )
             mock_binding.return_value = None
             mock_sig.return_value = (MagicMock(aid="ETest123...", delegation_chain=None), "VALID")
@@ -1075,7 +1075,7 @@ class TestMultiLeafChainAggregation:
             signer_aid = "EAbc123456789012345"
             mock_passport.return_value = MagicMock(
                 header=MagicMock(kid=f"http://witness.example.com/oobi/{signer_aid}/witness/EXyz"),
-                payload=MagicMock(orig={"tn": "+15551234567"}, card=None, goal=None)
+                payload=MagicMock(orig={"tn": ["+15551234567"]}, card=None, goal=None)
             )
             mock_binding.return_value = None
             mock_sig.return_value = (MagicMock(aid="ETest123...", delegation_chain=None), "VALID")

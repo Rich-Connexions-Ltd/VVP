@@ -277,10 +277,12 @@ def verify_sip_context_alignment(
 
     claim.add_evidence("sip_context:present")
 
-    # Extract orig.tn from passport
+    # Extract orig.tn from passport (array with single element per §4.2)
     orig_tn = None
     if passport.payload.orig and isinstance(passport.payload.orig, dict):
-        orig_tn = passport.payload.orig.get("tn")
+        tn_array = passport.payload.orig.get("tn")
+        if isinstance(tn_array, list) and len(tn_array) == 1:
+            orig_tn = tn_array[0]
 
     # Extract dest.tn from passport
     dest_tns = []

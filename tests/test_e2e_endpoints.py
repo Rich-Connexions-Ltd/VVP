@@ -39,7 +39,7 @@ def create_test_passport(sk: bytes, kid: str, iat: int = None) -> str:
         iat = int(datetime.now(timezone.utc).timestamp())
 
     header = {"alg": "EdDSA", "typ": "passport", "kid": kid}
-    payload = {"iat": iat, "orig": {"tn": "+15551234567"}, "dest": {"tn": ["+15559876543"]}}
+    payload = {"iat": iat, "orig": {"tn": ["+15551234567"]}, "dest": {"tn": ["+15559876543"]}}
 
     header_b64 = base64.urlsafe_b64encode(json.dumps(header).encode()).decode().rstrip("=")
     payload_b64 = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
@@ -169,7 +169,7 @@ class TestVerifyEndpointE2E:
 
         # Create PASSporT with RS256 (forbidden)
         header = {"alg": "RS256", "typ": "passport", "kid": kid}
-        payload = {"iat": int(datetime.now(timezone.utc).timestamp()), "orig": {"tn": "+15551234567"}, "dest": {"tn": ["+15559876543"]}}
+        payload = {"iat": int(datetime.now(timezone.utc).timestamp()), "orig": {"tn": ["+15551234567"]}, "dest": {"tn": ["+15559876543"]}}
 
         header_b64 = base64.urlsafe_b64encode(json.dumps(header).encode()).decode().rstrip("=")
         payload_b64 = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
@@ -386,7 +386,7 @@ class TestErrorCodeCoverage:
 
         # Create PASSporT with HS256 (forbidden HMAC)
         header = {"alg": "HS256", "typ": "passport", "kid": kid}
-        payload = {"iat": int(datetime.now(timezone.utc).timestamp()), "orig": {"tn": "+15551234567"}, "dest": {"tn": ["+15559876543"]}}
+        payload = {"iat": int(datetime.now(timezone.utc).timestamp()), "orig": {"tn": ["+15551234567"]}, "dest": {"tn": ["+15559876543"]}}
 
         header_b64 = base64.urlsafe_b64encode(json.dumps(header).encode()).decode().rstrip("=")
         payload_b64 = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
@@ -414,7 +414,7 @@ class TestErrorCodeCoverage:
 
         # PASSporT without iat
         header = {"alg": "EdDSA", "typ": "passport", "kid": kid}
-        payload = {"orig": {"tn": "+15551234567"}, "dest": {"tn": ["+15559876543"]}}  # No iat
+        payload = {"orig": {"tn": ["+15551234567"]}, "dest": {"tn": ["+15559876543"]}}  # No iat
 
         header_b64 = base64.urlsafe_b64encode(json.dumps(header).encode()).decode().rstrip("=")
         payload_b64 = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")

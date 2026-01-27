@@ -261,7 +261,7 @@ class TestContextAlignmentIntegration:
         passport = MockPassport(
             payload=MockPassportPayload(
                 iat=int(datetime.now(timezone.utc).timestamp()),
-                orig={"tn": "+15551234567"},
+                orig={"tn": ["+15551234567"]},
                 dest={"tn": ["+15559999999"]},
             )
         )
@@ -278,7 +278,7 @@ class TestContextAlignmentIntegration:
         passport = MockPassport(
             payload=MockPassportPayload(
                 iat=int(now.timestamp()),
-                orig={"tn": "+15551234567"},
+                orig={"tn": ["+15551234567"]},
                 dest={"tn": ["+15559999999"]},
             )
         )
@@ -302,7 +302,7 @@ class TestContextAlignmentIntegration:
         passport = MockPassport(
             payload=MockPassportPayload(
                 iat=int(now.timestamp()),
-                orig={"tn": "+15551234567"},
+                orig={"tn": ["+15551234567"]},
                 dest={"tn": ["+15559999999"]},
             )
         )
@@ -323,7 +323,7 @@ class TestContextAlignmentIntegration:
         passport = MockPassport(
             payload=MockPassportPayload(
                 iat=int(now.timestamp()),
-                orig={"tn": "+15551234567"},
+                orig={"tn": ["+15551234567"]},
                 dest={"tn": ["+15559999999"]},
             )
         )
@@ -346,7 +346,7 @@ class TestContextAlignmentIntegration:
         passport = MockPassport(
             payload=MockPassportPayload(
                 iat=int(old_time.timestamp()),  # Old iat
-                orig={"tn": "+15551234567"},
+                orig={"tn": ["+15551234567"]},
                 dest={"tn": ["+15559999999"]},
             )
         )
@@ -388,7 +388,7 @@ class TestContextAlignmentIntegration:
         passport = MockPassport(
             payload=MockPassportPayload(
                 iat=int(now.timestamp()),
-                orig={"tn": "+15551234567"},
+                orig={"tn": ["+15551234567"]},
                 dest={},  # Missing tn
             )
         )
@@ -409,7 +409,7 @@ class TestContextAlignmentIntegration:
         passport = MockPassport(
             payload=MockPassportPayload(
                 iat=int(now.timestamp()),
-                orig={"tn": "+15551234567"},
+                orig={"tn": ["+15551234567"]},
                 dest={"tn": ["+15559999999"]},
             )
         )
@@ -430,7 +430,7 @@ class TestContextAlignmentIntegration:
         passport = MockPassport(
             payload=MockPassportPayload(
                 iat=int(now.timestamp()),
-                orig={"tn": "+15551234567"},
+                orig={"tn": ["+15551234567"]},
                 dest={"tn": ["+15559999999"]},
             )
         )

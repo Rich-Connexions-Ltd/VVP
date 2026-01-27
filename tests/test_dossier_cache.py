@@ -759,7 +759,7 @@ class TestDossierCacheIntegration:
         jwt_payload = {
             "iss": "example.com",
             "iat": vvp_identity_data["iat"],
-            "orig": {"tn": "+15551234567"},
+            "orig": {"tn": ["+15551234567"]},
             "dest": {"tn": ["+15559876543"]},
             "evd": evd_url,
         }
@@ -854,7 +854,7 @@ class TestDossierCacheIntegration:
         jwt_payload = {
             "iss": "example.com",
             "iat": vvp_identity_data["iat"],
-            "orig": {"tn": "+15551234567"},
+            "orig": {"tn": ["+15551234567"]},
             "dest": {"tn": ["+15559876543"]},
             "evd": evd_url,
         }

@@ -78,7 +78,7 @@ def create_signed_passport(
     header = {"alg": "EdDSA", "ppt": "vvp", "kid": kid}
     payload = {
         "iat": iat,
-        "orig": {"tn": "+12025551234"},
+        "orig": {"tn": ["+12025551234"]},
         "dest": {"tn": ["+12025555678"]},
         "evd": evd_url,
     }
@@ -111,7 +111,7 @@ def create_passport_with_algorithm(
     header = {"alg": alg, "ppt": "vvp", "kid": kid}
     payload = {
         "iat": iat,
-        "orig": {"tn": "+12025551234"},
+        "orig": {"tn": ["+12025551234"]},
         "dest": {"tn": ["+12025555678"]},
         "evd": evd_url,
     }
@@ -143,7 +143,7 @@ def create_corrupted_signature_passport(
     header = {"alg": "EdDSA", "ppt": "vvp", "kid": kid}
     payload = {
         "iat": iat,
-        "orig": {"tn": "+12025551234"},
+        "orig": {"tn": ["+12025551234"]},
         "dest": {"tn": ["+12025555678"]},
         "evd": evd_url,
     }

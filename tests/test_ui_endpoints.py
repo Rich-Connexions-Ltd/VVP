@@ -52,7 +52,7 @@ def valid_payload(iat: int = None) -> dict:
         iat = int(time.time())
     return {
         "iat": iat,
-        "orig": {"tn": "+12025551234"},
+        "orig": {"tn": ["+12025551234"]},  # Single-element array per §4.2
         "dest": {"tn": ["+12025555678"]},
         "evd": "http://example.com/dossier",
     }
@@ -144,11 +144,11 @@ class TestUIParseJWTDomainLayerAlignment:
         # Domain layer should catch missing field
         assert "orig" in response.text or "required" in response.text.lower()
 
-    def test_orig_tn_must_be_string_not_array(self):
-        """Domain layer validates orig.tn is string, not array (§4.2)."""
+    def test_orig_tn_must_be_array_not_string(self):
+        """Domain layer validates orig.tn is array, not bare string (§4.2)."""
         header = valid_header()
         payload = valid_payload()
-        payload["orig"]["tn"] = ["+12025551234"]  # Should be string
+        payload["orig"]["tn"] = "+12025551234"  # Should be array with single element
 
         jwt = make_jwt(header, payload)
         response = client.post("/ui/parse-jwt", data={"jwt": jwt})
@@ -165,7 +165,7 @@ class TestUIParseJWTPermissiveMode:
         """Invalid JWT should show decoded content AND validation error."""
         header = valid_header()
         payload = valid_payload()
-        payload["orig"]["tn"] = ["+12025551234"]  # Invalid: array instead of string
+        payload["orig"]["tn"] = "+12025551234"  # Invalid: bare string instead of array
 
         jwt = make_jwt(header, payload)
         response = client.post("/ui/parse-jwt", data={"jwt": jwt})
@@ -196,7 +196,7 @@ class TestUIParseJWTPermissiveMode:
         """Validation errors should include spec section reference."""
         header = valid_header()
         payload = valid_payload()
-        payload["orig"]["tn"] = ["+12025551234"]  # Invalid: array instead of string
+        payload["orig"]["tn"] = "+12025551234"  # Invalid: bare string instead of array
 
         jwt = make_jwt(header, payload)
         response = client.post("/ui/parse-jwt", data={"jwt": jwt})

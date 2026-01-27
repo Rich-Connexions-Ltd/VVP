@@ -69,7 +69,7 @@ def create_signed_jwt(seed: bytes, verkey: bytes, iat: int = 1700000000) -> str:
     header = {"alg": "EdDSA", "ppt": "vvp", "kid": kid}
     payload = {
         "iat": iat,
-        "orig": {"tn": "+12025551234"},
+        "orig": {"tn": ["+12025551234"]},
         "dest": {"tn": ["+12025555678"]},
         "evd": "oobi:http://example.com/oobi",
     }
@@ -185,7 +185,7 @@ class TestSignatureVerification:
         # Create JWT with D prefix kid
         kid = make_keri_aid(verkey, transferable=False)
         header = {"alg": "EdDSA", "ppt": "vvp", "kid": kid}
-        payload = {"iat": 1700000000, "orig": {"tn": "+12025551234"}, "dest": {"tn": ["+12025555678"]}, "evd": "x"}
+        payload = {"iat": 1700000000, "orig": {"tn": ["+12025551234"]}, "dest": {"tn": ["+12025555678"]}, "evd": "x"}
 
         h_b64 = base64.urlsafe_b64encode(json.dumps(header).encode()).rstrip(b"=").decode()
         p_b64 = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
