@@ -263,10 +263,10 @@ SCHEMA_CACHE_TTL_SECONDS: int = int(
 # compact ACDCs have edge references to credentials not in the dossier.
 
 # Enable external SAID resolution from witnesses
-# When True: Attempt to fetch missing edge credentials from witnesses before INDETERMINATE
-# When False (default): Immediately return INDETERMINATE for missing edges per §2.2
+# When True (default): Attempt to fetch missing edge credentials from witnesses before INDETERMINATE
+# When False: Immediately return INDETERMINATE for missing edges per §2.2
 EXTERNAL_SAID_RESOLUTION_ENABLED: bool = os.getenv(
-    "VVP_EXTERNAL_SAID_RESOLUTION", "false"
+    "VVP_EXTERNAL_SAID_RESOLUTION", "true"
 ).lower() == "true"
 
 # Timeout for external credential fetch (per-request)
