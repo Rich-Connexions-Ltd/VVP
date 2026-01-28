@@ -1749,3 +1749,366 @@ class TestAggregateDossierValidation:
         monkeypatch.setenv("VVP_ALLOW_AGGREGATE_DOSSIERS", "false")
         importlib.reload(app.core.config)
         assert app.core.config.ALLOW_AGGREGATE_DOSSIERS is False
+
+
+# =============================================================================
+# Additional parser coverage tests - Phase 3
+# =============================================================================
+
+
+class TestHasPlaceholdersRecursive:
+    """Tests for has_placeholders() recursive detection in parser.py."""
+
+    def test_placeholder_in_nested_list(self):
+        """Placeholder in nested list is detected."""
+        from app.vvp.acdc.parser import detect_acdc_variant
+
+        # ACDC with underscore in a list (lines 39-41)
+        data = {
+            "d": "E" + "A" * 43,
+            "i": "D" + "B" * 43,
+            "a": {
+                "items": ["value1", "_", "value3"]  # Placeholder in list
+            },
+        }
+
+        variant = detect_acdc_variant(data)
+        assert variant == "partial"
+
+    def test_placeholder_in_deeply_nested_list(self):
+        """Placeholder in deeply nested list is detected."""
+        from app.vvp.acdc.parser import detect_acdc_variant
+
+        data = {
+            "d": "E" + "A" * 43,
+            "i": "D" + "B" * 43,
+            "a": {
+                "nested": {
+                    "items": [
+                        {"value": "_"}  # Deeply nested placeholder
+                    ]
+                }
+            },
+        }
+
+        variant = detect_acdc_variant(data)
+        assert variant == "partial"
+
+    def test_typed_placeholder_in_list(self):
+        """Typed placeholder (_:type) in list is detected."""
+        from app.vvp.acdc.parser import detect_acdc_variant
+
+        data = {
+            "d": "E" + "A" * 43,
+            "i": "D" + "B" * 43,
+            "a": {
+                "items": ["_:string", "value2"]
+            },
+        }
+
+        variant = detect_acdc_variant(data)
+        assert variant == "partial"
+
+    def test_no_placeholder_in_list(self):
+        """No placeholder returns full variant."""
+        from app.vvp.acdc.parser import detect_acdc_variant
+
+        data = {
+            "d": "E" + "A" * 43,
+            "i": "D" + "B" * 43,
+            "a": {
+                "items": ["value1", "value2", "value3"]
+            },
+        }
+
+        variant = detect_acdc_variant(data)
+        assert variant == "full"
+
+
+class TestValidateACDCSaidCoverage:
+    """Additional tests for validate_acdc_said() coverage."""
+
+    def test_validate_said_canonicalization_failure(self):
+        """Canonicalization failure raises ACDCSAIDMismatch."""
+        from unittest.mock import patch, MagicMock
+        from app.vvp.acdc.parser import validate_acdc_said
+
+        acdc = MagicMock()
+        acdc.said = "E" + "A" * 43
+
+        # Patch _acdc_canonical_serialize to raise
+        with patch(
+            "app.vvp.acdc.parser._acdc_canonical_serialize",
+            side_effect=ValueError("serialize error")
+        ):
+            with pytest.raises(ACDCSAIDMismatch, match="Failed to canonicalize"):
+                validate_acdc_said(acdc, {"d": acdc.said})
+
+    def test_validate_said_blake3_mismatch(self):
+        """Blake3 SAID mismatch raises ACDCSAIDMismatch."""
+        from unittest.mock import MagicMock
+        from app.vvp.acdc.parser import validate_acdc_said
+
+        # Create a valid-looking ACDC with wrong SAID
+        acdc = MagicMock()
+        acdc.said = "E" + "X" * 43  # Wrong SAID
+
+        raw_data = {
+            "v": "ACDC10JSON00011c_",
+            "d": "E" + "X" * 43,
+            "i": "D" + "A" * 43,
+            "s": "",
+            "a": {"test": "value"},
+        }
+
+        with pytest.raises(ACDCSAIDMismatch, match="SAID mismatch"):
+            validate_acdc_said(acdc, raw_data)
+
+    def test_validate_said_valid_blake3_hash(self):
+        """Valid SAID passes validation with blake3."""
+        from app.vvp.acdc.parser import validate_acdc_said, _acdc_canonical_serialize
+        from app.vvp.keri.kel_parser import _cesr_encode
+
+        # Create test data
+        raw_data = {
+            "v": "ACDC10JSON00011c_",
+            "d": "",  # Will be set to placeholder
+            "i": "D" + "A" * 43,
+            "a": {"test": "value"},
+        }
+
+        # Compute actual SAID
+        import blake3
+        placeholder = "E" + "#" * 43
+        raw_data["d"] = placeholder
+        canonical = _acdc_canonical_serialize(raw_data)
+        digest = blake3.blake3(canonical).digest()
+        correct_said = _cesr_encode(digest, code="E")
+
+        # Now set raw_data with correct SAID
+        raw_data["d"] = correct_said
+
+        # Create mock ACDC
+        from unittest.mock import MagicMock
+        acdc = MagicMock()
+        acdc.said = correct_said
+
+        # Should NOT raise (SAID is correct)
+        validate_acdc_said(acdc, raw_data)
+
+    def test_validate_said_short_placeholder_length(self):
+        """Short SAID gets padded to 44 char placeholder."""
+        from unittest.mock import MagicMock
+        from app.vvp.acdc.parser import validate_acdc_said
+
+        acdc = MagicMock()
+        # Short SAID (less than 44 chars)
+        acdc.said = "E" + "A" * 30  # Only 31 chars
+
+        raw_data = {
+            "d": acdc.said,
+            "i": "D" + "A" * 43,
+        }
+
+        # Will fail with mismatch but should not error on placeholder length
+        with pytest.raises(ACDCSAIDMismatch):
+            validate_acdc_said(acdc, raw_data)
+
+
+class TestACDCCanonicalSerialize:
+    """Tests for _acdc_canonical_serialize() field ordering."""
+
+    def test_field_ordering_standard_fields(self):
+        """Standard fields are ordered: v, d, i, s, a, e, r."""
+        from app.vvp.acdc.parser import _acdc_canonical_serialize
+        import json
+
+        data = {
+            "r": {"rule": "test"},
+            "a": {"attr": "value"},
+            "d": "ESAID",
+            "i": "DISSUER",
+            "s": "ESCHEMA",
+            "v": "ACDC10JSON",
+            "e": {"edge": "ref"},
+        }
+
+        canonical = _acdc_canonical_serialize(data)
+        result = json.loads(canonical)
+        keys = list(result.keys())
+
+        # Verify order is v, d, i, s, a, e, r
+        assert keys == ["v", "d", "i", "s", "a", "e", "r"]
+
+    def test_field_ordering_missing_fields(self):
+        """Missing fields are skipped in output."""
+        from app.vvp.acdc.parser import _acdc_canonical_serialize
+        import json
+
+        data = {
+            "d": "ESAID",
+            "i": "DISSUER",
+            "a": {"attr": "value"},
+            # No v, s, e, r fields
+        }
+
+        canonical = _acdc_canonical_serialize(data)
+        result = json.loads(canonical)
+        keys = list(result.keys())
+
+        # Only present fields in canonical order
+        assert keys == ["d", "i", "a"]
+
+    def test_field_ordering_extra_fields(self):
+        """Extra fields are appended after standard fields."""
+        from app.vvp.acdc.parser import _acdc_canonical_serialize
+        import json
+
+        data = {
+            "d": "ESAID",
+            "i": "DISSUER",
+            "custom1": "value1",
+            "custom2": "value2",
+        }
+
+        canonical = _acdc_canonical_serialize(data)
+        result = json.loads(canonical)
+        keys = list(result.keys())
+
+        # Standard fields first, then extras
+        assert keys[0] == "d"
+        assert keys[1] == "i"
+        assert "custom1" in keys
+        assert "custom2" in keys
+
+    def test_field_ordering_none_values_excluded(self):
+        """None values are excluded from output."""
+        from app.vvp.acdc.parser import _acdc_canonical_serialize
+        import json
+
+        data = {
+            "d": "ESAID",
+            "i": "DISSUER",
+            "a": None,  # Should be excluded
+            "e": None,  # Should be excluded
+        }
+
+        canonical = _acdc_canonical_serialize(data)
+        result = json.loads(canonical)
+
+        assert "a" not in result
+        assert "e" not in result
+        assert "d" in result
+        assert "i" in result
+
+    def test_canonical_no_whitespace(self):
+        """Canonical output has no whitespace."""
+        from app.vvp.acdc.parser import _acdc_canonical_serialize
+
+        data = {
+            "d": "ESAID",
+            "i": "DISSUER",
+            "a": {"key": "value"},
+        }
+
+        canonical = _acdc_canonical_serialize(data)
+
+        # No spaces or newlines
+        assert b" " not in canonical
+        assert b"\n" not in canonical
+        assert b"\t" not in canonical
+
+
+class TestParseACDCFromDossier:
+    """Tests for parse_acdc_from_dossier() dossier locations."""
+
+    def test_acdc_in_credential_key(self):
+        """ACDC found under 'credential' key."""
+        from app.vvp.acdc.parser import parse_acdc_from_dossier
+
+        dossier = {
+            "credential": {
+                "d": "E" + "A" * 43,
+                "i": "D" + "B" * 43,
+                "a": {},
+            }
+        }
+
+        acdc = parse_acdc_from_dossier(dossier)
+        assert acdc.said == "E" + "A" * 43
+
+    def test_acdc_in_custom_key(self):
+        """ACDC found under custom key."""
+        from app.vvp.acdc.parser import parse_acdc_from_dossier
+
+        dossier = {
+            "my_custom_key": {
+                "d": "E" + "C" * 43,
+                "i": "D" + "D" * 43,
+                "a": {},
+            }
+        }
+
+        acdc = parse_acdc_from_dossier(dossier, credential_key="my_custom_key")
+        assert acdc.said == "E" + "C" * 43
+
+    def test_acdc_in_nested_acdc_field(self):
+        """ACDC found under nested 'acdc' field."""
+        from app.vvp.acdc.parser import parse_acdc_from_dossier
+
+        dossier = {
+            "acdc": {
+                "d": "E" + "E" * 43,
+                "i": "D" + "F" * 43,
+                "a": {},
+            }
+        }
+
+        acdc = parse_acdc_from_dossier(dossier)
+        assert acdc.said == "E" + "E" * 43
+
+    def test_dossier_is_acdc_itself(self):
+        """Dossier is the ACDC itself (d and i at top level)."""
+        from app.vvp.acdc.parser import parse_acdc_from_dossier
+
+        dossier = {
+            "d": "E" + "G" * 43,
+            "i": "D" + "H" * 43,
+            "a": {},
+        }
+
+        acdc = parse_acdc_from_dossier(dossier)
+        assert acdc.said == "E" + "G" * 43
+
+    def test_no_acdc_found_raises(self):
+        """No ACDC found raises ACDCParseError."""
+        from app.vvp.acdc.parser import parse_acdc_from_dossier
+
+        dossier = {
+            "some_other_data": "value",
+            "metadata": {"version": "1.0"},
+        }
+
+        with pytest.raises(ACDCParseError, match="No ACDC found"):
+            parse_acdc_from_dossier(dossier)
+
+    def test_acdc_in_credential_key_takes_precedence(self):
+        """credential_key takes precedence over 'acdc' key."""
+        from app.vvp.acdc.parser import parse_acdc_from_dossier
+
+        dossier = {
+            "credential": {
+                "d": "E" + "1" * 43,
+                "i": "D" + "1" * 43,
+                "a": {},
+            },
+            "acdc": {
+                "d": "E" + "2" * 43,
+                "i": "D" + "2" * 43,
+                "a": {},
+            }
+        }
+
+        acdc = parse_acdc_from_dossier(dossier)
+        # Should use 'credential' key first
+        assert acdc.said == "E" + "1" * 43

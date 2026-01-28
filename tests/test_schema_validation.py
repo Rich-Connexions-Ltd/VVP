@@ -453,3 +453,127 @@ class TestCacheStats:
             stats = get_cache_stats()
             assert stats["size"] == 1
             assert said in stats["saids"]
+
+
+# =============================================================================
+# Additional schema_validator.py coverage tests - Phase 6
+# =============================================================================
+
+
+class TestSchemaValidatorCoverage:
+    """Additional tests for schema_validator.py coverage."""
+
+    def test_max_errors_exceeded(self):
+        """When errors exceed max_errors, truncation message is added."""
+        # Schema that will produce many errors
+        strict_schema = {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "properties": {
+                "field1": {"type": "integer"},
+                "field2": {"type": "integer"},
+                "field3": {"type": "integer"},
+                "field4": {"type": "integer"},
+                "field5": {"type": "integer"},
+                "field6": {"type": "integer"},
+                "field7": {"type": "integer"},
+                "field8": {"type": "integer"},
+                "field9": {"type": "integer"},
+                "field10": {"type": "integer"},
+                "field11": {"type": "integer"},
+            },
+            "required": [
+                "field1", "field2", "field3", "field4", "field5",
+                "field6", "field7", "field8", "field9", "field10", "field11",
+            ],
+        }
+
+        # Attributes with wrong types (all strings instead of integers)
+        bad_attributes = {
+            f"field{i}": "not_an_integer" for i in range(1, 12)
+        }
+
+        errors = validate_acdc_against_schema(bad_attributes, strict_schema, max_errors=5)
+
+        # Should have truncation message
+        assert len(errors) == 6  # 5 errors + truncation message
+        assert "stopped at 5" in errors[-1]
+
+    def test_invalid_schema_document(self):
+        """Invalid schema document returns SchemaError message."""
+        # Invalid schema (bad type value)
+        invalid_schema = {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "not_a_valid_type",  # Invalid type
+        }
+
+        attributes = {"some": "data"}
+
+        errors = validate_acdc_against_schema(attributes, invalid_schema)
+
+        # Should have error about invalid schema
+        assert len(errors) >= 1
+        # The validator should catch this as either a validation error or schema error
+
+    def test_exception_during_validation(self):
+        """Unexpected exception during validation is caught and logged."""
+        # This is hard to trigger naturally, so we'll use mocking
+        with patch(
+            "app.vvp.acdc.schema_validator.Draft7Validator",
+            side_effect=RuntimeError("Unexpected error")
+        ):
+            errors = validate_acdc_against_schema(
+                {"key": "value"},
+                SAMPLE_SCHEMA
+            )
+
+        assert len(errors) == 1
+        assert "Validation error" in errors[0]
+        assert "Unexpected error" in errors[0]
+
+    def test_is_valid_json_schema_with_invalid_schema(self):
+        """is_valid_json_schema returns False for invalid schema."""
+        invalid_schema = {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "not_valid",  # Invalid type keyword
+        }
+
+        result = is_valid_json_schema(invalid_schema)
+        assert result is False
+
+    def test_is_valid_json_schema_with_valid_schema(self):
+        """is_valid_json_schema returns True for valid schema."""
+        valid_schema = {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"}
+            }
+        }
+
+        result = is_valid_json_schema(valid_schema)
+        assert result is True
+
+    def test_empty_attributes_returns_error(self):
+        """Empty attributes dict returns specific error."""
+        errors = validate_acdc_against_schema({}, SAMPLE_SCHEMA)
+        assert len(errors) >= 1
+        # Either "empty or missing" error or schema validation errors for missing required fields
+
+    def test_none_attributes_returns_error(self):
+        """None attributes returns specific error."""
+        errors = validate_acdc_against_schema(None, SAMPLE_SCHEMA)
+        assert len(errors) == 1
+        assert "empty or missing" in errors[0]
+
+    def test_empty_schema_returns_error(self):
+        """Empty schema document returns specific error."""
+        errors = validate_acdc_against_schema({"key": "value"}, {})
+        assert len(errors) == 1
+        assert "Schema document is empty" in errors[0]
+
+    def test_none_schema_returns_error(self):
+        """None schema returns specific error."""
+        errors = validate_acdc_against_schema({"key": "value"}, None)
+        assert len(errors) == 1
+        assert "Schema document is empty" in errors[0]

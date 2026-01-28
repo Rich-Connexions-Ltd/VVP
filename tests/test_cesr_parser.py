@@ -259,3 +259,199 @@ class TestWithKeriPyFixtures:
         for i, msg in enumerate(result):
             assert msg.event_dict["t"] == events[i]["t"]
             assert msg.event_dict["d"] == events[i]["d"]
+
+
+# =============================================================================
+# Additional cesr.py coverage tests - Phase 5
+# =============================================================================
+
+
+class TestParseCountCodeCoverage:
+    """Additional tests for _parse_count_code coverage."""
+
+    def test_end_of_stream_raises(self):
+        """Parsing at end of stream raises error."""
+        data = b""
+        with pytest.raises(ResolutionFailedError, match="Unexpected end"):
+            _parse_count_code(data, 0)
+
+    def test_end_of_stream_with_offset(self):
+        """Parsing past end of stream raises error."""
+        data = b"-AAA"
+        with pytest.raises(ResolutionFailedError, match="Unexpected end"):
+            _parse_count_code(data, 10)
+
+    def test_truncated_version_string(self):
+        """Truncated version string raises error."""
+        data = b"-_AAA1"  # Only 6 chars, needs 8
+        with pytest.raises(ResolutionFailedError, match="Truncated CESR version"):
+            _parse_count_code(data, 0)
+
+    def test_truncated_count_code(self):
+        """Truncated count code (less than 2 chars) raises error."""
+        data = b"-"  # Only 1 char
+        with pytest.raises(ResolutionFailedError, match="Truncated count code"):
+            _parse_count_code(data, 0)
+
+    def test_big_count_code_parsing(self):
+        """Big count codes (--V prefix) are parsed correctly."""
+        # --V count code is 3-char hard + 3-char soft (6 chars total)
+        # Build a valid --V code: --VAA (count of 0)
+        # Actually --V requires 5 char soft code per COUNT_CODE_SIZES
+        # Let's check what codes are supported
+        from app.vvp.keri.cesr import COUNT_CODE_SIZES
+
+        # Only test if --V is in COUNT_CODE_SIZES
+        if "--V" in COUNT_CODE_SIZES:
+            _, ss, fs = COUNT_CODE_SIZES["--V"]
+            # Build valid code
+            data = b"--V" + b"A" * ss
+            code, count, offset = _parse_count_code(data, 0)
+            assert code == "--V"
+            assert offset == fs
+
+
+class TestParseIndexedSignatureCoverage:
+    """Additional tests for _parse_indexed_signature coverage."""
+
+    def test_truncated_signature_at_start(self):
+        """Truncated stream at start raises error."""
+        from app.vvp.keri.cesr import _parse_indexed_signature
+
+        data = b"0"  # Only 1 byte, needs at least 2
+        with pytest.raises(ResolutionFailedError, match="Truncated signature"):
+            _parse_indexed_signature(data, 0)
+
+    def test_truncated_ed25519_signature(self):
+        """Truncated Ed25519 signature raises error."""
+        from app.vvp.keri.cesr import _parse_indexed_signature
+
+        # 0A code but only partial signature
+        data = b"0A" + b"A" * 30  # Only 32 bytes total, needs 88
+        with pytest.raises(ResolutionFailedError, match="Truncated Ed25519"):
+            _parse_indexed_signature(data, 0)
+
+    def test_4char_code_truncated(self):
+        """4-char derivation code with truncated signature raises error."""
+        from app.vvp.keri.cesr import _parse_indexed_signature
+
+        # 1AAA code but only partial signature
+        data = b"1AAA" + b"A" * 30  # Only 34 bytes total, needs 88
+        with pytest.raises(ResolutionFailedError, match="Truncated Ed25519 indexed"):
+            _parse_indexed_signature(data, 0)
+
+    def test_unknown_derivation_code(self):
+        """Unknown derivation code raises error."""
+        from app.vvp.keri.cesr import _parse_indexed_signature
+
+        data = b"ZZ" + b"A" * 86  # Unknown code
+        with pytest.raises(ResolutionFailedError, match="Unknown signature derivation"):
+            _parse_indexed_signature(data, 0)
+
+
+class TestFindJsonEndCoverage:
+    """Additional tests for _find_json_end coverage."""
+
+    def test_json_with_escaped_chars(self):
+        """JSON with escaped characters is handled correctly."""
+        from app.vvp.keri.cesr import _find_json_end
+
+        data = b'{"key": "value with \\\\ backslash"}'
+        end = _find_json_end(data, 0)
+        assert end == len(data)
+
+    def test_json_with_escaped_quote(self):
+        """JSON with escaped quote is handled correctly."""
+        from app.vvp.keri.cesr import _find_json_end
+
+        data = b'{"key": "value with \\" quote"}'
+        end = _find_json_end(data, 0)
+        assert end == len(data)
+
+    def test_unterminated_json(self):
+        """Unterminated JSON raises error."""
+        from app.vvp.keri.cesr import _find_json_end
+
+        data = b'{"key": "value"'  # Missing closing brace
+        with pytest.raises(ResolutionFailedError, match="Unterminated JSON"):
+            _find_json_end(data, 0)
+
+
+class TestParseCesrStreamCoverage:
+    """Additional tests for parse_cesr_stream coverage."""
+
+    def test_whitespace_skipping(self):
+        """Whitespace between events is skipped."""
+        event1 = b'{"t":"icp","d":"ESAID1"}'
+        event2 = b'{"t":"rot","d":"ESAID2"}'
+        data = event1 + b"   \n\r\t   " + event2  # Lots of whitespace
+
+        result = parse_cesr_stream(data)
+        assert len(result) == 2
+
+    def test_json_parse_error(self):
+        """Unterminated JSON raises error."""
+        # Properly unterminated - has opening but no closing brace
+        data = b'{"key": "value"'  # Missing closing brace
+        with pytest.raises(ResolutionFailedError, match="Unterminated JSON"):
+            parse_cesr_stream(data)
+
+    def test_unknown_byte_raises(self):
+        """Unknown byte in stream raises error."""
+        # Start with something that's not { or -
+        data = b"UNKNOWN"
+        with pytest.raises(ResolutionFailedError, match="Unexpected byte"):
+            parse_cesr_stream(data)
+
+    def test_whitespace_only_after_json(self):
+        """Whitespace only after JSON doesn't cause issues."""
+        event = b'{"t":"icp","d":"ESAID"}'
+        data = event + b"   \n\t  "  # Trailing whitespace
+
+        result = parse_cesr_stream(data)
+        assert len(result) == 1
+
+    def test_attachment_group_passthrough(self):
+        """Attachment group codes (-V, --V) are passed through."""
+        # This test verifies that -V codes don't crash
+        event = b'{"t":"icp","d":"ESAID"}'
+        # -VAA is an attachment group count code (count=0)
+        attachment = b"-VAA"
+        data = event + attachment
+
+        result = parse_cesr_stream(data)
+        assert len(result) == 1
+
+
+class TestIsCesrStreamCoverage:
+    """Additional tests for is_cesr_stream coverage."""
+
+    def test_json_without_attachments_false(self):
+        """Plain JSON without CESR attachments returns False."""
+        data = b'{"key": "value"}'
+        assert is_cesr_stream(data) is False
+
+    def test_json_with_trailing_count_code_true(self):
+        """JSON followed by count code returns True."""
+        data = b'{"key": "value"}-AAA'
+        assert is_cesr_stream(data) is True
+
+    def test_json_parse_error_returns_false(self):
+        """Invalid JSON returns False (no crash)."""
+        data = b'{"invalid'
+        # Should not crash, just return False
+        assert is_cesr_stream(data) is False
+
+
+class TestDecodePssSignatureCoverage:
+    """Additional tests for decode_pss_signature coverage."""
+
+    def test_invalid_base64_encoding(self):
+        """Invalid base64 in signature raises error."""
+        from app.vvp.keri.cesr import decode_pss_signature
+
+        # Valid code but bytes that will fail proper base64 decoding
+        # Use non-printable chars that result in decode failure or wrong length
+        invalid_sig = "0A" + "\xff" * 86  # 88 chars with non-base64 chars
+        with pytest.raises(ResolutionFailedError):
+            decode_pss_signature(invalid_sig)
