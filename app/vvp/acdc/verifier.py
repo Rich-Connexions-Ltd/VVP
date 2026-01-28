@@ -4,9 +4,12 @@ Per VVP §6.3.x credential verification requirements.
 """
 
 import logging
-from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Dict, FrozenSet, List, Optional, Set, Tuple
 
 from .exceptions import ACDCChainInvalid, ACDCSignatureInvalid
+
+if TYPE_CHECKING:
+    from ..keri.credential_resolver import CredentialResolver
 from .models import ACDC, ACDCChainResult
 from .parser import _acdc_canonical_serialize
 from .schema_registry import (
@@ -407,7 +410,9 @@ async def validate_credential_chain(
     dossier_acdcs: Dict[str, ACDC],
     max_depth: int = 10,
     validate_schemas: bool = False,
-    pss_signer_aid: Optional[str] = None
+    pss_signer_aid: Optional[str] = None,
+    credential_resolver: Optional["CredentialResolver"] = None,
+    witness_urls: Optional[List[str]] = None,
 ) -> ACDCChainResult:
     """Walk the credential chain back to a trusted root.
 
@@ -441,6 +446,10 @@ async def validate_credential_chain(
         validate_schemas: If True, validates schema SAIDs against known governance schemas.
         pss_signer_aid: The AID from the PASSporT signer (kid field). Required for DE
             validation per §6.3.4 - PSS signer must match delegate in DE credential.
+        credential_resolver: Optional CredentialResolver for fetching external SAIDs
+            from witnesses. If provided and enabled, missing edge targets will be
+            fetched from witnesses before marking as INDETERMINATE.
+        witness_urls: Base URLs of witnesses to query for external SAIDs.
 
     Returns:
         ACDCChainResult with chain and validation status.
@@ -458,7 +467,7 @@ async def validate_credential_chain(
     chain_status = ClaimStatus.VALID  # Track worst status across chain
     has_variants = False  # Track if any ACDCs are compact/partial
 
-    def walk_chain(
+    async def walk_chain(
         current: ACDC,
         depth: int = 0,
         pss_signer_aid: Optional[str] = None
@@ -564,22 +573,101 @@ async def validate_credential_chain(
 
             # Look up parent credential in dossier
             if parent_said not in dossier_acdcs:
-                # For compact variants, external edge refs result in INDETERMINATE
-                # per §2.2 ("Uncertainty must be explicit") - cannot verify the chain
-                current_variant = getattr(current, 'variant', 'full')
-                if current_variant == 'compact':
-                    errors.append(
-                        f"Cannot verify edge target {parent_said[:20]}... - "
-                        f"not in dossier (compact variant)"
+                # Attempt external resolution if resolver is provided
+                resolved = False
+                if credential_resolver and witness_urls:
+                    result = await credential_resolver.resolve(parent_said, witness_urls)
+                    if result:
+                        # Successfully resolved external credential
+                        dossier_acdcs[parent_said] = result.acdc
+                        log.info(
+                            f"Resolved external credential {parent_said[:20]}... "
+                            f"from {result.source_url}"
+                        )
+                        resolved = True
+
+                        # Per review: externally resolved credentials MUST have their
+                        # signatures cryptographically verified before producing VALID
+                        if result.signature:
+                            # Verify signature against issuer's key
+                            from ..keri import resolve_key_state, ResolutionFailedError
+                            from datetime import datetime, timezone
+                            try:
+                                key_state = await resolve_key_state(
+                                    kid=result.acdc.issuer_aid,
+                                    reference_time=datetime.now(timezone.utc),
+                                    _allow_test_mode=False,
+                                )
+                                # Try each signing key
+                                signature_valid = False
+                                for signing_key in key_state.signing_keys:
+                                    try:
+                                        verify_acdc_signature(
+                                            result.acdc, result.signature, signing_key
+                                        )
+                                        signature_valid = True
+                                        log.info(
+                                            f"Verified signature for external credential "
+                                            f"{parent_said[:20]}..."
+                                        )
+                                        break
+                                    except ACDCSignatureInvalid:
+                                        continue
+
+                                if not signature_valid:
+                                    raise ACDCSignatureInvalid(
+                                        f"No issuer key validates signature for "
+                                        f"external credential {parent_said[:20]}..."
+                                    )
+
+                            except ResolutionFailedError as e:
+                                # Key resolution failed - mark as INDETERMINATE
+                                errors.append(
+                                    f"Cannot resolve issuer key for external credential "
+                                    f"{parent_said[:20]}...: {e}"
+                                )
+                                if chain_status == ClaimStatus.VALID:
+                                    chain_status = ClaimStatus.INDETERMINATE
+                                log.warning(
+                                    f"Key resolution failed for external credential "
+                                    f"{parent_said[:20]}... - chain marked INDETERMINATE"
+                                )
+                            except ACDCSignatureInvalid as e:
+                                # Signature invalid - this is definitive INVALID
+                                raise ACDCChainInvalid(
+                                    f"External credential signature invalid: {e}"
+                                )
+                        else:
+                            # No signature - cannot verify cryptographically
+                            errors.append(
+                                f"External credential {parent_said[:20]}... resolved "
+                                f"without signature - cannot verify cryptographically"
+                            )
+                            if chain_status == ClaimStatus.VALID:
+                                chain_status = ClaimStatus.INDETERMINATE
+                            log.warning(
+                                f"Externally resolved credential {parent_said[:20]}... "
+                                f"has no signature - chain marked INDETERMINATE"
+                            )
+
+                if not resolved:
+                    # Resolution failed or not attempted
+                    # For compact variants, external edge refs result in INDETERMINATE
+                    # per §2.2 ("Uncertainty must be explicit") - cannot verify the chain
+                    current_variant = getattr(current, 'variant', 'full')
+                    if current_variant == 'compact':
+                        errors.append(
+                            f"Cannot verify edge target {parent_said[:20]}... - "
+                            f"not in dossier (compact variant)"
+                        )
+                        chain_status = ClaimStatus.INDETERMINATE
+                        # Return None to indicate chain cannot be fully verified
+                        # but this is not a definite INVALID - it's uncertainty
+                        return None
+                    # For full variants, missing edge target is a definite error
+                    raise ACDCChainInvalid(
+                        f"Edge target {parent_said[:20]}... not found in dossier"
                     )
-                    chain_status = ClaimStatus.INDETERMINATE
-                    # Return None to indicate chain cannot be fully verified
-                    # but this is not a definite INVALID - it's uncertainty
-                    return None
-                # For full variants, missing edge target is a definite error
-                raise ACDCChainInvalid(
-                    f"Edge target {parent_said[:20]}... not found in dossier"
-                )
 
             parent_acdc = dossier_acdcs[parent_said]
 
@@ -588,7 +676,7 @@ async def validate_credential_chain(
                 validate_tnalloc_credential(current, parent_acdc)
 
             # Recursively validate parent
-            root_aid = walk_chain(parent_acdc, depth + 1, pss_signer_aid)
+            root_aid = await walk_chain(parent_acdc, depth + 1, pss_signer_aid)
             if root_aid:
                 return root_aid
 
@@ -607,7 +695,7 @@ async def validate_credential_chain(
 
     # Start chain walk
     try:
-        root_aid = walk_chain(acdc, pss_signer_aid=pss_signer_aid)
+        root_aid = await walk_chain(acdc, pss_signer_aid=pss_signer_aid)
 
         # After chain walk, validate schema documents per §5.1.1-2.8.3
         # This fetches schema documents and validates ACDC attributes against them

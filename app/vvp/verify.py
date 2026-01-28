@@ -920,7 +920,15 @@ async def verify_vvp(
     chain_claim = ClaimBuilder("chain_verified")
 
     if dag is not None:
-        from app.core.config import TRUSTED_ROOT_AIDS, SCHEMA_VALIDATION_STRICT
+        from app.core.config import (
+            TRUSTED_ROOT_AIDS,
+            SCHEMA_VALIDATION_STRICT,
+            EXTERNAL_SAID_RESOLUTION_ENABLED,
+            EXTERNAL_SAID_RESOLUTION_TIMEOUT,
+            EXTERNAL_SAID_MAX_DEPTH,
+            EXTERNAL_SAID_CACHE_TTL_SECONDS,
+            EXTERNAL_SAID_CACHE_MAX_ENTRIES,
+        )
         from app.vvp.acdc import (
             validate_credential_chain,
             ACDCChainInvalid,
@@ -929,6 +937,7 @@ async def verify_vvp(
             ACDCSignatureInvalid,
         )
         from app.vvp.keri import resolve_key_state
+        from app.vvp.keri.tel_client import TELClient
 
         # Convert DossierDAG nodes to ACDC format
         dossier_acdcs = _convert_dag_to_acdcs(dag)
@@ -936,11 +945,38 @@ async def verify_vvp(
         # Get PSS signer AID from passport kid for DE validation (if passport available)
         # Per §6.3.4, PSS signer must match delegate in DE credential
         pss_signer_aid = None
+        witness_urls = []
         if passport:
             try:
                 pss_signer_aid = _extract_aid_from_kid(passport.header.kid)
             except ResolutionFailedError:
                 pass  # Chain validation can proceed without
+
+            # Extract witness URL from passport kid for external SAID resolution
+            if passport.header.kid:
+                witness_base_url = TELClient.extract_witness_base_url(passport.header.kid)
+                if witness_base_url:
+                    witness_urls.append(witness_base_url)
+
+        # Set up credential resolver for external SAID resolution if enabled
+        credential_resolver = None
+        if EXTERNAL_SAID_RESOLUTION_ENABLED and witness_urls:
+            from app.vvp.keri.credential_resolver import (
+                CredentialResolver,
+                CredentialResolverConfig,
+            )
+            credential_resolver = CredentialResolver(
+                config=CredentialResolverConfig(
+                    enabled=True,
+                    timeout_seconds=EXTERNAL_SAID_RESOLUTION_TIMEOUT,
+                    max_recursion_depth=EXTERNAL_SAID_MAX_DEPTH,
+                    cache_ttl_seconds=EXTERNAL_SAID_CACHE_TTL_SECONDS,
+                    cache_max_entries=EXTERNAL_SAID_CACHE_MAX_ENTRIES,
+                )
+            )
+            log.debug(
+                f"External SAID resolution enabled with {len(witness_urls)} witness(es)"
+            )
 
         # Find leaf credentials to validate (not just the DAG root)
         # Per §6.3.x, validate from APE/DE/TNAlloc credentials that are leaves
@@ -970,7 +1006,9 @@ async def verify_vvp(
                     trusted_roots=TRUSTED_ROOT_AIDS,
                     dossier_acdcs=dossier_acdcs,
                     pss_signer_aid=pss_signer_aid,
-                    validate_schemas=SCHEMA_VALIDATION_STRICT
+                    validate_schemas=SCHEMA_VALIDATION_STRICT,
+                    credential_resolver=credential_resolver,
+                    witness_urls=witness_urls if credential_resolver else None,
                 )
 
                 # Track variant limitations from chain result (§1.4)

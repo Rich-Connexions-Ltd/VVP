@@ -1,5 +1,98 @@
 # VVP Verifier Change Log
 
+## Sprint 25: External SAID Resolution from Witnesses
+
+**Date:** 2026-01-28
+**Commit:** e30b5bd
+
+### Files Changed
+
+| File | Action | Description |
+|------|--------|-------------|
+| `app/core/config.py` | Modified | Added 5 configuration constants for external SAID resolution feature |
+| `app/vvp/keri/credential_cache.py` | Created | Credential-specific LRU cache with TTL expiration |
+| `app/vvp/keri/credential_resolver.py` | Created | CredentialResolver class for fetching missing credentials from witnesses |
+| `app/vvp/acdc/verifier.py` | Modified | Integrated resolver into chain validation, made walk_chain() async |
+| `app/vvp/verify.py` | Modified | Pass resolver and witness URLs when feature enabled |
+| `app/vvp/keri/__init__.py` | Modified | Export new credential resolver and cache components |
+| `tests/test_credential_cache.py` | Created | Unit tests for credential cache (LRU eviction, TTL, metrics) |
+| `tests/test_credential_resolver.py` | Created | Unit tests for resolver with mocked HTTP |
+| `tests/test_acdc.py` | Modified | Integration tests for external resolution |
+| `app/Documentation/PLAN_ExternalSAIDResolution.md` | Created | Archived implementation plan |
+
+### Summary
+
+Implemented external SAID resolution to fetch missing credentials from KERI witnesses when compact ACDCs have edge references not included in the dossier. Per VVP §2.2, instead of immediately returning INDETERMINATE, the verifier now attempts to resolve external credentials from witnesses.
+
+**Key Features:**
+
+1. **Configuration (opt-in, disabled by default):**
+   - `VVP_EXTERNAL_SAID_RESOLUTION` - Enable/disable feature
+   - `VVP_EXTERNAL_SAID_TIMEOUT` - HTTP timeout (default: 5.0s)
+   - `VVP_EXTERNAL_SAID_MAX_DEPTH` - Max recursion depth (default: 3)
+   - `VVP_EXTERNAL_SAID_CACHE_TTL` - Cache TTL (default: 300s)
+   - `VVP_EXTERNAL_SAID_CACHE_MAX_ENTRIES` - Cache max size (default: 500)
+
+2. **CredentialResolver Module:**
+   - Fetches credentials from `/credentials/{said}` witness endpoints
+   - Parallel witness queries (up to 3) for faster resolution
+   - Recursion guard prevents infinite loops
+   - Metrics tracking (attempts, successes, failures, cache hits)
+
+3. **CredentialCache Module:**
+   - LRU eviction when max_entries exceeded
+   - TTL-based expiration
+   - Singleton pattern with get/reset functions
+   - Cache metrics (hits, misses, evictions, expirations)
+
+4. **Verifier Integration:**
+   - `walk_chain()` made async to support async resolution
+   - Resolution attempted before INDETERMINATE fallback
+   - Resolved credentials added to `dossier_acdcs` for continued validation
+   - **Signature verification** for resolved credentials with signatures
+   - Resolved credentials without signatures → INDETERMINATE
+
+5. **Error Handling:**
+   - Network/timeout errors → INDETERMINATE
+   - SAID mismatch → INDETERMINATE
+   - Key resolution failed → INDETERMINATE
+   - Signature invalid → **INVALID** (cryptographic failure)
+   - No signature present → INDETERMINATE
+   - Recursion limit → INDETERMINATE
+
+6. **CESR Response Parsing:**
+   - Uses `parse_cesr_stream()` for proper CESR attachment handling
+   - Extracts controller signatures from `-A` attachments
+   - Falls back to plain JSON if CESR parsing fails
+
+**Design Decisions:**
+
+- Feature disabled by default to avoid unexpected network calls
+- Separated from TEL client (different concern: credential fetching vs revocation)
+- Externally resolved credentials with signatures are cryptographically verified
+- Externally resolved credentials without signatures produce INDETERMINATE (not VALID)
+- Only signature verification failure produces INVALID; all other failures are recoverable
+
+### Spec References
+
+- §2.2: "Uncertainty must be explicit" - INDETERMINATE when verification cannot determine status
+- §1.4: Verifiers MUST support ACDC variants (compact, partial, aggregate)
+- §6.3.x: Credential chain validation rules
+
+### Code Review
+
+- **Initial review:** CHANGES_REQUESTED - missing signature verification, CESR parsing issues, cache config not wired
+- **Follow-up #1:** CHANGES_REQUESTED - signature verification for credentials WITH signatures still missing
+- **Follow-up #2:** APPROVED - all issues addressed
+
+### Test Results
+
+```
+1463 passed in 99.32s
+```
+
+---
+
 ## Completing Tier 2 KERI Verification
 
 **Date:** 2026-01-28

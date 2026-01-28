@@ -254,3 +254,40 @@ DOSSIER_CACHE_MAX_ENTRIES: int = int(
 SCHEMA_CACHE_TTL_SECONDS: int = int(
     os.getenv("VVP_SCHEMA_CACHE_TTL", "300")
 )
+
+
+# =============================================================================
+# SPRINT 25: EXTERNAL SAID RESOLUTION (§2.2 / §1.4)
+# =============================================================================
+# Attempt to resolve external credential SAIDs from KERI witnesses when
+# compact ACDCs have edge references to credentials not in the dossier.
+
+# Enable external SAID resolution from witnesses
+# When True: Attempt to fetch missing edge credentials from witnesses before INDETERMINATE
+# When False (default): Immediately return INDETERMINATE for missing edges per §2.2
+EXTERNAL_SAID_RESOLUTION_ENABLED: bool = os.getenv(
+    "VVP_EXTERNAL_SAID_RESOLUTION", "false"
+).lower() == "true"
+
+# Timeout for external credential fetch (per-request)
+# Lower than dossier timeout since this is enhancement, not requirement
+EXTERNAL_SAID_RESOLUTION_TIMEOUT: float = float(
+    os.getenv("VVP_EXTERNAL_SAID_TIMEOUT", "5.0")
+)
+
+# Maximum recursion depth for resolving chained external credentials
+# Prevents infinite loops when fetched credentials have their own external refs
+EXTERNAL_SAID_MAX_DEPTH: int = int(
+    os.getenv("VVP_EXTERNAL_SAID_MAX_DEPTH", "3")
+)
+
+# Cache TTL for resolved external credentials
+# Aligns with dossier cache TTL per §5C.2 freshness policy
+EXTERNAL_SAID_CACHE_TTL_SECONDS: int = int(
+    os.getenv("VVP_EXTERNAL_SAID_CACHE_TTL", "300")
+)
+
+# Maximum external credential cache entries before LRU eviction
+EXTERNAL_SAID_CACHE_MAX_ENTRIES: int = int(
+    os.getenv("VVP_EXTERNAL_SAID_CACHE_MAX_ENTRIES", "500")
+)

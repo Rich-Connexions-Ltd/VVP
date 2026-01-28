@@ -24,6 +24,20 @@ from .kel_resolver import KeyState, resolve_key_state, resolve_key_state_tier1_f
 from .kel_parser import KELEvent, WitnessReceipt, EventType, parse_kel_stream, validate_kel_chain
 from .oobi import OOBIResult, dereference_oobi
 from .cache import KeyStateCache, CacheConfig
+from .credential_resolver import (
+    CredentialResolver,
+    CredentialResolverConfig,
+    ResolvedCredential,
+    get_credential_resolver,
+    reset_credential_resolver,
+)
+from .credential_cache import (
+    CredentialCache,
+    CredentialCacheConfig,
+    CachedCredential,
+    get_credential_cache,
+    reset_credential_cache,
+)
 
 __all__ = [
     # Exceptions
@@ -54,4 +68,15 @@ __all__ = [
     "dereference_oobi",
     "KeyStateCache",
     "CacheConfig",
+    # External SAID Resolution (Sprint 25)
+    "CredentialResolver",
+    "CredentialResolverConfig",
+    "ResolvedCredential",
+    "get_credential_resolver",
+    "reset_credential_resolver",
+    "CredentialCache",
+    "CredentialCacheConfig",
+    "CachedCredential",
+    "get_credential_cache",
+    "reset_credential_cache",
 ]

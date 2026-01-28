@@ -2250,3 +2250,277 @@ class TestParseACDCFromDossier:
         acdc = parse_acdc_from_dossier(dossier)
         # Should use 'credential' key first
         assert acdc.said == "E" + "1" * 43
+
+
+class TestExternalSAIDResolution:
+    """Tests for external SAID resolution from witnesses.
+
+    Per VVP §2.2: When compact ACDCs have external edge refs not in dossier,
+    attempt to resolve from witnesses before marking INDETERMINATE.
+    """
+
+    @pytest.fixture
+    def external_resolver(self):
+        """Create a resolver for tests."""
+        from app.vvp.keri.credential_resolver import (
+            CredentialResolver,
+            CredentialResolverConfig,
+        )
+        from app.vvp.keri.credential_cache import (
+            CredentialCache,
+            CredentialCacheConfig,
+            reset_credential_cache,
+        )
+
+        reset_credential_cache()
+        cache = CredentialCache(CredentialCacheConfig(ttl_seconds=60, max_entries=10))
+        return CredentialResolver(
+            config=CredentialResolverConfig(
+                enabled=True,
+                timeout_seconds=1.0,
+                max_recursion_depth=3,
+            ),
+            cache=cache,
+        )
+
+    @pytest.mark.asyncio
+    async def test_chain_validation_without_resolver_returns_indeterminate(self):
+        """Test that missing edges without resolver returns INDETERMINATE."""
+        root_aid = "D" + "R" * 43
+        parent_said = "E" + "P" * 43  # Not in dossier
+        child_said = "E" + "C" * 43
+        trusted_roots = {root_aid}
+
+        # Child credential (compact variant) with edge to missing parent
+        child_cred = ACDC(
+            version="",
+            said=child_said,
+            issuer_aid="D" + "I" * 43,
+            schema_said="",
+            edges={"parent": {"n": parent_said}},
+            raw={},
+            variant="compact",  # Mark as compact variant
+        )
+
+        dossier_acdcs = {child_said: child_cred}
+
+        # Without resolver, should return INDETERMINATE
+        result = await validate_credential_chain(
+            child_cred, trusted_roots, dossier_acdcs
+        )
+
+        assert result.status == "INDETERMINATE"
+        assert any("not in dossier" in err for err in result.errors)
+
+    @pytest.mark.asyncio
+    async def test_chain_validation_with_resolver_disabled(self, external_resolver):
+        """Test that disabled resolver behaves same as no resolver."""
+        from app.vvp.keri.credential_resolver import CredentialResolverConfig
+
+        external_resolver._config = CredentialResolverConfig(enabled=False)
+
+        root_aid = "D" + "R" * 43
+        parent_said = "E" + "P" * 43
+        child_said = "E" + "C" * 43
+        trusted_roots = {root_aid}
+
+        child_cred = ACDC(
+            version="",
+            said=child_said,
+            issuer_aid="D" + "I" * 43,
+            schema_said="",
+            edges={"parent": {"n": parent_said}},
+            raw={},
+            variant="compact",
+        )
+
+        dossier_acdcs = {child_said: child_cred}
+
+        # With disabled resolver, should return INDETERMINATE
+        result = await validate_credential_chain(
+            child_cred,
+            trusted_roots,
+            dossier_acdcs,
+            credential_resolver=external_resolver,
+            witness_urls=["http://witness.example.com"],
+        )
+
+        assert result.status == "INDETERMINATE"
+
+    @pytest.mark.asyncio
+    async def test_chain_validation_resolver_succeeds(self, external_resolver):
+        """Test that resolver can resolve missing credential and allow validation."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        import json
+
+        root_aid = "D" + "R" * 43
+        parent_said = "E" + "P" * 43
+        child_said = "E" + "C" * 43
+        trusted_roots = {root_aid}
+
+        # Child credential with edge to parent (not in dossier yet)
+        child_cred = ACDC(
+            version="",
+            said=child_said,
+            issuer_aid="D" + "I" * 43,
+            schema_said="",
+            edges={"parent": {"n": parent_said}},
+            raw={},
+            variant="compact",
+        )
+
+        # Parent credential (will be resolved)
+        parent_json = {
+            "v": "ACDC10JSON000000_",
+            "d": parent_said,
+            "i": root_aid,  # Issued by trusted root
+            "s": "",
+            "a": {},
+        }
+
+        dossier_acdcs = {child_said: child_cred}
+
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.content = json.dumps(parent_json).encode()
+
+            mock_instance = AsyncMock()
+            mock_instance.get = AsyncMock(return_value=mock_response)
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=None)
+            mock_client.return_value = mock_instance
+
+            result = await validate_credential_chain(
+                child_cred,
+                trusted_roots,
+                dossier_acdcs,
+                credential_resolver=external_resolver,
+                witness_urls=["http://witness.example.com"],
+            )
+
+            # Should have resolved and validated (parent is root)
+            assert result.validated is True
+            assert result.root_aid == root_aid
+            # Parent should now be in dossier_acdcs
+            assert parent_said in dossier_acdcs
+
+    @pytest.mark.asyncio
+    async def test_resolver_metrics_tracked(self, external_resolver):
+        """Test that resolver metrics are properly tracked."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        import json
+
+        root_aid = "D" + "R" * 43
+        parent_said = "E" + "P" * 43
+        child_said = "E" + "C" * 43
+        trusted_roots = {root_aid}
+
+        child_cred = ACDC(
+            version="",
+            said=child_said,
+            issuer_aid="D" + "I" * 43,
+            schema_said="",
+            edges={"parent": {"n": parent_said}},
+            raw={},
+            variant="compact",
+        )
+
+        parent_json = {
+            "v": "ACDC10JSON000000_",
+            "d": parent_said,
+            "i": root_aid,
+            "s": "",
+            "a": {},
+        }
+
+        dossier_acdcs = {child_said: child_cred}
+
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.content = json.dumps(parent_json).encode()
+
+            mock_instance = AsyncMock()
+            mock_instance.get = AsyncMock(return_value=mock_response)
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=None)
+            mock_client.return_value = mock_instance
+
+            # Initial metrics
+            assert external_resolver.metrics.attempts == 0
+
+            await validate_credential_chain(
+                child_cred,
+                trusted_roots,
+                dossier_acdcs,
+                credential_resolver=external_resolver,
+                witness_urls=["http://witness.example.com"],
+            )
+
+            # Should have recorded the attempt and success
+            assert external_resolver.metrics.attempts == 1
+            assert external_resolver.metrics.successes == 1
+
+    @pytest.mark.asyncio
+    async def test_resolver_without_signature_returns_indeterminate(self, external_resolver):
+        """Test that externally resolved credentials without signatures produce INDETERMINATE.
+
+        Per review: externally resolved credentials without verified signatures
+        MUST NOT produce VALID status - must be INDETERMINATE.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+        import json
+
+        root_aid = "D" + "R" * 43
+        parent_said = "E" + "P" * 43
+        child_said = "E" + "C" * 43
+        trusted_roots = {root_aid}
+
+        # Child credential with edge to parent (not in dossier yet)
+        child_cred = ACDC(
+            version="",
+            said=child_said,
+            issuer_aid="D" + "I" * 43,
+            schema_said="",
+            edges={"parent": {"n": parent_said}},
+            raw={},
+            variant="compact",
+        )
+
+        # Parent credential (will be resolved) - plain JSON without signature
+        parent_json = {
+            "v": "ACDC10JSON000000_",
+            "d": parent_said,
+            "i": root_aid,  # Issued by trusted root
+            "s": "",
+            "a": {},
+        }
+
+        dossier_acdcs = {child_said: child_cred}
+
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            # Plain JSON response - no CESR attachments, so no signature
+            mock_response.content = json.dumps(parent_json).encode()
+
+            mock_instance = AsyncMock()
+            mock_instance.get = AsyncMock(return_value=mock_response)
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=None)
+            mock_client.return_value = mock_instance
+
+            result = await validate_credential_chain(
+                child_cred,
+                trusted_roots,
+                dossier_acdcs,
+                credential_resolver=external_resolver,
+                witness_urls=["http://witness.example.com"],
+            )
+
+            # Chain is validated (path to root exists) but status should be
+            # INDETERMINATE because resolved credential has no signature
+            assert result.validated is True
+            assert result.status == "INDETERMINATE"
+            assert any("without signature" in err for err in result.errors)
