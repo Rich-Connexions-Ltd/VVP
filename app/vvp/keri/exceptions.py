@@ -104,3 +104,53 @@ class OOBIContentInvalidError(KeriError):
 
     def __init__(self, message: str = "Invalid OOBI content"):
         super().__init__(ErrorCode.VVP_OOBI_CONTENT_INVALID, message)
+
+
+class CESRFramingError(KeriError):
+    """CESR attachment group framing error.
+
+    Raised when the declared byte count in a counter code doesn't match
+    the actual bytes consumed during parsing. This indicates either:
+    - Truncated stream (declared > actual)
+    - Extra bytes in group (declared < actual)
+
+    Maps to KERI_STATE_INVALID (non-recoverable → INVALID).
+    """
+
+    def __init__(self, message: str = "CESR framing error"):
+        super().__init__(ErrorCode.KERI_STATE_INVALID, message)
+
+
+class CESRMalformedError(KeriError):
+    """CESR stream contains malformed or unknown data.
+
+    Raised when:
+    - Unknown counter code encountered (e.g., -X## instead of -A##)
+    - Invalid version string format
+    - Truncated primitive (not enough bytes for declared type)
+
+    Maps to KERI_STATE_INVALID (non-recoverable → INVALID).
+    """
+
+    def __init__(self, message: str = "CESR malformed"):
+        super().__init__(ErrorCode.KERI_STATE_INVALID, message)
+
+
+class UnsupportedSerializationKind(KeriError):
+    """CESR version string indicates unsupported serialization kind.
+
+    Raised when the version string indicates MGPK or CBOR serialization.
+    Only JSON serialization is currently supported.
+
+    This is a deterministic rejection (not silent skip) per the plan.
+
+    Maps to KERI_RESOLUTION_FAILED (recoverable → INDETERMINATE).
+    """
+
+    def __init__(self, kind: str = "unknown"):
+        message = (
+            f"Serialization kind '{kind}' not supported. "
+            f"Only JSON is supported in this version. "
+            f"MGPK and CBOR support may be added in a future release."
+        )
+        super().__init__(ErrorCode.KERI_RESOLUTION_FAILED, message)

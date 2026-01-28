@@ -100,9 +100,8 @@ async def _verify_passport_signature_tier2_impl(
     if not TIER2_KEL_RESOLUTION_ENABLED and not _allow_test_mode:
         raise ResolutionFailedError(
             "Tier 2 KEL resolution is disabled. "
-            "This feature is TEST-ONLY and does not support CESR format or "
-            "KERI-compliant signature canonicalization. "
-            "Set TIER2_KEL_RESOLUTION_ENABLED=True only for testing."
+            "Set TIER2_KEL_RESOLUTION_ENABLED=true to enable KERI-based "
+            "key state resolution."
         )
 
     # Use iat as reference time if not specified
@@ -265,19 +264,17 @@ async def verify_passport_signature_tier2(
 
     Per spec §5A Step 4: "Resolve issuer key state at reference time T"
 
+    Features:
+    - CESR binary format (application/cesr, application/json+cesr)
+    - KERI-compliant canonicalization with proper field ordering
+    - SAID validation using Blake3-256
+    - Witness receipt signature validation
+
     For delegated identifiers (dip/drt events), this function also:
     - Resolves the full delegation chain to the non-delegated root
     - Validates each delegation is properly authorized by anchor events
     Per KERI spec, delegated identifiers require authorization from their
     delegator via an interaction event containing a seal.
-
-    WARNING: This function is TEST-ONLY. It does NOT support:
-    - CESR binary format (rejects application/json+cesr responses)
-    - KERI-compliant signature canonicalization (uses JSON sorted-keys)
-
-    These limitations mean it cannot verify real KERI events from production
-    witnesses. Enable TIER2_KEL_RESOLUTION_ENABLED only for testing with
-    synthetic fixtures.
 
     Args:
         passport: Parsed Passport with raw_header, raw_payload, signature.

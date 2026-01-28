@@ -26,7 +26,12 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional, Tuple
 
-from .exceptions import ResolutionFailedError
+from .exceptions import (
+    ResolutionFailedError,
+    CESRFramingError,
+    CESRMalformedError,
+    UnsupportedSerializationKind,
+)
 
 
 class CountCode(Enum):
@@ -67,6 +72,35 @@ SIGNATURE_SIZES = {
     "2AAA": 64,  # Ed25519 both same indexed signature
     "AA": 64,  # Ed25519 non-indexed (used in receipts)
 }
+
+
+@dataclass
+class CESRVersion:
+    """Parsed CESR version string.
+
+    Format: {PROTO:4}{MAJOR:1}{MINOR:1}{KIND:4}{SIZE:6x}{TERM:1}
+    Example: KERI10JSON000154_
+    """
+
+    protocol: str  # "KERI", "ACDC"
+    major: int
+    minor: int
+    kind: str  # "JSON" (MGPK, CBOR not supported)
+    size: int  # Declared serialized size in bytes
+
+
+@dataclass
+class TransferableReceipt:
+    """Receipt from a transferable witness confirming an event.
+
+    Contains the witness's transferable AID prefix, the sequence number
+    and digest of the event being receipted, plus the signature.
+    """
+
+    prefix: str  # Transferable AID (44 chars, D-prefix typically)
+    sequence: int  # Event sequence number
+    digest: str  # Event digest (44 chars, E-prefix typically)
+    signature: bytes  # 64-byte Ed25519 signature
 
 
 @dataclass
@@ -116,6 +150,56 @@ def _b64_to_int(b64_chars: str) -> int:
     return value
 
 
+def parse_version_string(data: bytes, offset: int = 0) -> Tuple[CESRVersion, int]:
+    """Parse CESR version string with deterministic rejection of unsupported kinds.
+
+    Format: {PROTO:4}{MAJOR:1}{MINOR:1}{KIND:4}{SIZE:6x}{TERM:1}
+    Example: KERI10JSON000154_
+
+    Supported kinds: JSON only
+    Rejected kinds: MGPK, CBOR (deterministic error, not silent skip)
+
+    Args:
+        data: CESR byte stream.
+        offset: Current position in stream.
+
+    Returns:
+        Tuple of (CESRVersion, new_offset).
+
+    Raises:
+        UnsupportedSerializationKind: If kind is MGPK or CBOR.
+        CESRMalformedError: If version string format is invalid.
+    """
+    if offset + 17 > len(data):
+        raise CESRMalformedError(
+            f"Truncated version string: need 17 bytes, have {len(data) - offset}"
+        )
+
+    try:
+        vs = data[offset : offset + 17].decode("ascii")
+    except UnicodeDecodeError as e:
+        raise CESRMalformedError(f"Version string contains non-ASCII bytes: {e}")
+
+    # Parse the version string format
+    match = re.match(r"^([A-Z]{4})(\d)(\d)([A-Z]{4})([0-9a-f]{6})(_)$", vs)
+    if not match:
+        raise CESRMalformedError(f"Invalid version string format: {vs!r}")
+
+    proto, major, minor, kind, size_hex, term = match.groups()
+
+    # Deterministic rejection of non-JSON kinds
+    if kind not in ("JSON",):
+        raise UnsupportedSerializationKind(kind)
+
+    return CESRVersion(
+        protocol=proto,
+        major=int(major),
+        minor=int(minor),
+        kind=kind,
+        size=int(size_hex, 16),
+    ), offset + 17
+
+
 def _parse_count_code(data: bytes, offset: int) -> Tuple[str, int, int]:
     """Parse a CESR count code at the given offset.
 
@@ -158,7 +242,7 @@ def _parse_count_code(data: bytes, offset: int) -> Tuple[str, int, int]:
 
     hard = data[offset : offset + 2].decode("ascii")
     if hard not in COUNT_CODE_SIZES:
-        raise ResolutionFailedError(f"Unknown count code: {hard}")
+        raise CESRMalformedError(f"Unknown counter code: {hard}")
 
     _, ss, fs = COUNT_CODE_SIZES[hard]
     if offset + fs > len(data):
@@ -191,42 +275,49 @@ def _parse_indexed_signature(data: bytes, offset: int) -> Tuple[bytes, int]:
     code_2 = data[offset : offset + 2].decode("ascii")
 
     if code_2 in ("0A", "0B", "0C", "0D", "AA"):
-        # Ed25519 signature: 64 bytes raw = 88 chars base64 (with 2-char code)
-        # Total primitive size is 88 chars
+        # Ed25519 indexed signature: total primitive is 88 qb64 chars
+        # CESR encoding: code (2 chars) + index (2 chars) + signature (84 chars)
+        # When decoded as a whole, yields 66 bytes with 2 lead bytes for code/index
         sig_end = offset + 88
         if sig_end > len(data):
             raise ResolutionFailedError("Truncated Ed25519 signature")
-        sig_b64 = data[offset + 2 : sig_end].decode("ascii")
 
-        # Decode from base64
+        # Decode the FULL qb64 primitive (including code) to handle CESR alignment
         import base64
 
-        # Add padding if needed
-        padded = sig_b64 + "=" * (-len(sig_b64) % 4)
+        full_qb64 = data[offset : sig_end].decode("ascii")
         try:
-            sig_bytes = base64.urlsafe_b64decode(padded)
+            full_decoded = base64.urlsafe_b64decode(full_qb64)
         except Exception as e:
             raise ResolutionFailedError(f"Invalid signature encoding: {e}")
 
+        # Strip the 2 lead bytes (code/index) to get the 64-byte Ed25519 signature
+        # Per CESR spec, indexed signatures have ls=2 (lead size)
+        sig_bytes = full_decoded[2:]
+
         return sig_bytes, sig_end
 
-    # 4-char codes like 1AAA, 2AAA
+    # 4-char codes like 1AAA, 2AAA (big indexed signatures)
     if offset + 4 <= len(data):
         code_4 = data[offset : offset + 4].decode("ascii")
         if code_4 in ("1AAA", "2AAA"):
-            # Ed25519 indexed: total 88 chars
+            # Ed25519 big indexed: total 88 chars
+            # These have 4-char code with larger index range
             sig_end = offset + 88
             if sig_end > len(data):
                 raise ResolutionFailedError("Truncated Ed25519 indexed signature")
-            sig_b64 = data[offset + 4 : sig_end].decode("ascii")
 
+            # Decode the FULL qb64 primitive to handle CESR alignment
             import base64
 
-            padded = sig_b64 + "=" * (-len(sig_b64) % 4)
+            full_qb64 = data[offset : sig_end].decode("ascii")
             try:
-                sig_bytes = base64.urlsafe_b64decode(padded)
+                full_decoded = base64.urlsafe_b64decode(full_qb64)
             except Exception as e:
                 raise ResolutionFailedError(f"Invalid signature encoding: {e}")
+
+            # Strip the 2 lead bytes to get the 64-byte Ed25519 signature
+            sig_bytes = full_decoded[2:]
 
             return sig_bytes, sig_end
 
@@ -234,11 +325,14 @@ def _parse_indexed_signature(data: bytes, offset: int) -> Tuple[bytes, int]:
 
 
 def _parse_receipt_couple(data: bytes, offset: int) -> Tuple[WitnessReceipt, int]:
-    """Parse a non-transferable receipt couple.
+    """Parse a non-transferable receipt couple (-C count code).
 
     A receipt couple consists of:
-    1. Witness AID (prefix primitive)
+    1. Non-transferable witness AID (B-prefix only)
     2. Signature (signature primitive)
+
+    Per CESR spec, -C couples are for NON-TRANSFERABLE receipts only.
+    Transferable AIDs (D-prefix) must use -D quadruples instead.
 
     Args:
         data: CESR byte stream.
@@ -246,11 +340,14 @@ def _parse_receipt_couple(data: bytes, offset: int) -> Tuple[WitnessReceipt, int
 
     Returns:
         Tuple of (WitnessReceipt, new_offset).
+
+    Raises:
+        CESRMalformedError: If prefix is transferable (D) instead of non-transferable (B).
     """
     if offset + 1 > len(data):
         raise ResolutionFailedError("Truncated receipt couple")
 
-    # Parse witness AID (non-transferable prefix)
+    # Parse witness AID (non-transferable prefix ONLY)
     # B-prefix AIDs are 44 chars total
     aid_char = chr(data[offset])
     if aid_char == "B":
@@ -261,19 +358,187 @@ def _parse_receipt_couple(data: bytes, offset: int) -> Tuple[WitnessReceipt, int
         witness_aid = data[offset:aid_end].decode("ascii")
         offset = aid_end
     elif aid_char == "D":
-        # Transferable Ed25519 prefix, 44 chars
-        aid_end = offset + 44
-        if aid_end > len(data):
-            raise ResolutionFailedError("Truncated witness AID")
-        witness_aid = data[offset:aid_end].decode("ascii")
-        offset = aid_end
+        # Transferable prefix is NOT allowed in -C non-transferable couples
+        # Use -D quadruples for transferable receipts instead
+        raise CESRMalformedError(
+            f"Transferable AID prefix 'D' not allowed in -C non-transferable receipt couple. "
+            f"Use -D transferable receipt quadruples for transferable AIDs."
+        )
     else:
-        raise ResolutionFailedError(f"Unknown AID prefix: {aid_char}")
+        raise CESRMalformedError(f"Invalid AID prefix in receipt couple: {aid_char}")
 
     # Parse signature
     sig_bytes, offset = _parse_indexed_signature(data, offset)
 
     return WitnessReceipt(witness_aid=witness_aid, signature=sig_bytes), offset
+
+
+def _parse_trans_receipt_quadruple(
+    data: bytes, offset: int
+) -> Tuple[TransferableReceipt, int]:
+    """Parse a transferable receipt quadruple.
+
+    A transferable receipt quadruple consists of:
+    1. Transferable witness AID prefix (44 chars, D-prefix)
+    2. Sequence number (24 chars, 0A-prefixed base64)
+    3. Event digest (44 chars, E-prefix)
+    4. Signature (88 chars)
+
+    Total size: 44 + 24 + 44 + 88 = 200 chars per quadruple
+
+    Args:
+        data: CESR byte stream.
+        offset: Current position in stream.
+
+    Returns:
+        Tuple of (TransferableReceipt, new_offset).
+
+    Raises:
+        CESRMalformedError: If quadruple format is invalid.
+    """
+    import base64
+
+    # Parse transferable AID prefix (44 chars)
+    if offset + 44 > len(data):
+        raise CESRMalformedError("Truncated transferable receipt: missing prefix")
+
+    prefix_char = chr(data[offset])
+    if prefix_char not in ("D", "E"):  # D for Ed25519, E for other types
+        raise CESRMalformedError(
+            f"Invalid transferable prefix in receipt: {prefix_char}"
+        )
+
+    prefix = data[offset : offset + 44].decode("ascii")
+    offset += 44
+
+    # Parse sequence number (24 chars with 0A prefix = base64 encoded number)
+    # Format: 0A + 22 chars of base64 = 24 chars total
+    if offset + 24 > len(data):
+        raise CESRMalformedError("Truncated transferable receipt: missing sequence")
+
+    snu_code = data[offset : offset + 2].decode("ascii")
+    if snu_code != "0A":
+        raise CESRMalformedError(
+            f"Invalid sequence number code in receipt: {snu_code}, expected 0A"
+        )
+
+    snu_b64 = data[offset + 2 : offset + 24].decode("ascii")
+    # Decode base64 to get sequence number
+    padded = snu_b64 + "=" * (-len(snu_b64) % 4)
+    try:
+        snu_bytes = base64.urlsafe_b64decode(padded)
+        sequence = int.from_bytes(snu_bytes, "big")
+    except Exception as e:
+        raise CESRMalformedError(f"Invalid sequence number encoding: {e}")
+
+    offset += 24
+
+    # Parse event digest (44 chars, E-prefix)
+    if offset + 44 > len(data):
+        raise CESRMalformedError("Truncated transferable receipt: missing digest")
+
+    digest_char = chr(data[offset])
+    if digest_char != "E":
+        raise CESRMalformedError(
+            f"Invalid digest prefix in receipt: {digest_char}, expected E"
+        )
+
+    digest = data[offset : offset + 44].decode("ascii")
+    offset += 44
+
+    # Parse signature (88 chars)
+    sig_bytes, offset = _parse_indexed_signature(data, offset)
+
+    return TransferableReceipt(
+        prefix=prefix, sequence=sequence, digest=digest, signature=sig_bytes
+    ), offset
+
+
+def _parse_attachment_group(
+    data: bytes, offset: int, byte_count: int
+) -> Tuple[List[CESRAttachment], int]:
+    """Parse attachment group with explicit byte boundary.
+
+    CRITICAL: The byte_count from the counter code defines the EXACT
+    boundary of this group. We MUST:
+    1. Track bytes consumed vs byte_count
+    2. Raise CESRFramingError if we under/over-consume
+    3. Recursively parse nested groups within boundary
+
+    Args:
+        data: CESR byte stream.
+        offset: Current position in stream.
+        byte_count: Declared byte count from counter code.
+
+    Returns:
+        Tuple of (list of attachments, new_offset).
+
+    Raises:
+        CESRFramingError: If actual bytes != declared byte_count.
+        CESRMalformedError: If counter code is unknown or invalid.
+    """
+    start_offset = offset
+    attachments = []
+
+    while (offset - start_offset) < byte_count:
+        remaining = byte_count - (offset - start_offset)
+
+        if offset >= len(data):
+            raise CESRFramingError(
+                f"Attachment group truncated: declared {byte_count} bytes, "
+                f"but stream ended at {offset - start_offset} bytes"
+            )
+
+        # Check for nested count code
+        if data[offset : offset + 1] == b"-":
+            try:
+                code, count, new_offset = _parse_count_code(data, offset)
+            except ResolutionFailedError as e:
+                raise CESRMalformedError(f"Unknown counter code in attachment group: {e}")
+
+            code_size = new_offset - offset
+            offset = new_offset
+
+            # Create attachment record
+            attachment = CESRAttachment(
+                code=CountCode(code) if code in [c.value for c in CountCode] else None,
+                count=count,
+                data=b"",  # Data parsed separately
+            )
+            attachments.append(attachment)
+
+            # Skip the attachment content based on code type
+            if code == "-A" or code == "-B":
+                # Indexed signatures: 88 chars each
+                offset += count * 88
+            elif code == "-C":
+                # Non-transferable receipt couples: 44 (AID) + 88 (sig) = 132 chars each
+                offset += count * 132
+            elif code == "-D":
+                # Transferable receipt quadruples: 200 chars each
+                offset += count * 200
+            elif code == "-V" or code == "--V":
+                # Nested attachment group - recursive parse
+                nested_attachments, offset = _parse_attachment_group(data, offset, count)
+                # Add nested attachments to our list
+                attachments.extend(nested_attachments)
+            # Other codes: skip count bytes
+            else:
+                offset += count
+
+        else:
+            # Non-count-code content within group - skip one byte
+            # This shouldn't happen in well-formed CESR but handle gracefully
+            offset += 1
+
+    consumed = offset - start_offset
+    if consumed != byte_count:
+        raise CESRFramingError(
+            f"Attachment group framing error: declared {byte_count} bytes, "
+            f"consumed {consumed} bytes"
+        )
+
+    return attachments, offset
 
 
 def _find_json_end(data: bytes, offset: int) -> int:
@@ -432,31 +697,53 @@ def parse_cesr_stream(data: bytes) -> List[CESRMessage]:
                         message.witness_receipts.append(receipt)
 
                 elif code == "-D":
-                    # Transferable receipt quadruples - skip for now
-                    # These contain: pre + snu + dig + sig
-                    # Would need more complex parsing
-                    break
+                    # Transferable receipt quadruples
+                    # These contain: pre + snu + dig + sig = 200 chars each
+                    for _ in range(count):
+                        trans_receipt, offset = _parse_trans_receipt_quadruple(
+                            data, offset
+                        )
+                        # Convert TransferableReceipt to WitnessReceipt for compatibility
+                        # (The witness AID is the transferable prefix)
+                        message.witness_receipts.append(
+                            WitnessReceipt(
+                                witness_aid=trans_receipt.prefix,
+                                signature=trans_receipt.signature,
+                            )
+                        )
 
                 elif code == "-V" or code == "--V":
-                    # Attachment group - contains nested attachments
-                    # For now, just continue parsing
-                    pass
+                    # Attachment group - contains nested attachments with framing
+                    # The count is the byte count for the group
+                    # CESRFramingError is NOT caught - malformed CESR must be rejected
+                    attachments, offset = _parse_attachment_group(
+                        data, offset, count
+                    )
+                    # Attachment group contents are parsed but we don't
+                    # currently extract them into the message structure
 
                 elif code == "-_AAA":
                     # Version marker, skip
                     pass
 
                 else:
-                    # Unknown code, stop parsing attachments
-                    break
+                    # Unknown code - raise error per plan (no silent skip)
+                    raise CESRMalformedError(
+                        f"Unknown counter code '{code}' at offset {offset}"
+                    )
 
             messages.append(message)
 
         elif data[offset : offset + 1] == b"-":
-            # Standalone count code (attachment group)
+            # Standalone count code (attachment group or other)
             code, count, new_offset = _parse_count_code(data, offset)
             offset = new_offset
-            # Skip the attachment group for now
+
+            if code in ("-V", "--V"):
+                # Attachment group with framing
+                # CESRFramingError is NOT caught - malformed CESR must be rejected
+                attachments, offset = _parse_attachment_group(data, offset, count)
+            # Other standalone codes: just skip (count already consumed)
         else:
             # Unknown content
             raise ResolutionFailedError(

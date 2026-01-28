@@ -74,23 +74,25 @@ DOSSIER_MAX_REDIRECTS: int = 3
 SCHEMA_VALIDATION_STRICT: bool = os.getenv("SCHEMA_VALIDATION_STRICT", "true").lower() == "true"
 
 # =============================================================================
-# EXPERIMENTAL / TEST-ONLY FEATURES
+# TIER 2 KERI FEATURES
 # =============================================================================
-# These features are incomplete and NOT spec-compliant. They exist for
-# development and testing purposes only. Do NOT enable in production.
+# KERI-based key state resolution for cryptographic signature verification.
 
 # Tier 2 KERI key state resolution via KEL parsing
 #
-# Phase 7b Implementation (CESR Support):
+# Implementation includes:
 # - CESR binary format supported (application/json+cesr)
 # - KERI-compliant canonicalization with proper field ordering
 # - SAID validation using Blake3-256 with CESR encoding
 # - Witness receipt signature validation against AIDs
 #
-# This enables production use with real KERI events from witnesses.
+# This enables verification of VVP-Identity JWTs signed with KERI-managed keys.
 #
-# Set to True to enable Tier 2 key state resolution.
-TIER2_KEL_RESOLUTION_ENABLED: bool = True
+# Set to "true" to enable Tier 2 key state resolution (default).
+# Set to "false" to disable (falls back to Tier 1 verification only).
+TIER2_KEL_RESOLUTION_ENABLED: bool = os.getenv(
+    "TIER2_KEL_RESOLUTION_ENABLED", "true"
+).lower() == "true"
 
 # =============================================================================
 # OPERATIONAL SETTINGS (deployment-specific, via environment variables)

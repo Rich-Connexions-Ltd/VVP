@@ -271,6 +271,263 @@ def generate_witness_fixture(keys):
     }
 
 
+def sign_event(serder, signer, index=0):
+    """Sign an event and return the CESR-encoded signature.
+
+    Args:
+        serder: The event Serder object
+        signer: Dict with 'secret_key' for signing
+        index: Key index for indexed signatures
+
+    Returns:
+        tuple: (siger_qb64, signature_hex, counter_qb64)
+    """
+    from keri.core.indexing import Siger, IdrDex
+    from keri.core.counting import Counter, Codens
+
+    # Sign the raw canonical bytes
+    import pysodium
+    signature = pysodium.crypto_sign_detached(serder.raw, signer["secret_key"])
+
+    # Create indexed signature (Siger)
+    siger = Siger(raw=signature, index=index, code=IdrDex.Ed25519_Sig)
+
+    # Create counter for controller indexed signatures
+    counter = Counter(Codens.ControllerIdxSigs, count=1, version=Vrsn_1_0)
+
+    return {
+        "siger_qb64": siger.qb64,
+        "signature_hex": signature.hex(),
+        "counter_qb64": counter.qb64,
+    }
+
+
+def generate_binary_kel_fixture(keys):
+    """Generate a complete binary CESR KEL stream with signatures.
+
+    This creates a full KEL stream that can be parsed by our CESR parser:
+    - icp event + signature counter + controller signature
+    - rot event + signature counter + controller signature
+    - ixn event + signature counter + controller signature
+
+    Returns:
+        dict with binary stream and metadata
+    """
+    from keri.core.counting import Counter, Codens
+
+    # Generate ICP event
+    next_digests = generate_next_key_digests(keys[1:])
+    icp_serder = eventing.incept(
+        keys=[keys[0]["qb64"]],
+        isith=1,
+        ndigs=next_digests,
+        nsith=1,
+        toad=0,
+        wits=[],
+        cnfg=[],
+        data=[],
+        pvrsn=Vrsn_1_0,
+        kind=Kinds.json,
+        intive=True,
+    )
+    icp_sig = sign_event(icp_serder, keys[0], index=0)
+
+    # Generate ROT event
+    # IMPORTANT: Rotation must be signed with the PRIOR key (key[0]),
+    # not the new key (key[1]). The prior key authorizes the rotation.
+    rot_serder = eventing.rotate(
+        pre=icp_serder.pre,
+        keys=[keys[1]["qb64"]],
+        dig=icp_serder.said,
+        isith=1,
+        ndigs=generate_next_key_digests([keys[2]]),
+        nsith=1,
+        sn=1,
+        toad=0,
+        cuts=[],
+        adds=[],
+        data=[],
+        pvrsn=Vrsn_1_0,
+        kind=Kinds.json,
+        intive=True,
+    )
+    rot_sig = sign_event(rot_serder, keys[0], index=0)  # Sign with PRIOR key
+
+    # Generate IXN event
+    ixn_serder = eventing.interact(
+        pre=icp_serder.pre,
+        dig=rot_serder.said,
+        sn=2,
+        data=[],
+        pvrsn=Vrsn_1_0,
+        kind=Kinds.json,
+    )
+    ixn_sig = sign_event(ixn_serder, keys[1], index=0)
+
+    # Build the complete binary stream
+    # Format: event_bytes + counter_code + signature (repeated for each event)
+    stream = bytearray()
+
+    # ICP message
+    stream.extend(icp_serder.raw)
+    stream.extend(icp_sig["counter_qb64"].encode("utf-8"))
+    stream.extend(icp_sig["siger_qb64"].encode("utf-8"))
+
+    # ROT message
+    stream.extend(rot_serder.raw)
+    stream.extend(rot_sig["counter_qb64"].encode("utf-8"))
+    stream.extend(rot_sig["siger_qb64"].encode("utf-8"))
+
+    # IXN message
+    stream.extend(ixn_serder.raw)
+    stream.extend(ixn_sig["counter_qb64"].encode("utf-8"))
+    stream.extend(ixn_sig["siger_qb64"].encode("utf-8"))
+
+    return {
+        "description": "Complete KEL stream with controller signatures in CESR format",
+        "keripy_version": EXPECTED_KERIPY_VERSION,
+        "keripy_commit": EXPECTED_KERIPY_COMMIT,
+        "stream_hex": bytes(stream).hex(),
+        "stream_base64": urlsafe_b64encode(bytes(stream)).decode("ascii"),
+        "stream_length": len(stream),
+        "aid": icp_serder.pre,
+        "events": [
+            {
+                "type": "icp",
+                "said": icp_serder.said,
+                "event_bytes_hex": icp_serder.raw.hex(),
+                "event_size": len(icp_serder.raw),
+                "counter": icp_sig["counter_qb64"],
+                "signature": icp_sig["siger_qb64"],
+                "signature_hex": icp_sig["signature_hex"],
+            },
+            {
+                "type": "rot",
+                "said": rot_serder.said,
+                "prior_said": icp_serder.said,
+                "event_bytes_hex": rot_serder.raw.hex(),
+                "event_size": len(rot_serder.raw),
+                "counter": rot_sig["counter_qb64"],
+                "signature": rot_sig["siger_qb64"],
+                "signature_hex": rot_sig["signature_hex"],
+            },
+            {
+                "type": "ixn",
+                "said": ixn_serder.said,
+                "prior_said": rot_serder.said,
+                "event_bytes_hex": ixn_serder.raw.hex(),
+                "event_size": len(ixn_serder.raw),
+                "counter": ixn_sig["counter_qb64"],
+                "signature": ixn_sig["siger_qb64"],
+                "signature_hex": ixn_sig["signature_hex"],
+            },
+        ],
+    }
+
+
+def generate_witness_receipts_fixture(keys):
+    """Generate inception event with witness receipts for validation testing.
+
+    Creates a complete fixture with:
+    - Controller inception event with 3 witnesses (toad=2)
+    - Controller signature over the event
+    - Valid witness receipt signatures (all 3 witnesses sign)
+    - One invalid receipt for negative testing
+
+    The witnesses use non-transferable AIDs (B-prefix, Ed25519N code).
+    """
+    import pysodium
+    import hashlib
+    from keri.core.indexing import Siger, IdrDex
+
+    # Generate witness keys deterministically
+    witness_seed_inputs = [
+        b"witness_receipt_seed_1",
+        b"witness_receipt_seed_2",
+        b"witness_receipt_seed_3",
+    ]
+    witness_seeds = [hashlib.sha256(s).digest() for s in witness_seed_inputs]
+
+    witness_keys = []
+    witness_aids = []
+    for i, seed in enumerate(witness_seeds):
+        pk, sk = pysodium.crypto_sign_seed_keypair(seed)
+        # Non-transferable witnesses use B-prefix (Ed25519N)
+        verfer = coring.Verfer(raw=pk, code=coring.MtrDex.Ed25519N)
+        witness_keys.append({
+            "index": i,
+            "public_key": pk,
+            "secret_key": sk,
+            "qb64": verfer.qb64,
+        })
+        witness_aids.append(verfer.qb64)
+
+    # Generate controller key for this fixture
+    controller_seed = hashlib.sha256(b"witness_receipt_controller_seed").digest()
+    controller_pk, controller_sk = pysodium.crypto_sign_seed_keypair(controller_seed)
+    controller_verfer = coring.Verfer(raw=controller_pk, code=coring.MtrDex.Ed25519)
+
+    # Use keys[1:] for next key commitment (placeholder digests)
+    next_digests = ["E" + "_" * 43]  # Placeholder next key digest
+
+    # Create inception event with witnesses
+    serder = eventing.incept(
+        keys=[controller_verfer.qb64],
+        isith=1,
+        ndigs=next_digests,
+        nsith=1,
+        toad=2,  # Require 2 of 3 witnesses
+        wits=witness_aids,
+        cnfg=[],
+        data=[],
+        pvrsn=Vrsn_1_0,
+        kind=Kinds.json,
+        intive=True,
+    )
+
+    # Sign the event with controller key
+    controller_sig = pysodium.crypto_sign_detached(serder.raw, controller_sk)
+
+    # Generate valid witness receipts - each witness signs the canonical event bytes
+    valid_receipts = []
+    for wk in witness_keys:
+        witness_sig = pysodium.crypto_sign_detached(serder.raw, wk["secret_key"])
+        valid_receipts.append({
+            "witness_aid": wk["qb64"],
+            "signature_hex": witness_sig.hex(),
+        })
+
+    # Generate an invalid receipt (all zeros signature)
+    invalid_sig = b'\x00' * 64
+    invalid_receipt = {
+        "witness_aid": witness_keys[0]["qb64"],
+        "signature_hex": invalid_sig.hex(),
+        "reason": "All-zeros signature that should fail validation",
+    }
+
+    return {
+        "description": "ICP event with witness receipts for validation testing",
+        "event": serder.sad,
+        "canonical_bytes_hex": serder.raw.hex(),
+        "controller": {
+            "aid": controller_verfer.qb64,
+            "public_key_hex": controller_pk.hex(),
+            "signature_hex": controller_sig.hex(),
+        },
+        "witnesses": [
+            {
+                "index": wk["index"],
+                "aid": wk["qb64"],
+                "public_key_hex": wk["public_key"].hex(),
+            }
+            for wk in witness_keys
+        ],
+        "valid_receipts": valid_receipts,
+        "invalid_receipt": invalid_receipt,
+        "toad": 2,
+    }
+
+
 def generate_field_order_reference():
     """Extract field ordering from keripy's FieldDom definitions."""
     # These are from keripy/src/keri/core/serdering.py
@@ -419,6 +676,26 @@ def main():
     with open(keys_path, "w") as f:
         json.dump(key_info, f, indent=2)
     print(f"✓ Generated {keys_path.name}")
+
+    # Generate binary CESR KEL stream with signatures
+    binary_kel = generate_binary_kel_fixture(keys)
+    binary_path = OUTPUT_DIR / "binary_kel.json"
+    with open(binary_path, "w") as f:
+        json.dump(binary_kel, f, indent=2)
+    print(f"✓ Generated {binary_path.name}")
+    print(f"  Stream length: {binary_kel['stream_length']} bytes")
+    print(f"  AID: {binary_kel['aid'][:20]}...")
+    print(f"  Events: {len(binary_kel['events'])}")
+
+    # Generate witness receipts fixture with valid signatures
+    witness_receipts = generate_witness_receipts_fixture(keys)
+    witness_receipts_path = OUTPUT_DIR / "witness_receipts_keripy.json"
+    with open(witness_receipts_path, "w") as f:
+        json.dump(witness_receipts, f, indent=2)
+    print(f"✓ Generated {witness_receipts_path.name}")
+    print(f"  Controller: {witness_receipts['controller']['aid'][:20]}...")
+    print(f"  Witnesses: {len(witness_receipts['witnesses'])}")
+    print(f"  Valid receipts: {len(witness_receipts['valid_receipts'])}")
 
     print("-" * 60)
     print("Fixture generation complete!")

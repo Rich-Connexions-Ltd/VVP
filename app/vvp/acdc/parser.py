@@ -229,6 +229,53 @@ def _acdc_canonical_serialize(data: Dict[str, Any]) -> bytes:
     return json.dumps(ordered, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
+def compute_acdc_said(acdc_data: Dict[str, Any], said_field: str = "d") -> str:
+    """Compute SAID for an ACDC credential using ACDC canonical field ordering.
+
+    IMPORTANT: This function uses ACDC-specific field ordering (v, d, i, s, a, e, r),
+    which is DIFFERENT from KEL event field ordering.
+
+    DO NOT use this for:
+    - KEL events (use keri.kel_parser.compute_kel_event_said instead)
+    - JSON Schemas (use schema_fetcher.compute_schema_said instead)
+
+    Those have different canonicalization rules per their respective specs.
+
+    Args:
+        acdc_data: ACDC credential dictionary.
+        said_field: Field containing SAID (default 'd').
+
+    Returns:
+        The computed SAID string (44 chars, starting with 'E' for Blake3-256).
+
+    Example:
+        >>> acdc = {"v": "ACDC10JSON...", "d": "", "i": "...", "s": "...", ...}
+        >>> said = compute_acdc_said(acdc)
+        >>> acdc["d"] = said  # Set the computed SAID
+    """
+    import base64
+    import hashlib
+
+    # Create copy with placeholder SAID
+    data_copy = dict(acdc_data)
+    placeholder = "E" + "_" * 43  # Blake3-256 placeholder
+    data_copy[said_field] = placeholder
+
+    # Serialize using ACDC canonical field ordering
+    canonical_bytes = _acdc_canonical_serialize(data_copy)
+
+    # Hash with Blake3 (fall back to SHA256 if unavailable)
+    try:
+        import blake3
+        digest = blake3.blake3(canonical_bytes).digest()
+    except ImportError:
+        digest = hashlib.sha256(canonical_bytes).digest()
+
+    # CESR encode with 'E' derivation code
+    encoded = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+    return "E" + encoded
+
+
 def parse_acdc_from_dossier(
     dossier: Dict[str, Any],
     credential_key: str = "credential"

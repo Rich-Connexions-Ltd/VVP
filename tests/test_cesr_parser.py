@@ -22,7 +22,7 @@ from app.vvp.keri.cesr import (
     is_cesr_stream,
     parse_cesr_stream,
 )
-from app.vvp.keri.exceptions import ResolutionFailedError
+from app.vvp.keri.exceptions import ResolutionFailedError, CESRMalformedError
 
 
 # Fixtures directory
@@ -103,8 +103,8 @@ class TestParseCountCode:
             _parse_count_code(b"-A", 0)  # Missing count chars
 
     def test_unknown_code(self):
-        """Unknown count code raises error."""
-        with pytest.raises(ResolutionFailedError):
+        """Unknown count code raises CESRMalformedError."""
+        with pytest.raises(CESRMalformedError):
             _parse_count_code(b"-XAB", 0)
 
 

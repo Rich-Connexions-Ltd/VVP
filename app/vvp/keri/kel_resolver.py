@@ -102,15 +102,13 @@ async def resolve_key_state(
     It fetches the KEL, validates the chain, and determines which
     keys were valid at time T.
 
-    WARNING: This function is TEST-ONLY. It does NOT support:
-    - CESR binary format (rejects application/json+cesr responses)
-    - KERI-compliant signature canonicalization (uses JSON sorted-keys)
+    Features:
+    - CESR binary format (application/cesr, application/json+cesr)
+    - KERI-compliant canonicalization with proper field ordering
+    - SAID validation using Blake3-256
+    - Witness receipt signature validation
 
-    These limitations mean it cannot resolve real KERI key state from
-    production witnesses. Enable TIER2_KEL_RESOLUTION_ENABLED only for
-    testing with synthetic fixtures.
-
-    Per PLAN.md:
+    Behavior:
     - Rotation before T is normal: returns the rotated key
     - Only errors if no establishment event exists at/before T
 
@@ -137,9 +135,8 @@ async def resolve_key_state(
     if not TIER2_KEL_RESOLUTION_ENABLED and not _allow_test_mode:
         raise ResolutionFailedError(
             "Tier 2 KEL resolution is disabled. "
-            "This feature is TEST-ONLY and does not support CESR format or "
-            "KERI-compliant signature canonicalization. "
-            "Set TIER2_KEL_RESOLUTION_ENABLED=True only for testing."
+            "Set TIER2_KEL_RESOLUTION_ENABLED=true to enable KERI-based "
+            "key state resolution."
         )
 
     # Extract AID from kid (may be a full OOBI URL or just the AID)

@@ -323,24 +323,55 @@ def _parse_cesr_kel(kel_data: bytes) -> List[KELEvent]:
 def _decode_keri_key(key_str: str) -> bytes:
     """Decode a KERI-encoded public key.
 
-    KERI keys use a derivation code prefix followed by base64url-encoded key.
-    Example: "BIKKvIT9N5Qg5N8H9A9V5T5D..." (B = Ed25519)
+    KERI keys use CESR encoding with a derivation code prefix.
+    For Ed25519 keys (B or D prefix), the standard CESR qb64 format is:
+    - 44 chars total, decodes to 33 bytes (1 lead byte + 32-byte key)
+    - B-prefix (non-transferable): lead byte 0x04
+    - D-prefix (transferable): lead byte 0x0c
+
+    This function also handles legacy/test formats where the key is simply
+    prefix + base64url(raw_key) (produces different lead bytes).
+
+    Example CESR: "DER2RcVO4AlODS6zPZgYuMexC0TRhYQEYCuhWio2tCZY" (D = Ed25519)
     """
     if not key_str or len(key_str) < 2:
         raise ResolutionFailedError(f"Invalid key format: too short")
 
-    # Extract derivation code and key data
+    # Extract derivation code from first character
     code = key_str[0]
 
-    # For Ed25519 (B or D prefix), key follows immediately
+    # For Ed25519 (B or D prefix)
     if code in ("B", "D"):
-        key_b64 = key_str[1:]
-        # Add padding for base64url
-        padded = key_b64 + "=" * (-len(key_b64) % 4)
+        # Try to decode the full qb64 string (including the code char)
         try:
-            return base64.urlsafe_b64decode(padded)
+            full_decoded = base64.urlsafe_b64decode(key_str)
         except Exception as e:
             raise ResolutionFailedError(f"Failed to decode key: {e}")
+
+        if len(full_decoded) == 33:
+            # Check lead byte to determine encoding format
+            lead_byte = full_decoded[0]
+            # CESR standard lead bytes: 0x04 for B-prefix, 0x0c for D-prefix
+            if lead_byte in (0x04, 0x0c):
+                # Standard CESR: skip the lead byte
+                return full_decoded[1:]
+            else:
+                # Legacy format: strip code char from string, decode, return as-is
+                # The lead byte doesn't match CESR standard, so this is
+                # a simple prefix + base64(raw_key) format
+                key_b64 = key_str[1:]
+                padded = key_b64 + "=" * (-len(key_b64) % 4)
+                try:
+                    return base64.urlsafe_b64decode(padded)
+                except Exception as e:
+                    raise ResolutionFailedError(f"Failed to decode key: {e}")
+        elif len(full_decoded) == 32:
+            # Legacy format: no lead byte
+            return full_decoded
+        else:
+            raise ResolutionFailedError(
+                f"Invalid key length after decode: {len(full_decoded)}, expected 32 or 33"
+            )
 
     # For other codes, might need different handling
     raise ResolutionFailedError(f"Unsupported key derivation code: {code}")
@@ -389,8 +420,8 @@ def _parse_timestamp(ts_str: Optional[str]) -> Optional[datetime]:
 
 def validate_kel_chain(
     events: List[KELEvent],
-    validate_saids: bool = False,
-    use_canonical: bool = False,
+    validate_saids: bool = True,
+    use_canonical: bool = True,
     validate_witnesses: bool = False
 ) -> None:
     """Validate KEL chain continuity and signatures.
@@ -402,6 +433,9 @@ def validate_kel_chain(
     4. Each event is signed by keys from prior event (or self-signed for inception)
     5. Each event's digest (d field) matches computed SAID (if validate_saids=True)
     6. Witness receipts meet threshold (if validate_witnesses=True)
+
+    Note: Defaults changed in Tier 2 completion - now uses canonical serialization
+    and SAID validation by default for production safety.
 
     Args:
         events: List of KELEvent objects in sequence order.
@@ -503,11 +537,28 @@ def _validate_event_said(event: KELEvent, use_canonical: bool = False) -> None:
         # No raw data to compute SAID from
         return
 
+    # Remove attachment fields before computing SAID (same as signing input)
+    # SAID is computed over the event body, not the attachments
+    raw_copy = dict(event.raw)
+    raw_copy.pop("signatures", None)
+    raw_copy.pop("-", None)
+    raw_copy.pop("receipts", None)
+    raw_copy.pop("rcts", None)
+
+    # For inception events (icp, dip), the 'i' field equals 'd' (self-addressing).
+    # When computing SAID, both should be placeholders since they're circular.
+    # If i == d, we need to clear 'i' before computing so the SAID matches
+    # what was originally computed before 'i' was set.
+    event_type = raw_copy.get("t", "")
+    if event_type in ("icp", "dip"):
+        # Self-addressing: i == d, so clear i for SAID computation
+        raw_copy["i"] = ""
+
     # Compute expected SAID using appropriate method
     if use_canonical:
-        computed = compute_said_canonical(event.raw)
+        computed = compute_said_canonical(raw_copy)
     else:
-        computed = compute_said(event.raw)
+        computed = compute_said(raw_copy)
 
     # Compare (allowing for different derivation codes)
     # The first character is the derivation code, rest is the hash
@@ -600,25 +651,25 @@ def _validate_event_signature(
         )
 
 
-def _compute_signing_input(event: KELEvent, use_canonical: bool = False) -> bytes:
+def _compute_signing_input(event: KELEvent, use_canonical: bool = True) -> bytes:
     """Compute the signing input for an event.
 
     Args:
         event: The KELEvent to compute signing input for.
-        use_canonical: If True, use KERI canonical serialization (proper field
-            ordering per event type). If False, use JSON sorted-keys (test only).
+        use_canonical: If True (default), use KERI canonical serialization (proper
+            field ordering per event type). If False, use JSON sorted-keys which
+            is only valid for legacy test fixtures.
 
     Returns:
         The bytes that should have been signed.
 
     Note:
-        When use_canonical=False (default), this uses JSON with sorted keys which
-        is ONLY valid for JSON test fixtures where the test data was signed using
-        the same sorted-key JSON approach. It will NOT correctly verify signatures
-        from real KERI infrastructure.
+        The default is use_canonical=True for production safety. KERI events
+        from real witnesses are signed over canonical serialization, not
+        JSON sorted keys.
 
-        When use_canonical=True, this uses KERI's actual serialization rules
-        (label ordering per event type) which is required for production use.
+        The use_canonical=False path is retained only for backwards compatibility
+        with legacy test fixtures that were signed using sorted-key JSON.
     """
     # Remove attachment fields before computing signing input
     raw_copy = dict(event.raw)
@@ -700,6 +751,33 @@ def compute_said(data: Dict[str, Any], algorithm: str = "blake3-256") -> str:
     # Encode with derivation code
     encoded = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
     return "E" + encoded
+
+
+def compute_kel_event_said(event: Dict[str, Any], require_blake3: bool = False) -> str:
+    """Compute SAID for a KEL event using KERI canonical field ordering.
+
+    This is the correct function to use for KEL events (icp, rot, ixn, dip, drt, etc.).
+    It uses KERI canonical serialization with proper field ordering per event type.
+
+    DO NOT use this for:
+    - ACDC credentials (use acdc.parser.compute_acdc_said instead)
+    - JSON Schemas (use acdc.schema_fetcher.compute_schema_said instead)
+
+    Those have different canonicalization rules per their respective specs.
+
+    Args:
+        event: KEL event dictionary with 't' field indicating event type.
+        require_blake3: If True, raise ImportError if blake3 not available.
+
+    Returns:
+        The computed SAID string (44 chars, starting with 'E' for Blake3-256).
+
+    Example:
+        >>> event = {"v": "KERI10JSON...", "t": "icp", "d": "", "i": "...", ...}
+        >>> said = compute_kel_event_said(event)
+        >>> event["d"] = said  # Set the computed SAID
+    """
+    return compute_said_canonical(event, require_blake3=require_blake3, said_field="d")
 
 
 def _cesr_encode(raw: bytes, code: str = "E") -> str:

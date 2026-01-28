@@ -28,8 +28,15 @@ def generate_keypair():
 
 
 def encode_keri_key(pk: bytes) -> str:
-    """Encode a public key in KERI format."""
-    return "B" + base64.urlsafe_b64encode(pk).decode().rstrip("=")
+    """Encode a public key in KERI format using proper CESR encoding.
+
+    CESR B-prefix (Ed25519N) encoding prepends a lead byte (0x04) to the
+    32-byte public key, then base64url encodes the 33-byte result.
+    """
+    # Prepend CESR lead byte for B-prefix (Ed25519N non-transferable)
+    cesr_lead_byte = bytes([0x04])
+    full_bytes = cesr_lead_byte + pk
+    return base64.urlsafe_b64encode(full_bytes).decode().rstrip("=")
 
 
 def sign_event(event_dict: dict, private_key: bytes) -> str:

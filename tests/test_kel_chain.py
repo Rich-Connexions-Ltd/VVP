@@ -6,6 +6,7 @@ Tests chain continuity and signature verification per PLAN.md:
 """
 
 import base64
+import hashlib
 import json
 import pytest
 import pysodium
@@ -17,7 +18,9 @@ from app.vvp.keri.kel_parser import (
     validate_kel_chain,
     _compute_signing_input,
     _verify_signature,
+    compute_kel_event_said,
 )
+from app.vvp.keri.keri_canonical import canonical_serialize
 from app.vvp.keri.exceptions import KELChainInvalidError
 
 
@@ -27,18 +30,65 @@ def generate_keypair():
     return pk, sk
 
 
-def sign_event(event_dict: dict, private_key: bytes) -> bytes:
-    """Sign an event with a private key."""
+def sign_event_canonical(event_dict: dict, private_key: bytes) -> bytes:
+    """Sign an event using KERI canonical serialization.
+
+    Uses proper KERI field ordering instead of sorted keys.
+    """
     # Remove signature-related fields
     raw_copy = dict(event_dict)
     raw_copy.pop("signatures", None)
     raw_copy.pop("-", None)
 
-    # Canonical JSON
-    canonical = json.dumps(raw_copy, sort_keys=True, separators=(",", ":"))
-    message = canonical.encode("utf-8")
+    # Use KERI canonical serialization (proper field ordering)
+    message = canonical_serialize(raw_copy)
 
     # Sign
+    signature = pysodium.crypto_sign_detached(message, private_key)
+    return signature
+
+
+def compute_test_said(event_dict: dict, is_inception: bool = False) -> str:
+    """Compute SAID for a test event using the production SAID computation.
+
+    Uses compute_kel_event_said which properly handles:
+    - KERI canonical field ordering
+    - Version string size update
+    - Most compact form with placeholder
+
+    For inception events, the 'i' field should also be a placeholder since
+    i == d for self-addressing identifiers.
+
+    Falls back to SHA256 if blake3 is not available.
+    """
+    # Remove signature fields before computing SAID
+    data_copy = dict(event_dict)
+    data_copy.pop("signatures", None)
+    data_copy.pop("-", None)
+
+    # For inception events, i == d (self-addressing), so we need to compute
+    # with both as placeholders. We'll set i to be "" when computing, then
+    # the computed SAID will be used for both.
+    if is_inception:
+        data_copy["i"] = ""
+
+    # Use the production SAID computation (falls back to SHA256 if no blake3)
+    return compute_kel_event_said(data_copy, require_blake3=False)
+
+
+# Legacy sign function for tests that specifically test sorted-keys behavior
+def sign_event(event_dict: dict, private_key: bytes) -> bytes:
+    """Sign an event with sorted-keys JSON (legacy test mode).
+
+    DEPRECATED: Use sign_event_canonical for new tests.
+    This is only kept for tests that specifically test the sorted-keys path.
+    """
+    import json
+    raw_copy = dict(event_dict)
+    raw_copy.pop("signatures", None)
+    raw_copy.pop("-", None)
+    canonical = json.dumps(raw_copy, sort_keys=True, separators=(",", ":"))
+    message = canonical.encode("utf-8")
     signature = pysodium.crypto_sign_detached(message, private_key)
     return signature
 
@@ -54,7 +104,9 @@ def encode_keri_sig(sig: bytes) -> str:
 
 
 def create_valid_kel() -> tuple:
-    """Create a valid KEL with proper signatures and chain linkage.
+    """Create a valid KEL with proper signatures, SAIDs, and chain linkage.
+
+    Uses KERI canonical serialization for signatures and computes real SAIDs.
 
     Returns:
         Tuple of (events, keypairs) where keypairs is list of (pk, sk).
@@ -63,25 +115,37 @@ def create_valid_kel() -> tuple:
     pk1, sk1 = generate_keypair()
     pk2, sk2 = generate_keypair()
 
-    # Inception event
+    # Inception event - compute SAID first
     icp_dict = {
+        "v": "KERI10JSON000000_",  # Version string (size placeholder)
         "t": "icp",
+        "d": "",  # Placeholder for SAID
+        "i": "",  # Will be set to SAID (self-addressing)
         "s": "0",
-        "p": "",
-        "d": "ESAID_ICP",
+        "kt": "1",
         "k": [encode_keri_key(pk1)],
+        "nt": "1",
         "n": ["NEXT_KEY_DIGEST"],
         "bt": "0",
         "b": [],
+        "c": [],
+        "a": [],
     }
-    icp_sig = sign_event(icp_dict, sk1)
+    # Compute SAID and set both d and i fields
+    # For inception events, i == d (self-addressing)
+    icp_said = compute_test_said(icp_dict, is_inception=True)
+    icp_dict["d"] = icp_said
+    icp_dict["i"] = icp_said  # AID is the SAID of inception event
+
+    # Sign with canonical serialization
+    icp_sig = sign_event_canonical(icp_dict, sk1)
     icp_dict["signatures"] = [encode_keri_sig(icp_sig)]
 
     icp_event = KELEvent(
         event_type=EventType.ICP,
         sequence=0,
         prior_digest="",
-        digest="ESAID_ICP",
+        digest=icp_said,
         signing_keys=[pk1],
         next_keys_digest="NEXT_KEY_DIGEST",
         toad=0,
@@ -92,23 +156,32 @@ def create_valid_kel() -> tuple:
 
     # Rotation event (signed by inception key)
     rot_dict = {
+        "v": "KERI10JSON000000_",
         "t": "rot",
+        "d": "",  # Placeholder for SAID
+        "i": icp_said,  # Same AID
         "s": "1",
-        "p": "ESAID_ICP",  # Chain link
-        "d": "ESAID_ROT",
+        "p": icp_said,  # Prior event's SAID (chain link)
+        "kt": "1",
         "k": [encode_keri_key(pk2)],
+        "nt": "1",
         "n": ["NEXT_KEY_DIGEST_2"],
         "bt": "0",
-        "b": [],
+        "br": [],
+        "ba": [],
+        "a": [],
     }
-    rot_sig = sign_event(rot_dict, sk1)  # Signed by PRIOR key
+    rot_said = compute_test_said(rot_dict)
+    rot_dict["d"] = rot_said
+
+    rot_sig = sign_event_canonical(rot_dict, sk1)  # Signed by PRIOR key
     rot_dict["signatures"] = [encode_keri_sig(rot_sig)]
 
     rot_event = KELEvent(
         event_type=EventType.ROT,
         sequence=1,
-        prior_digest="ESAID_ICP",
-        digest="ESAID_ROT",
+        prior_digest=icp_said,
+        digest=rot_said,
         signing_keys=[pk2],
         next_keys_digest="NEXT_KEY_DIGEST_2",
         toad=0,
@@ -244,12 +317,21 @@ class TestSignatureValidation:
         pk, sk = generate_keypair()
 
         icp_dict = {
+            "v": "KERI10JSON000100_",
             "t": "icp",
             "s": "0",
             "d": "SAID",
+            "i": "SAID",
             "k": [encode_keri_key(pk)],
+            "kt": "1",
+            "nt": "0",
+            "n": [],
+            "bt": "0",
+            "b": [],
+            "c": [],
+            "a": [],
         }
-        icp_sig = sign_event(icp_dict, sk)
+        icp_sig = sign_event_canonical(icp_dict, sk)
 
         icp_event = KELEvent(
             event_type=EventType.ICP,
@@ -264,8 +346,9 @@ class TestSignatureValidation:
             raw=icp_dict,
         )
 
-        # Should not raise
-        validate_kel_chain([icp_event])
+        # Should not raise - skip SAID validation since we're using placeholder SAIDs
+        # use_canonical=True is the default now
+        validate_kel_chain([icp_event], validate_saids=False, use_canonical=True)
 
     def test_inception_without_signature_raises(self):
         """Inception without signature raises error."""
@@ -285,7 +368,7 @@ class TestSignatureValidation:
         )
 
         with pytest.raises(KELChainInvalidError, match="no signatures"):
-            validate_kel_chain([icp_event])
+            validate_kel_chain([icp_event], validate_saids=False)
 
     def test_inception_with_invalid_signature_raises(self):
         """Inception with wrong signature raises error."""
@@ -315,7 +398,7 @@ class TestSignatureValidation:
         )
 
         with pytest.raises(KELChainInvalidError, match="invalid self-signature"):
-            validate_kel_chain([icp_event])
+            validate_kel_chain([icp_event], validate_saids=False)
 
     def test_rotation_signed_by_prior_keys(self):
         """Rotation must be signed by prior establishment keys."""
@@ -328,14 +411,23 @@ class TestSignatureValidation:
         pk1, sk1 = generate_keypair()
         pk2, sk2 = generate_keypair()
 
-        # Inception
+        # Inception with proper KERI structure
         icp_dict = {
+            "v": "KERI10JSON000100_",
             "t": "icp",
-            "s": "0",
             "d": "ESAID_ICP",
+            "i": "ESAID_ICP",
+            "s": "0",
+            "kt": "1",
             "k": [encode_keri_key(pk1)],
+            "nt": "0",
+            "n": [],
+            "bt": "0",
+            "b": [],
+            "c": [],
+            "a": [],
         }
-        icp_sig = sign_event(icp_dict, sk1)
+        icp_sig = sign_event_canonical(icp_dict, sk1)
 
         icp_event = KELEvent(
             event_type=EventType.ICP,
@@ -352,13 +444,22 @@ class TestSignatureValidation:
 
         # Rotation - INCORRECTLY signed by new key instead of prior key
         rot_dict = {
+            "v": "KERI10JSON000100_",
             "t": "rot",
+            "d": "ESAID_ROT",
+            "i": "ESAID_ICP",
             "s": "1",
             "p": "ESAID_ICP",
-            "d": "ESAID_ROT",
+            "kt": "1",
             "k": [encode_keri_key(pk2)],
+            "nt": "0",
+            "n": [],
+            "bt": "0",
+            "br": [],
+            "ba": [],
+            "a": [],
         }
-        wrong_sig = sign_event(rot_dict, sk2)  # Wrong: should be sk1
+        wrong_sig = sign_event_canonical(rot_dict, sk2)  # Wrong: should be sk1
 
         rot_event = KELEvent(
             event_type=EventType.ROT,
@@ -374,7 +475,7 @@ class TestSignatureValidation:
         )
 
         with pytest.raises(KELChainInvalidError, match="invalid signature"):
-            validate_kel_chain([icp_event, rot_event])
+            validate_kel_chain([icp_event, rot_event], validate_saids=False, use_canonical=True)
 
 
 class TestVerifySignature:

@@ -23,10 +23,16 @@ def create_test_keypair():
 
 
 def create_witness_aid(public_key: bytes) -> str:
-    """Create a B-prefix witness AID from public key."""
+    """Create a B-prefix witness AID from public key using proper CESR encoding.
+
+    CESR B-prefix (Ed25519N) encoding prepends a lead byte (0x04) to the
+    32-byte public key, then base64url encodes the 33-byte result.
+    """
     import base64
-    key_b64 = base64.urlsafe_b64encode(public_key).decode().rstrip("=")
-    return "B" + key_b64
+    # Prepend CESR lead byte for B-prefix (Ed25519N non-transferable)
+    cesr_lead_byte = bytes([0x04])
+    full_bytes = cesr_lead_byte + public_key
+    return base64.urlsafe_b64encode(full_bytes).decode().rstrip("=")
 
 
 def sign_message(message: bytes, secret_key: bytes) -> bytes:

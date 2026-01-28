@@ -1,5 +1,83 @@
 # VVP Verifier Change Log
 
+## Completing Tier 2 KERI Verification
+
+**Date:** 2026-01-28
+**Commit:** 239af25
+
+### Files Changed
+
+| File | Action | Description |
+|------|--------|-------------|
+| `app/vvp/keri/kel_parser.py` | Modified | Flip defaults to `use_canonical=True`, `validate_saids=True`; add `compute_kel_event_said()` routing; fix key decoding for CESR qb64 lead bytes |
+| `app/vvp/keri/cesr.py` | Modified | Binary CESR parsing, -D/-V attachment handling, counter table, framing validation, signature lead byte fix |
+| `app/vvp/keri/keri_canonical.py` | Modified | Version string validation |
+| `app/vvp/keri/kel_resolver.py` | Modified | Remove TEST-ONLY warnings, update docstrings |
+| `app/vvp/keri/signature.py` | Modified | Remove TEST-ONLY warnings |
+| `app/vvp/keri/exceptions.py` | Modified | Add `CESRFramingError`, `CESRMalformedError`, `UnsupportedSerializationKind` |
+| `app/core/config.py` | Modified | Add `TIER2_KEL_RESOLUTION_ENABLED` env var support |
+| `app/vvp/acdc/parser.py` | Modified | Document ACDC SAID computation |
+| `app/vvp/acdc/schema_fetcher.py` | Modified | Document schema SAID (sorted keys is correct) |
+| `tests/test_cesr_negative.py` | Created | Negative tests for CESR framing/counter errors |
+| `tests/test_keripy_integration.py` | Created | 23 golden tests comparing to keripy reference |
+| `tests/test_witness_receipts.py` | Modified | Fix CESR B-prefix encoding for test keypairs |
+| `tests/test_kel_integration.py` | Modified | Fix CESR B-prefix encoding for test keypairs |
+| `tests/fixtures/keri/binary_kel.json` | Created | Binary CESR KEL stream with signatures |
+| `tests/fixtures/keri/witness_receipts_keripy.json` | Created | Witness receipts fixture with valid signatures |
+| `scripts/generate_keripy_fixtures.py` | Created | Fixture generation script using vendored keripy |
+| `app/Documentation/PLAN_Tier2Completion.md` | Created | Archived implementation plan |
+
+### Summary
+
+Completed Tier 2 KERI verification capabilities, enabling production-grade KERI witness integration.
+
+**Phase 1: Canonicalization Foundation**
+- Flipped `validate_kel_chain()` defaults to safe values (`use_canonical=True`, `validate_saids=True`)
+- Added explicit `compute_kel_event_said()` to separate KEL from ACDC SAID computation
+- Documented SAID computation differences (KEL uses field ordering, schemas use sorted keys)
+
+**Phase 2: CESR Binary Support**
+- Implemented version string parser with deterministic MGPK/CBOR rejection
+- Completed -D transferable receipt quadruple parsing
+- Completed -V/-\-V attachment group parsing with framing validation
+- Added comprehensive negative tests for CESR error conditions
+
+**Phase 3: Production Enablement**
+- Removed TEST-ONLY warnings from `kel_resolver.py` and `signature.py`
+- Added `TIER2_KEL_RESOLUTION_ENABLED` environment variable support
+- Production mode now uses strict validation by default
+
+**Phase 4: Golden Fixtures**
+- Created fixture generation script using vendored keripy (v2.0.0-dev5)
+- Generated binary CESR fixtures with real Ed25519 signatures
+- Fixed CESR signature decoding: strip 2 lead bytes from indexed signatures (88-char qb64 → 66 bytes → 64-byte sig)
+- Fixed KERI key decoding: handle CESR qb64 lead bytes (0x04 for B-prefix, 0x0c for D-prefix)
+- Added witness receipts fixture with properly signed receipts
+- Fixed test helpers to use proper CESR B-prefix encoding (`0x04 || public_key`)
+
+**Key Technical Details:**
+
+1. **CESR Indexed Signatures**: 88-char qb64 decodes to 66 bytes; first 2 are code/index, remaining 64 are Ed25519 signature
+2. **CESR Key Lead Bytes**: B-prefix (Ed25519N) uses 0x04, D-prefix (Ed25519) uses 0x0c
+3. **Rotation Signing**: Rotation events signed by PRIOR key, not new key
+
+### Test Results
+
+```
+1408 passed, 19 warnings in 97.81s
+```
+
+### Review History
+
+- Phase 1: APPROVED
+- Phase 2: APPROVED
+- Phase 3: APPROVED
+- Phase 4 Rev 0: CHANGES_REQUESTED - Rotation key fix, validate_kel_chain test
+- Phase 4 Rev 1: CHANGES_REQUESTED - CESR signature/key lead byte handling
+- Phase 4 Rev 2: APPROVED - All fixes applied
+
+---
+
 ## AID to Identity Resolution Enhancement
 
 **Date:** 2026-01-27
