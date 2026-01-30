@@ -298,18 +298,28 @@ def _parse_schema_registry_urls() -> list[str]:
     - Splits on comma
     - Strips whitespace from each URL
     - Filters empty strings
+    - Falls back to GitHub raw URLs if not set
     - Logs warning if result is empty list
+
+    Note: The embedded schema store is checked BEFORE these URLs.
+    These registries are fallback for schemas not in the embedded store.
 
     Returns:
         List of registry URL strings.
     """
-    default = "https://schema.gleif.org/,https://schema.provenant.net/"
+    # Default includes both official registries and GitHub raw URLs as fallback
+    # GitHub URLs serve the same schemas but may be more reliable
+    default = (
+        "https://schema.gleif.org/,"
+        "https://schema.provenant.net/,"
+        "https://raw.githubusercontent.com/GLEIF-IT/vLEI-schema/main/"
+    )
     raw = os.getenv("VVP_SCHEMA_REGISTRY_URLS", default)
     urls = [url.strip() for url in raw.split(",") if url.strip()]
     if not urls:
         _config_log.warning(
             "VVP_SCHEMA_REGISTRY_URLS parsed to empty list; "
-            "schema resolution will rely on OOBI only (if enabled)"
+            "schema resolution will rely on embedded store and OOBI only"
         )
     return urls
 

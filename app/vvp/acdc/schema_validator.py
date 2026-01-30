@@ -19,6 +19,47 @@ except ImportError:
 log = logging.getLogger(__name__)
 
 
+def _extract_attributes_schema(schema_doc: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Extract the attributes ('a' field) schema from a full ACDC schema.
+
+    ACDC schemas typically define the entire ACDC structure with 'a' being
+    either a SAID string reference or an object with properties. This function
+    extracts the object variant for attribute validation.
+
+    Args:
+        schema_doc: The full ACDC schema document
+
+    Returns:
+        The attributes schema dict if found, None otherwise
+    """
+    # Check if this is a full ACDC schema with 'a' in properties
+    properties = schema_doc.get("properties", {})
+    a_schema = properties.get("a")
+
+    if not a_schema:
+        # Not a full ACDC schema or no 'a' field defined
+        # Fall back to using the full schema (might be attributes-only schema)
+        return None
+
+    # Handle oneOf pattern (SAID string or object)
+    if "oneOf" in a_schema:
+        for option in a_schema["oneOf"]:
+            if option.get("type") == "object":
+                return option
+        # No object variant found
+        return None
+
+    # Direct object schema
+    if a_schema.get("type") == "object":
+        return a_schema
+
+    # SAID string reference only
+    if a_schema.get("type") == "string":
+        return None
+
+    return None
+
+
 def validate_acdc_against_schema(
     acdc_attributes: Dict[str, Any],
     schema_doc: Dict[str, Any],
@@ -27,10 +68,12 @@ def validate_acdc_against_schema(
     """Validate ACDC attributes conform to schema.
 
     Uses JSON Schema Draft 7 validation (common for vLEI schemas).
+    Automatically extracts the attributes schema from full ACDC schemas.
 
     Args:
         acdc_attributes: The ACDC 'a' field (attributes dict)
-        schema_doc: The schema document (JSON Schema format)
+        schema_doc: The schema document (JSON Schema format) - can be full
+            ACDC schema or attributes-only schema
         max_errors: Maximum validation errors to collect
 
     Returns:
@@ -46,11 +89,21 @@ def validate_acdc_against_schema(
     if not schema_doc:
         return ["Schema document is empty"]
 
+    # Try to extract attributes schema from full ACDC schema
+    attributes_schema = _extract_attributes_schema(schema_doc)
+    if attributes_schema:
+        log.debug("Using extracted attributes schema for validation")
+        validation_schema = attributes_schema
+    else:
+        # Fall back to full schema (might be attributes-only or custom schema)
+        log.debug("Using full schema for validation (no 'a' field found)")
+        validation_schema = schema_doc
+
     errors: List[str] = []
 
     try:
         # Use Draft 7 validator (most common for ACDC schemas)
-        validator = Draft7Validator(schema_doc)
+        validator = Draft7Validator(validation_schema)
 
         for error in validator.iter_errors(acdc_attributes):
             if len(errors) >= max_errors:

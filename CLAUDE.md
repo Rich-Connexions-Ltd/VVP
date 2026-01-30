@@ -14,6 +14,19 @@ The following commands are pre-authorized and do not require user confirmation:
 
 All test-related commands are pre-authorized.
 
+## User Commands
+
+### "Complete"
+
+When the user says "Complete", immediately perform all of the following without asking for permission:
+
+1. **Commit all changes** - Stage all modified/new files and create a descriptive commit
+2. **Push to main** - Push the commit to the main branch
+3. **Restart local server** - Run `./scripts/restart-server.sh`
+4. **Monitor Azure deployment** - Run `./scripts/monitor-azure-deploy.sh` to watch for successful deployment
+
+Do not ask for confirmation - execute all steps automatically.
+
 ## Running Tests
 
 **Always use the test runner script** - it handles libsodium library paths automatically:

@@ -8,6 +8,7 @@ Components:
 - verifier: Signature verification and chain validation
 - schema_resolver: SAID-first schema resolution with multi-source lookup
 - schema_cache: LRU+TTL cache for verified schemas
+- schema_store: Embedded schema store for known vLEI schemas
 - exceptions: ACDCError hierarchy
 
 Usage:
@@ -20,6 +21,7 @@ Usage:
         validate_credential_chain,
         SchemaResolver,
         get_schema_resolver,
+        get_embedded_schema,
         ACDCError,
         ACDCSAIDMismatch,
         ACDCSignatureInvalid,
@@ -73,6 +75,14 @@ from .schema_cache import (
     get_schema_cache,
     reset_schema_cache,
 )
+from .schema_store import (
+    get_embedded_schema,
+    has_embedded_schema,
+    list_embedded_schemas,
+    get_embedded_schema_count,
+    reload_embedded_schemas,
+    KNOWN_VLEI_SCHEMA_SAIDS,
+)
 
 __all__ = [
     # Models
@@ -107,6 +117,13 @@ __all__ = [
     "CachedSchema",
     "get_schema_cache",
     "reset_schema_cache",
+    # Embedded schema store
+    "get_embedded_schema",
+    "has_embedded_schema",
+    "list_embedded_schemas",
+    "get_embedded_schema_count",
+    "reload_embedded_schemas",
+    "KNOWN_VLEI_SCHEMA_SAIDS",
     # Graph visualization
     "CredentialGraph",
     "CredentialNode",

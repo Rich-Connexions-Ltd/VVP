@@ -19,7 +19,8 @@ from app.vvp.acdc.schema_resolver import (
 
 
 # Sample schema with valid SAID
-SAMPLE_SCHEMA_SAID = "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao"
+# Note: Use a SAID that is NOT in the embedded store to test registry/cache paths
+SAMPLE_SCHEMA_SAID = "ETestSAID_NotInEmbeddedStore_ForTesting1234"
 SAMPLE_SCHEMA = {
     "$id": SAMPLE_SCHEMA_SAID,
     "$schema": "http://json-schema.org/draft-07/schema#",
@@ -29,6 +30,9 @@ SAMPLE_SCHEMA = {
         "name": {"type": "string"},
     },
 }
+
+# SAID that IS in the embedded store (for testing embedded store hits)
+EMBEDDED_SCHEMA_SAID = "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao"
 
 
 @pytest.fixture

@@ -271,13 +271,27 @@ class SchemaResolver:
         self._metrics.attempts += 1
         start_time = time.time()
 
+        # Check embedded schema store first (instant lookup, no network)
+        from .schema_store import get_embedded_schema
+        embedded = get_embedded_schema(schema_said)
+        if embedded:
+            log.debug(f"Embedded store hit for schema {schema_said[:20]}...")
+            self._metrics.successes += 1
+            return ResolvedSchema(
+                schema_doc=embedded,
+                said=schema_said,
+                source="embedded",
+                source_type="embedded",
+                fetch_time_ms=0.0,
+            )
+
         # Check in-flight to prevent duplicate concurrent fetches
         if schema_said in self._in_flight:
             log.debug(f"Schema {schema_said[:20]}... already being resolved")
             # Wait briefly and check cache
             await asyncio.sleep(0.1)
 
-        # Check cache first (stores only verified schemas)
+        # Check cache (stores only verified schemas)
         cache = await self._get_cache()
         cached_entry = await cache.get_entry(schema_said)
         if cached_entry:
