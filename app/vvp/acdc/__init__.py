@@ -6,6 +6,8 @@ Components:
 - models: ACDC and ACDCChainResult dataclasses
 - parser: ACDC parsing and SAID validation
 - verifier: Signature verification and chain validation
+- schema_resolver: SAID-first schema resolution with multi-source lookup
+- schema_cache: LRU+TTL cache for verified schemas
 - exceptions: ACDCError hierarchy
 
 Usage:
@@ -16,6 +18,8 @@ Usage:
         validate_acdc_said,
         verify_acdc_signature,
         validate_credential_chain,
+        SchemaResolver,
+        get_schema_resolver,
         ACDCError,
         ACDCSAIDMismatch,
         ACDCSignatureInvalid,
@@ -40,6 +44,7 @@ from .verifier import (
     validate_de_credential,
     validate_issuee_binding,
     validate_schema_said,
+    validate_schema_document,
     validate_tnalloc_credential,
     verify_acdc_signature,
 )
@@ -51,6 +56,22 @@ from .graph import (
     ResolutionSource,
     build_credential_graph,
     credential_graph_to_dict,
+)
+from .schema_resolver import (
+    SchemaResolver,
+    SchemaResolverConfig,
+    SchemaResolverMetrics,
+    ResolvedSchema,
+    get_schema_resolver,
+    reset_schema_resolver,
+)
+from .schema_cache import (
+    SchemaCache,
+    SchemaCacheConfig,
+    SchemaCacheMetrics,
+    CachedSchema,
+    get_schema_cache,
+    reset_schema_cache,
 )
 
 __all__ = [
@@ -70,7 +91,22 @@ __all__ = [
     "validate_issuee_binding",
     "validate_tnalloc_credential",
     "validate_schema_said",
+    "validate_schema_document",
     "KNOWN_SCHEMA_SAIDS",
+    # Schema resolution
+    "SchemaResolver",
+    "SchemaResolverConfig",
+    "SchemaResolverMetrics",
+    "ResolvedSchema",
+    "get_schema_resolver",
+    "reset_schema_resolver",
+    # Schema cache
+    "SchemaCache",
+    "SchemaCacheConfig",
+    "SchemaCacheMetrics",
+    "CachedSchema",
+    "get_schema_cache",
+    "reset_schema_cache",
     # Graph visualization
     "CredentialGraph",
     "CredentialNode",

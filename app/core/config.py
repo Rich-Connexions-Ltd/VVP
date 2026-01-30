@@ -111,12 +111,13 @@ def _parse_trusted_roots() -> frozenset[str]:
     This determines which AIDs anchor the ACDC credential chain.
 
     Supports multiple roots for different governance frameworks:
-    - GLEIF External (production vLEI ecosystem)
+    - GLEIF Root (production vLEI ecosystem)
+    - GLEIF External (legacy/alternate identifier)
     - QVI roots (Qualified vLEI Issuers)
     - Test roots (development/staging)
 
     Environment variable format:
-        VVP_TRUSTED_ROOT_AIDS=EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao,EQq7xL2...
+        VVP_TRUSTED_ROOT_AIDS=EDP1vHcw_wc4M__Fj53-cJaBnZZASd-aMTaSyWEQ-PC2,EBfdlu8R27Fbx...
 
     Returns:
         frozenset of trusted root AID strings.
@@ -125,8 +126,13 @@ def _parse_trusted_roots() -> frozenset[str]:
     if env_value:
         # Parse comma-separated AIDs, strip whitespace, filter empty
         return frozenset(aid.strip() for aid in env_value.split(",") if aid.strip())
-    # Default: GLEIF External AID for production vLEI ecosystem
-    return frozenset({"EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao"})
+    # Default: Both GLEIF Root AIDs for production vLEI ecosystem
+    # - EDP1vHcw_wc4M__Fj53-cJaBnZZASd-aMTaSyWEQ-PC2: GLEIF Root (from gleif.org OOBI)
+    # - EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao: GLEIF External (legacy/keripy default)
+    return frozenset({
+        "EDP1vHcw_wc4M__Fj53-cJaBnZZASd-aMTaSyWEQ-PC2",  # GLEIF Root (production)
+        "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao",  # GLEIF External (legacy)
+    })
 
 
 # Trusted root AIDs for ACDC chain validation
@@ -253,6 +259,75 @@ DOSSIER_CACHE_MAX_ENTRIES: int = int(
 # Schemas change rarely, so this can be longer than dossier cache
 SCHEMA_CACHE_TTL_SECONDS: int = int(
     os.getenv("VVP_SCHEMA_CACHE_TTL", "300")
+)
+
+
+# =============================================================================
+# SAID-FIRST SCHEMA RESOLUTION (ACDC Spec / KERI Content-Addressed Model)
+# =============================================================================
+# Multi-source schema resolution with mandatory SAID verification.
+# Per ACDC spec, schemas are content-addressed via SAID - verification is mandatory.
+
+import logging as _config_logging
+
+_config_log = _config_logging.getLogger(__name__)
+
+# Enable SchemaResolver for multi-source resolution
+# When True (default): Use SchemaResolver with cache, registries, optional OOBI
+# When False: Use legacy schema_fetcher.py directly
+SCHEMA_RESOLVER_ENABLED: bool = os.getenv(
+    "VVP_SCHEMA_RESOLVER_ENABLED", "true"
+).lower() == "true"
+
+# Schema resolver cache TTL (longer than credentials - schemas are immutable)
+# Default 1 hour is safe because schema content is verified via SAID
+SCHEMA_RESOLVER_CACHE_TTL_SECONDS: int = int(
+    os.getenv("VVP_SCHEMA_RESOLVER_CACHE_TTL", "3600")
+)
+
+# Maximum schema cache entries before LRU eviction
+SCHEMA_RESOLVER_CACHE_MAX_ENTRIES: int = int(
+    os.getenv("VVP_SCHEMA_RESOLVER_CACHE_MAX_ENTRIES", "200")
+)
+
+
+def _parse_schema_registry_urls() -> list[str]:
+    """Parse comma-separated schema registry URLs from environment.
+
+    Format: "https://schema.gleif.org/,https://schema.provenant.net/"
+    - Splits on comma
+    - Strips whitespace from each URL
+    - Filters empty strings
+    - Logs warning if result is empty list
+
+    Returns:
+        List of registry URL strings.
+    """
+    default = "https://schema.gleif.org/,https://schema.provenant.net/"
+    raw = os.getenv("VVP_SCHEMA_REGISTRY_URLS", default)
+    urls = [url.strip() for url in raw.split(",") if url.strip()]
+    if not urls:
+        _config_log.warning(
+            "VVP_SCHEMA_REGISTRY_URLS parsed to empty list; "
+            "schema resolution will rely on OOBI only (if enabled)"
+        )
+    return urls
+
+
+# Schema registry URLs (ordered list - tried in sequence)
+SCHEMA_REGISTRY_URLS: list[str] = _parse_schema_registry_urls()
+
+# Enable OOBI-based schema resolution (experimental)
+# When True: Attempt to fetch schemas from KERI witnesses
+# When False (default): Only use HTTP registries
+# NOTE: Current KERI witnesses typically serve KEL data, not schemas
+SCHEMA_OOBI_RESOLUTION_ENABLED: bool = os.getenv(
+    "VVP_SCHEMA_OOBI_RESOLUTION", "false"
+).lower() == "true"
+
+# Timeout for schema fetch operations (per source)
+SCHEMA_RESOLVER_TIMEOUT_SECONDS: float = float(
+    os.getenv("VVP_SCHEMA_RESOLVER_TIMEOUT", "5.0")
 )
 
 

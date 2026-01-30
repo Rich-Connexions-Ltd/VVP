@@ -2,6 +2,7 @@
 {#
    Displays schema validation status with registry source and field errors.
    Auto-expands if there are validation errors to highlight issues.
+   Includes expandable schema document rendering showing properties.
 
    Context variables:
    - schema_info: SchemaValidationInfo object
@@ -22,9 +23,73 @@
         <dd>{{ schema_info.validated_count }} / {{ schema_info.total_required }} validated</dd>
         {% endif %}
     </dl>
+
+    {# Expandable Schema Document Display #}
+    {% if schema_info.has_document %}
+    <details class="schema-document" style="margin-top:0.5rem;background:rgba(0,0,0,0.02);border-radius:0.25rem;padding:0.5rem;">
+        <summary style="cursor:pointer;font-size:0.9em;">
+            View Schema Definition
+            {% if schema_info.properties %}
+            <span class="badge badge-muted">{{ schema_info.properties | length }} properties</span>
+            {% endif %}
+        </summary>
+        <div style="margin-top:0.5rem;">
+            {% if schema_info.schema_title %}
+            <div style="font-weight:600;margin-bottom:0.25rem;">{{ schema_info.schema_title }}</div>
+            {% endif %}
+            {% if schema_info.schema_description %}
+            <div style="font-size:0.85em;color:var(--vvp-text-muted, #6c757d);margin-bottom:0.5rem;">{{ schema_info.schema_description }}</div>
+            {% endif %}
+
+            {% if schema_info.properties %}
+            <table class="schema-props-table" style="width:100%;font-size:0.85em;border-collapse:collapse;">
+                <thead>
+                    <tr style="border-bottom:1px solid #dee2e6;">
+                        <th style="text-align:left;padding:0.25rem 0.5rem;">Property</th>
+                        <th style="text-align:left;padding:0.25rem 0.5rem;">Type</th>
+                        <th style="text-align:left;padding:0.25rem 0.5rem;">Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for prop in schema_info.properties %}
+                    <tr style="border-bottom:1px solid #eee;">
+                        <td style="padding:0.25rem 0.5rem;font-family:monospace;">
+                            {{ prop.name }}
+                            {% if prop.required %}
+                            <span class="badge badge-danger" style="font-size:0.65em;margin-left:0.25rem;">req</span>
+                            {% endif %}
+                        </td>
+                        <td style="padding:0.25rem 0.5rem;">
+                            <code style="font-size:0.9em;background:rgba(0,0,0,0.05);padding:0.1rem 0.25rem;border-radius:0.15rem;">{{ prop.type_name }}</code>
+                            {% if prop.format %}
+                            <span style="color:var(--vvp-text-muted, #6c757d);font-size:0.85em;">({{ prop.format }})</span>
+                            {% endif %}
+                        </td>
+                        <td style="padding:0.25rem 0.5rem;color:var(--vvp-text-muted, #6c757d);">
+                            {% if prop.description %}
+                            {{ prop.description[:80] }}{% if prop.description | length > 80 %}...{% endif %}
+                            {% elif prop.enum_values %}
+                            Enum: {{ prop.enum_values | join(', ') }}
+                            {% else %}
+                            —
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div style="font-size:0.85em;color:var(--vvp-text-muted, #6c757d);font-style:italic;">
+                No properties defined in schema
+            </div>
+            {% endif %}
+        </div>
+    </details>
+    {% endif %}
+
     {% if schema_info.field_errors %}
-    <div class="schema-errors">
-        <small><strong>Errors:</strong></small>
+    <div class="schema-errors" style="margin-top:0.5rem;background:rgba(220, 53, 69, 0.1);border-left:3px solid var(--vvp-danger, #dc3545);padding:0.5rem;">
+        <small><strong>Validation Errors:</strong></small>
         <ul style="margin:0.25rem 0 0 1rem;padding:0;font-size:0.85em;">
             {% for error in schema_info.field_errors %}
             <li><code>{{ error }}</code></li>

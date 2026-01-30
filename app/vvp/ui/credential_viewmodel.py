@@ -299,6 +299,29 @@ class ErrorBucket:
 
 
 @dataclass
+class SchemaPropertyInfo:
+    """Single property definition from JSON Schema.
+
+    Represents one field in a schema's properties for display.
+
+    Attributes:
+        name: Property name/key.
+        type_name: JSON Schema type (string, integer, array, object, etc.).
+        description: Property description from schema (if available).
+        required: True if this property is in the schema's required array.
+        format: JSON Schema format hint (date-time, email, uri, etc.).
+        enum_values: Allowed values if property has enum constraint.
+    """
+
+    name: str
+    type_name: str
+    description: str = ""
+    required: bool = False
+    format: Optional[str] = None
+    enum_values: List[str] = field(default_factory=list)
+
+
+@dataclass
 class SchemaValidationInfo:
     """Schema validation details for a credential.
 
@@ -313,6 +336,10 @@ class SchemaValidationInfo:
         field_errors: List of field-level validation errors.
         validated_count: Number of fields that passed validation.
         total_required: Total required fields in schema.
+        schema_title: Human-readable title from schema document.
+        schema_description: Description from schema document.
+        properties: List of schema property definitions for display.
+        has_document: True if the actual schema document is available.
     """
 
     schema_said: str
@@ -322,6 +349,10 @@ class SchemaValidationInfo:
     field_errors: List[str] = field(default_factory=list)
     validated_count: int = 0
     total_required: int = 0
+    schema_title: str = ""
+    schema_description: str = ""
+    properties: List[SchemaPropertyInfo] = field(default_factory=list)
+    has_document: bool = False
 
 
 @dataclass
@@ -1445,6 +1476,72 @@ def build_credential_card_vm(
 # =============================================================================
 
 
+def _extract_schema_properties(
+    schema_doc: Dict[str, Any],
+) -> List[SchemaPropertyInfo]:
+    """Extract property definitions from JSON Schema document.
+
+    Parses the schema's properties object and required array to build
+    a list of SchemaPropertyInfo for UI display.
+
+    Args:
+        schema_doc: JSON Schema document.
+
+    Returns:
+        List of SchemaPropertyInfo sorted by required status then name.
+    """
+    properties: List[SchemaPropertyInfo] = []
+    required_fields = set(schema_doc.get("required", []))
+
+    # Get properties from schema (may be at top level or under definitions)
+    schema_props = schema_doc.get("properties", {})
+
+    # Also check for nested attribute schema (common in ACDC schemas)
+    if "properties" in schema_props.get("a", {}):
+        schema_props = schema_props["a"]["properties"]
+    elif "$id" in schema_props:
+        # Schema has $id in properties - likely a reference, use top-level
+        pass
+
+    for prop_name, prop_def in schema_props.items():
+        if not isinstance(prop_def, dict):
+            continue
+
+        # Skip internal ACDC fields in display
+        if prop_name in ("d", "i", "dt", "u"):
+            continue
+
+        # Get type (may be string or array)
+        type_val = prop_def.get("type", "any")
+        if isinstance(type_val, list):
+            type_name = " | ".join(type_val)
+        else:
+            type_name = type_val
+
+        # Get format hint
+        format_hint = prop_def.get("format")
+
+        # Get enum values
+        enum_values = prop_def.get("enum", [])
+        if enum_values and not isinstance(enum_values, list):
+            enum_values = []
+
+        properties.append(
+            SchemaPropertyInfo(
+                name=prop_name,
+                type_name=type_name,
+                description=prop_def.get("description", ""),
+                required=prop_name in required_fields,
+                format=format_hint,
+                enum_values=enum_values[:5],  # Limit to first 5 for display
+            )
+        )
+
+    # Sort: required fields first, then alphabetically
+    properties.sort(key=lambda p: (not p.required, p.name))
+    return properties
+
+
 def build_schema_info(
     acdc: ACDC,
     schema_doc: Optional[Dict[str, Any]],
@@ -1481,13 +1578,65 @@ def build_schema_info(
     else:
         validation_status = "INDETERMINATE"
 
+    # Extract schema document details for display
+    schema_title = ""
+    schema_description = ""
+    properties: List[SchemaPropertyInfo] = []
+    has_document = False
+
+    if schema_doc:
+        has_document = True
+        schema_title = schema_doc.get("title", "")
+        schema_description = schema_doc.get("description", "")
+        properties = _extract_schema_properties(schema_doc)
+
     return SchemaValidationInfo(
         schema_said=schema_said,
         registry_source=registry_source,
         validation_status=validation_status,
         has_governance=has_governance_schemas(cred_type),
         field_errors=errors,
+        schema_title=schema_title,
+        schema_description=schema_description,
+        properties=properties,
+        has_document=has_document,
     )
+
+
+async def build_schema_info_with_fetch(
+    acdc: ACDC,
+    errors: Optional[List[str]] = None,
+) -> SchemaValidationInfo:
+    """Build schema info by fetching the schema document via SchemaResolver.
+
+    This async helper fetches the schema document using the configured
+    SchemaResolver, enabling the UI to display schema properties.
+
+    Args:
+        acdc: Parsed ACDC credential.
+        errors: Optional list of validation errors (defaults to empty).
+
+    Returns:
+        SchemaValidationInfo with schema document details if available.
+    """
+    from app.vvp.acdc.schema_resolver import get_schema_resolver
+    from app.core import config as app_config
+
+    errors = errors or []
+    schema_doc = None
+
+    # Try to fetch the schema document if resolver is enabled
+    if app_config.SCHEMA_RESOLVER_ENABLED and acdc.schema_said:
+        try:
+            resolver = get_schema_resolver()
+            result = await resolver.resolve(acdc.schema_said)
+            if result:
+                schema_doc = result.schema_doc
+        except Exception:
+            # Schema fetch failed - continue without document
+            pass
+
+    return build_schema_info(acdc, schema_doc, errors)
 
 
 def build_validation_summary(

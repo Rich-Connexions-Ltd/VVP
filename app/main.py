@@ -670,7 +670,7 @@ async def ui_fetch_dossier(
         build_issuer_identity_map_async,
         build_validation_summary,
         build_error_buckets,
-        build_schema_info,
+        build_schema_info_with_fetch,
         EvidenceStatus,
         EvidenceFetchRecord,
         EvidenceTimeline,
@@ -840,10 +840,9 @@ async def ui_fetch_dossier(
                         issuer_identities=issuer_identities,
                     )
 
-                    # Sprint 24: Build schema_info for each credential
-                    # Note: No schema doc fetching in UI path; use registry check only
+                    # Sprint 24: Build schema_info for each credential with schema fetch
                     schema_start = time.time()
-                    schema_info = build_schema_info(acdc, schema_doc=None, errors=[])
+                    schema_info = await build_schema_info_with_fetch(acdc)
                     schema_latency = int((time.time() - schema_start) * 1000)
                     vm.schema_info = schema_info
 
@@ -1281,7 +1280,7 @@ async def ui_verify_result(
         build_issuer_identity_map_async,
         build_validation_summary,
         build_error_buckets,
-        build_schema_info,
+        build_schema_info_with_fetch,
         build_delegation_chain_info,
         EvidenceStatus,
         EvidenceFetchRecord,
@@ -1455,8 +1454,8 @@ async def ui_verify_result(
                             issuer_identities=issuer_identities,
                         )
 
-                        # Build schema info
-                        schema_info = build_schema_info(acdc, schema_doc=None, errors=[])
+                        # Build schema info with fetch
+                        schema_info = await build_schema_info_with_fetch(acdc)
                         vm.schema_info = schema_info
 
                         # Sprint 25: Attach delegation_info to credentials where issuer == signer_aid
@@ -1654,7 +1653,7 @@ async def ui_simple_verify(
     from app.vvp.ui.credential_viewmodel import (
         build_credential_card_vm,
         build_issuer_identity_map_async,
-        build_schema_info,
+        build_schema_info_with_fetch,
         build_delegation_chain_info,
         ValidationCheckResult,
     )
@@ -1807,7 +1806,7 @@ async def ui_simple_verify(
                     issuer_identities=issuer_identities,
                 )
 
-                schema_info = build_schema_info(acdc, schema_doc=None, errors=[])
+                schema_info = await build_schema_info_with_fetch(acdc)
                 vm.schema_info = schema_info
 
                 if delegation_info and verify_response.signer_aid:

@@ -10,6 +10,7 @@ from .exceptions import ACDCChainInvalid, ACDCSignatureInvalid
 
 if TYPE_CHECKING:
     from ..keri.credential_resolver import CredentialResolver
+    from .schema_resolver import SchemaResolver
 from .models import ACDC, ACDCChainResult
 from .parser import _acdc_canonical_serialize
 from .schema_registry import (
@@ -18,7 +19,7 @@ from .schema_registry import (
     has_governance_schemas,
     is_known_schema,
 )
-from .schema_fetcher import get_schema_for_validation
+from .schema_fetcher import get_schema_for_validation, verify_schema_said
 from .schema_validator import validate_acdc_against_schema
 from ..api_models import ClaimStatus
 
@@ -76,6 +77,8 @@ def validate_schema_said(
 
 async def validate_schema_document(
     acdc: ACDC,
+    schema_resolver: Optional["SchemaResolver"] = None,
+    witness_urls: Optional[List[str]] = None,
 ) -> Tuple[ClaimStatus, List[str]]:
     """Validate ACDC attributes against fetched schema document.
 
@@ -85,8 +88,17 @@ async def validate_schema_document(
     2. Verifies the fetched document's SAID matches declared schema SAID
     3. Validates ACDC attributes conform to the schema structure
 
+    SAID Verification Rules (per ACDC spec):
+    - Embedded schema: SAID mismatch → INVALID (not INDETERMINATE)
+    - Fetched schema: SAID mismatch → INVALID (not INDETERMINATE)
+    - Schema unavailable (network): INDETERMINATE
+    - Schema missing $id field: INVALID
+
     Args:
         acdc: The ACDC to validate.
+        schema_resolver: Optional SchemaResolver for multi-source resolution.
+            If not provided and SCHEMA_RESOLVER_ENABLED, uses singleton.
+        witness_urls: Optional witness URLs for OOBI resolution.
 
     Returns:
         Tuple of (ClaimStatus, errors):
@@ -95,27 +107,67 @@ async def validate_schema_document(
         - (INVALID via exception) if SAID mismatch or validation fails
 
     Raises:
-        ACDCChainInvalid: If schema SAID mismatch or attributes don't match schema
+        ACDCChainInvalid: If schema SAID mismatch, missing $id, or attributes
+            don't match schema.
     """
+    from app.core import config
+
     errors: List[str] = []
 
     if not acdc.schema_said:
         # No schema declared - cannot validate attributes
         return (ClaimStatus.INDETERMINATE, ["No schema SAID declared"])
 
-    # Fetch schema document (handles both embedded and referenced schemas)
-    try:
-        schema_doc, fetch_status = await get_schema_for_validation(acdc)
-    except ACDCChainInvalid:
-        # SAID mismatch - re-raise as this is a definite INVALID
-        raise
+    # Check if schema is embedded (dict) or referenced (string SAID)
+    raw_schema = acdc.raw.get("s")
+    if isinstance(raw_schema, dict):
+        # Embedded schema - MUST verify SAID using single source of truth
+        if "$id" not in raw_schema:
+            raise ACDCChainInvalid(
+                f"Embedded schema missing $id field - cannot verify SAID"
+            )
 
-    if fetch_status == ClaimStatus.INDETERMINATE or not schema_doc:
-        # Schema couldn't be fetched - return INDETERMINATE per §2.2
-        log.warning(
-            f"Schema {acdc.schema_said[:20]}... unavailable for ACDC {acdc.said[:20]}..."
-        )
-        return (ClaimStatus.INDETERMINATE, ["Schema document unavailable"])
+        # Use verify_schema_said for consistency with SchemaResolver
+        if not verify_schema_said(raw_schema, acdc.schema_said):
+            # SAID mismatch is INVALID, not INDETERMINATE
+            raise ACDCChainInvalid(
+                f"Embedded schema SAID mismatch: declared {acdc.schema_said[:20]}... "
+                f"but computed SAID doesn't match"
+            )
+        schema_doc = raw_schema
+    else:
+        # Referenced schema - resolve via SchemaResolver or legacy fetcher
+        if schema_resolver is None and config.SCHEMA_RESOLVER_ENABLED:
+            from .schema_resolver import get_schema_resolver
+            schema_resolver = get_schema_resolver()
+
+        if schema_resolver:
+            try:
+                result = await schema_resolver.resolve(acdc.schema_said, witness_urls)
+            except ACDCChainInvalid:
+                # SAID mismatch from resolver - propagate as INVALID
+                raise
+
+            if result is None:
+                # Schema unavailable (network) - INDETERMINATE per §2.2
+                log.warning(
+                    f"Schema {acdc.schema_said[:20]}... unavailable for ACDC {acdc.said[:20]}..."
+                )
+                return (ClaimStatus.INDETERMINATE, ["Schema unavailable"])
+            schema_doc = result.schema_doc
+        else:
+            # Fallback to legacy fetcher (which also verifies SAID)
+            try:
+                schema_doc, fetch_status = await get_schema_for_validation(acdc)
+            except ACDCChainInvalid:
+                # SAID mismatch - re-raise as INVALID
+                raise
+
+            if fetch_status == ClaimStatus.INDETERMINATE or not schema_doc:
+                log.warning(
+                    f"Schema {acdc.schema_said[:20]}... unavailable for ACDC {acdc.said[:20]}..."
+                )
+                return (ClaimStatus.INDETERMINATE, ["Schema document unavailable"])
 
     # Validate ACDC attributes against schema
     if not acdc.attributes or not isinstance(acdc.attributes, dict):
