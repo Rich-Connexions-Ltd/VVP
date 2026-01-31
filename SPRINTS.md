@@ -131,46 +131,70 @@ services/issuer/
 
 ---
 
-## Sprint 29: Credential Registry
+## Sprint 29: Credential Registry (COMPLETE)
 
 **Goal:** Implement TEL registry for credential issuance tracking.
 
 **Deliverables:**
-- [ ] `CredentialRegistryManager` wrapping keripy Regery
-- [ ] Registry creation API (`POST /registry`)
-- [ ] Schema registry integration from `common/vvp/schema/`
-- [ ] Witness receipt anchoring for registry events
-- [ ] Consider UI functionality needed to expose this sprint's capabilities
+- [x] `CredentialRegistryManager` wrapping keripy Regery
+- [x] Registry creation API (`POST /registry`)
+- [x] Schema registry integration from `common/vvp/schema/`
+- [x] Witness receipt anchoring for registry events
+- [x] UI for registry management and schema browsing
+
+**Commits:** `8c28f2f`
 
 **Key Files:**
 ```
 services/issuer/app/
 ├── keri/
 │   └── registry.py          # CredentialRegistryManager
+├── schema/
+│   └── store.py             # Embedded schema store
 └── api/
     ├── registry.py          # POST /registry, GET /registry/{id}
-    └── schema.py            # GET /schema, GET /schema/{said}
+    └── schema.py            # GET /schema, GET /schema/{said}, POST /schema/validate
+services/issuer/web/
+├── registry.html            # Registry management UI
+└── schemas.html             # Schema browser UI
+services/issuer/tests/
+├── test_registry.py         # Registry tests (13 tests)
+└── test_schema.py           # Schema tests (10 tests)
 ```
 
 **API Endpoints:**
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/registry` | POST | Create credential registry |
-| `/registry/{id}` | GET | Get registry info |
+| `/registry` | GET | List all registries |
+| `/registry/{key}` | GET | Get registry by key |
 | `/schema` | GET | List available schemas |
 | `/schema/{said}` | GET | Get schema definition |
+| `/schema/validate` | POST | Validate schema SAID |
+| `/registry/ui` | GET | Registry management UI |
+| `/schemas/ui` | GET | Schema browser UI |
 
-**Schema SAIDs (from vLEI):**
+**Schema SAIDs (embedded):**
 | Type | SAID |
 |------|------|
-| Legal Entity | `EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao` |
-| QVI | `EFgnk_c08WmZGgv9_mpldibRuqFMTQN-rAgtD-TCOwbs` |
-| OOR Auth | `EH1jN4U4LMYHmPVI4FYdZ10bIPR7YWKp8TDdZ9Y9Al-P` |
+| Legal Entity | `ENPXp1vQzRF6JwIuS-mp2U8Uf1MoADoP_GqQ62VsDZWY` |
+| QVI | `EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao` |
+| OOR Auth | `EKA57bKBKxr_kN7iN5i7lMUxpMG-s19dRcmov1iDxz-E` |
+| ECR Auth | `EH6ekLjSr8V32WyFbGe1zXjTzFs9PkTYmupJ9H65O14g` |
+| Dossier | `EH1jN4U4LMYHmPVI4FYdZ10bIPR7YWKp8TDdZ9Y9Al-P` |
+| TN Allocation | `EFvnoHDY7I-kaBBeKlbDbkjG4BaI0nKLGadxBdjMGgSQ` |
+
+**Technical Notes:**
+- Regery uses same `headDirPath` as Habery for consistent storage
+- TEL properties (regi, noBackers) wrapped in try/except for lazy tever loading
+- Registry manager shares Habery singleton with identity manager
 
 **Exit Criteria:**
-- Create registry via API
-- TEL events published to witnesses
-- Schema validation working
+- [x] Create registry via API
+- [x] TEL events published to witnesses
+- [x] Schema validation working
+- [x] UI for registry and schema management
+- [x] All 33 tests passing
 
 ---
 
