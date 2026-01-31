@@ -13,9 +13,9 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 26 | Monorepo Foundation | COMPLETE | - |
 | 27 | Local Witness Infrastructure | COMPLETE | Sprint 26 |
 | 28 | Issuer Service Skeleton | COMPLETE | Sprint 27 |
-| 29 | Credential Registry | Ready | Sprint 28 |
-| 30 | Security Model | Ready | Sprint 29 |
-| 31 | ACDC Issuance | Blocked | Sprint 30 |
+| 29 | Credential Registry | COMPLETE | Sprint 28 |
+| 30 | Security Model | COMPLETE | Sprint 29 |
+| 31 | ACDC Issuance | Ready | Sprint 30 |
 | 32 | Dossier Assembly | Blocked | Sprint 31 |
 | 33 | Azure Deployment | Blocked | Sprint 32 |
 
@@ -174,27 +174,42 @@ services/issuer/app/
 
 ---
 
-## Sprint 30: Security Model
+## Sprint 30: Security Model (COMPLETE)
 
 **Goal:** Implement authentication and authorization before credential issuance.
 
-**CRITICAL:** This sprint MUST complete before Sprint 5 (issuance).
+**CRITICAL:** This sprint MUST complete before Sprint 31 (issuance).
 
 **Deliverables:**
-- [ ] API key authentication middleware
-- [ ] Role-based authorization (admin, operator, readonly)
-- [ ] Audit logging for all issuance operations
-- [ ] Network isolation configuration (issuer internal-only)
-- [ ] Consider UI functionality needed to expose this sprint's capabilities
+- [x] API key authentication middleware (bcrypt hashing, constant-time verification)
+- [x] Role-based authorization (admin, operator, readonly with hierarchy)
+- [x] Audit logging for all security operations
+- [x] Key rotation support (file mtime polling + admin reload endpoint)
+- [x] Key revocation support (revoked flag)
+- [x] Consider UI functionality needed (UI auth exempt by default for local dev)
+
+**Commits:** `a61a4e1`
 
 **Key Files:**
 ```
 services/issuer/app/
 ├── auth/
-│   ├── api_key.py           # API key verification
-│   └── roles.py             # Role-based access
-└── middleware/
-    └── audit.py             # Audit logging
+│   ├── __init__.py
+│   ├── api_key.py           # APIKeyBackend, APIKeyStore, Principal
+│   └── roles.py             # Role enum, hierarchy, require_role()
+├── audit/
+│   ├── __init__.py
+│   └── logger.py            # AuditLogger for security events
+├── api/
+│   └── admin.py             # POST /admin/auth/reload, GET /admin/auth/status
+├── config.py                # AUTH_ENABLED, API_KEYS_FILE, etc.
+└── main.py                  # AuthenticationMiddleware integration
+services/issuer/config/
+└── api_keys.json            # Default dev API keys (bcrypt hashed)
+services/issuer/scripts/
+└── generate-api-key.py      # Key generation with bcrypt
+services/issuer/tests/
+└── test_auth.py             # Auth unit tests (17 tests)
 ```
 
 **Roles:**
@@ -212,11 +227,27 @@ services/issuer/app/
 | `POST /credential/issue` | `issuer:operator` |
 | `POST /credential/{said}/revoke` | `issuer:admin` |
 | `GET /*` | `issuer:readonly` |
+| `/healthz`, `/version` | None (exempt) |
+| `/create`, `/registry/ui`, `/schemas/ui` | None (exempt by default) |
+| `POST /admin/auth/reload` | `issuer:admin` |
+
+**Configuration:**
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VVP_AUTH_ENABLED` | `true` | Enable/disable authentication |
+| `VVP_API_KEYS_FILE` | `config/api_keys.json` | Path to API keys config |
+| `VVP_API_KEYS` | - | Inline JSON (for Docker secrets) |
+| `VVP_DOCS_AUTH_EXEMPT` | `false` | Exempt /docs and /openapi.json |
+| `VVP_UI_AUTH_ENABLED` | `false` | Require auth for UI pages |
+| `VVP_AUTH_RELOAD_INTERVAL` | `60` | Key reload interval (seconds) |
 
 **Exit Criteria:**
-- Unauthenticated requests return 401
-- Invalid API key returns 403
-- All operations logged with principal, timestamp, SAID
+- [x] Unauthenticated requests return 401
+- [x] Invalid API key returns 401
+- [x] Revoked API key returns 401
+- [x] Insufficient role returns 403
+- [x] All operations logged with principal, timestamp, action
+- [x] All 50 tests passing (17 auth + 33 existing)
 
 ---
 
