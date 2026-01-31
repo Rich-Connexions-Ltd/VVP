@@ -1,0 +1,16 @@
+[project]
+name = "vvp-common"
+version = "0.1.0"
+description = "Shared code between VVP verifier and issuer services"
+requires-python = ">=3.12"
+dependencies = [
+    "blake3>=0.3.0",
+]
+
+[build-system]
+requires = ["setuptools>=65.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["common*"]

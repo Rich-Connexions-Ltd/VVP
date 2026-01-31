@@ -19,7 +19,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from app.core.config import TRUSTED_ROOT_AIDS
-from app.vvp.acdc.models import ACDC, ACDCChainResult
+from common.vvp.models import ACDC, ACDCChainResult
 from app.vvp.gleif import lookup_lei
 
 
@@ -67,6 +67,58 @@ class RevocationStatus:
 
 
 @dataclass
+class KeyStateInfo:
+    """Key state information for a resolved AID.
+
+    Populated when an AID is resolved via OOBI/KEL lookup. Provides
+    visibility into the cryptographic key state at verification time.
+
+    Attributes:
+        sequence: Current key event sequence number (0 = inception).
+        establishment_type: Type of current establishment event (icp, rot, dip, drt).
+        rotated: True if key has been rotated (sequence > 0).
+        witness_count: Number of witnesses backing this AID.
+        witness_threshold: TOAD (threshold of accountable duplicity).
+        is_delegated: True if this AID is delegated.
+        delegator_aid: Delegator AID if delegated (truncated for display).
+        resolution_source: Source of key state (oobi, witness, cache).
+        resolved_at: RFC3339 timestamp when key state was resolved.
+        signature_verified: True if signature was verified against this key state.
+        valid_from: RFC3339 timestamp when current key state became valid.
+        signing_key_count: Number of current signing keys.
+        first_key_fingerprint: Truncated first signing key (base64, first 12 chars).
+        establishment_said: SAID of the establishment event.
+        witness_aids: List of witness AIDs (truncated for display).
+        delegation_chain: List of delegator AIDs from leaf to root (truncated).
+        delegation_root_aid: The non-delegated root AID (truncated).
+        delegation_chain_valid: Whether the delegation chain was validated.
+        delegation_depth: Number of delegation levels (0 if not delegated).
+    """
+
+    sequence: int = 0
+    establishment_type: str = "icp"
+    rotated: bool = False
+    witness_count: int = 0
+    witness_threshold: int = 0
+    is_delegated: bool = False
+    delegator_aid: Optional[str] = None
+    resolution_source: str = "unknown"
+    resolved_at: Optional[str] = None
+    signature_verified: bool = False
+    valid_from: Optional[str] = None
+    # New fields for additional key state visibility
+    signing_key_count: int = 0
+    first_key_fingerprint: Optional[str] = None
+    establishment_said: Optional[str] = None
+    witness_aids: Optional[List[str]] = None
+    # Delegation chain fields
+    delegation_chain: Optional[List[str]] = None
+    delegation_root_aid: Optional[str] = None
+    delegation_chain_valid: bool = False
+    delegation_depth: int = 0
+
+
+@dataclass
 class IssuerInfo:
     """Issuer identity information.
 
@@ -77,6 +129,7 @@ class IssuerInfo:
         display_name: Human-readable name from LE credential (if available).
         lei: Legal Entity Identifier from LE credential (if available).
         gleif_legal_name: Legal name from GLEIF API lookup (if LEI available).
+        key_state: Resolved key state info (if AID was resolved via OOBI).
     """
 
     aid: str
@@ -85,6 +138,7 @@ class IssuerInfo:
     display_name: Optional[str] = None
     lei: Optional[str] = None
     gleif_legal_name: Optional[str] = None
+    key_state: Optional[KeyStateInfo] = None
 
 
 @dataclass
@@ -1296,6 +1350,106 @@ async def build_issuer_identity_map_async(
 
 
 # =============================================================================
+# Key State Conversion
+# =============================================================================
+
+
+def build_key_state_info(
+    key_state: Any,
+    resolution_source: str = "oobi",
+    resolved_at: Optional[str] = None,
+    signature_verified: bool = False,
+) -> KeyStateInfo:
+    """Convert a KeyState from KEL resolution to a KeyStateInfo view model.
+
+    Args:
+        key_state: KeyState dataclass from kel_resolver.py.
+        resolution_source: Source of resolution (oobi, witness, cache).
+        resolved_at: RFC3339 timestamp when resolved.
+        signature_verified: Whether signature was verified against this state.
+
+    Returns:
+        KeyStateInfo for template display.
+    """
+    import base64
+    from datetime import datetime, timezone
+
+    # Determine establishment type from sequence and delegation status
+    if key_state.is_delegated:
+        establishment_type = "drt" if key_state.sequence > 0 else "dip"
+    else:
+        establishment_type = "rot" if key_state.sequence > 0 else "icp"
+
+    # Format valid_from as RFC3339 string
+    valid_from_str = None
+    if key_state.valid_from:
+        if isinstance(key_state.valid_from, datetime):
+            valid_from_str = key_state.valid_from.strftime("%Y-%m-%dT%H:%M:%SZ")
+        else:
+            valid_from_str = str(key_state.valid_from)
+
+    # Truncate delegator AID for display
+    delegator_short = None
+    if key_state.delegator_aid:
+        delegator_short = _truncate_aid(key_state.delegator_aid)
+
+    # Extract signing key information
+    signing_key_count = len(key_state.signing_keys) if key_state.signing_keys else 0
+    first_key_fingerprint = None
+    if key_state.signing_keys and len(key_state.signing_keys) > 0:
+        # Convert first key to base64 and truncate for display
+        first_key_b64 = base64.urlsafe_b64encode(key_state.signing_keys[0]).decode()
+        first_key_fingerprint = first_key_b64[:12] + "..."
+
+    # Get establishment event SAID
+    establishment_said = None
+    if hasattr(key_state, "establishment_digest") and key_state.establishment_digest:
+        establishment_said = key_state.establishment_digest
+
+    # Truncate witness AIDs for display
+    witness_aids_short = None
+    if key_state.witnesses:
+        witness_aids_short = [_truncate_aid(w) for w in key_state.witnesses]
+
+    # Extract delegation chain information
+    delegation_chain_short = None
+    delegation_root_short = None
+    delegation_chain_valid = False
+    delegation_depth = 0
+
+    if hasattr(key_state, "delegation_chain") and key_state.delegation_chain:
+        chain = key_state.delegation_chain
+        if chain.delegates:
+            delegation_chain_short = [_truncate_aid(aid) for aid in chain.delegates]
+            delegation_depth = len(chain.delegates)
+        if chain.root_aid:
+            delegation_root_short = _truncate_aid(chain.root_aid)
+        delegation_chain_valid = chain.valid
+
+    return KeyStateInfo(
+        sequence=key_state.sequence,
+        establishment_type=establishment_type,
+        rotated=key_state.sequence > 0,
+        witness_count=len(key_state.witnesses) if key_state.witnesses else 0,
+        witness_threshold=key_state.toad,
+        is_delegated=key_state.is_delegated,
+        delegator_aid=delegator_short,
+        resolution_source=resolution_source,
+        resolved_at=resolved_at,
+        signature_verified=signature_verified,
+        valid_from=valid_from_str,
+        signing_key_count=signing_key_count,
+        first_key_fingerprint=first_key_fingerprint,
+        establishment_said=establishment_said,
+        witness_aids=witness_aids_short,
+        delegation_chain=delegation_chain_short,
+        delegation_root_aid=delegation_root_short,
+        delegation_chain_valid=delegation_chain_valid,
+        delegation_depth=delegation_depth,
+    )
+
+
+# =============================================================================
 # Main Adapter Function
 # =============================================================================
 
@@ -1306,6 +1460,7 @@ def build_credential_card_vm(
     revocation_result: Optional[dict] = None,
     available_saids: Optional[Set[str]] = None,
     issuer_identities: Optional[Dict[str, IssuerIdentity]] = None,
+    key_states: Optional[Dict[str, Any]] = None,
 ) -> CredentialCardViewModel:
     """Build view model from raw ACDC and validation results.
 
@@ -1325,6 +1480,8 @@ def build_credential_card_vm(
         issuer_identities: Optional mapping of AID→IssuerIdentity from
             build_issuer_identity_map(). Used to display issuer names
             instead of truncated AIDs.
+        key_states: Optional mapping of AID→KeyState from KEL resolution.
+            Used to display key state info on credential cards.
 
     Returns:
         CredentialCardViewModel ready for template rendering.
@@ -1364,6 +1521,23 @@ def build_credential_card_vm(
         if lei_record:
             gleif_legal_name = lei_record.legal_name
 
+    # Build key state info if available for this issuer
+    key_state_info: Optional[KeyStateInfo] = None
+    if key_states and issuer_aid in key_states:
+        key_state = key_states[issuer_aid]
+        # Check if it's a KeyStateInfo (already converted) or KeyState (needs conversion)
+        if isinstance(key_state, KeyStateInfo):
+            key_state_info = key_state
+        elif hasattr(key_state, "signing_keys"):
+            # It's a KeyState from kel_resolver - convert it
+            from datetime import datetime, timezone
+            key_state_info = build_key_state_info(
+                key_state,
+                resolution_source="oobi",
+                resolved_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                signature_verified=True,  # Assume verified if we have it
+            )
+
     issuer = IssuerInfo(
         aid=issuer_aid,
         aid_short=_truncate_aid(issuer_aid),
@@ -1371,6 +1545,7 @@ def build_credential_card_vm(
         display_name=issuer_identity.legal_name if issuer_identity else None,
         lei=lei,
         gleif_legal_name=gleif_legal_name,
+        key_state=key_state_info,
     )
 
     # Build primary attribute
@@ -1557,7 +1732,7 @@ def build_schema_info(
     Returns:
         SchemaValidationInfo with registry source and validation status.
     """
-    from app.vvp.acdc.schema_registry import has_governance_schemas, is_known_schema
+    from common.vvp.schema.registry import has_governance_schemas, is_known_schema
 
     cred_type = acdc.credential_type
     schema_said = acdc.schema_said

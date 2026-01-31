@@ -1,33 +1,19 @@
-import json, logging, os, sys
-from datetime import datetime, timezone
+"""Logging Configuration.
 
-class JsonFormatter(logging.Formatter):
-    def format(self, record):
-        payload = {
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "level": record.levelname,
-            "logger": record.name,
-            "msg": record.getMessage(),
-        }
-        for k in ("request_id","route","remote_addr"):
-            if hasattr(record, k):
-                payload[k] = getattr(record, k)
-        if record.exc_info:
-            payload["exc_info"] = self.formatException(record.exc_info)
-        return json.dumps(payload, ensure_ascii=False)
+COMPATIBILITY SHIM: This module re-exports from common.vvp.core.logging.
+The actual implementation has been moved to the shared common/ package.
 
-def configure_logging():
-    # Console handler
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(JsonFormatter())
+For new code, import directly from common.vvp.core:
+    from common.vvp.core import configure_logging, JsonFormatter
+"""
 
-    # File handler for debugging (always append)
-    log_file = os.getenv("VVP_LOG_FILE", "vvp_debug.log")
-    file_handler = logging.FileHandler(log_file, mode='a')
-    file_handler.setFormatter(JsonFormatter())
+# Re-export from common package
+from common.vvp.core.logging import (
+    JsonFormatter,
+    configure_logging,
+)
 
-    root = logging.getLogger()
-    # Allow DEBUG level via environment variable (default: INFO)
-    log_level = os.getenv("VVP_LOG_LEVEL", "INFO").upper()
-    root.setLevel(getattr(logging, log_level, logging.INFO))
-    root.handlers = [console_handler, file_handler]
+__all__ = [
+    "JsonFormatter",
+    "configure_logging",
+]

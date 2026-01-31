@@ -12,9 +12,10 @@ Implementation:
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from app.vvp.acdc.models import ACDC
+from common.vvp.models import ACDC
+from common.vvp.utils.tn_utils import TNParseError, is_subset, parse_tn_allocation
+
 from app.vvp.api_models import ClaimStatus
-from app.vvp.tn_utils import TNParseError, is_subset, parse_tn_allocation
 
 
 @dataclass

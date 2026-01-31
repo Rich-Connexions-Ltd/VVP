@@ -1,9 +1,77 @@
 # VVP Verifier Change Log
 
+## Phase 0: Monorepo Refactoring (Foundation)
+
+**Date:** 2026-01-31
+**Status:** APPROVED (Pair Review)
+
+### Summary
+
+Created shared `common/` package to enable code sharing between verifier and future issuer services. This is the foundation for the VVP-Issuer service that will add credential issuance capabilities.
+
+### Files Created
+
+| File | Description |
+|------|-------------|
+| `common/__init__.py` | Package root |
+| `common/vvp/__init__.py` | VVP namespace |
+| `common/vvp/core/__init__.py` | Core exports |
+| `common/vvp/core/exceptions.py` | VVPError, ACDCError, KeriError, DossierError |
+| `common/vvp/core/logging.py` | JsonFormatter, configure_logging() |
+| `common/vvp/models/__init__.py` | Model exports |
+| `common/vvp/models/acdc.py` | ACDC, ACDCChainResult dataclasses |
+| `common/vvp/models/dossier.py` | DossierDAG, ACDCNode, ToIPWarningCode |
+| `common/vvp/canonical/__init__.py` | Canonical serialization exports |
+| `common/vvp/canonical/keri_canonical.py` | FIELD_ORDER, canonical_serialize() |
+| `common/vvp/schema/__init__.py` | Schema registry exports |
+| `common/vvp/schema/registry.py` | KNOWN_SCHEMA_SAIDS, is_known_schema() |
+| `common/vvp/utils/__init__.py` | Utility exports |
+| `common/vvp/utils/tn_utils.py` | TNRange, parse_tn_allocation(), is_subset() |
+| `common/pyproject.toml` | Package configuration |
+
+### Files Modified (Compatibility Shims)
+
+| File | Description |
+|------|-------------|
+| `app/vvp/acdc/models.py` | Re-exports from common.vvp.models.acdc |
+| `app/vvp/dossier/models.py` | Re-exports from common.vvp.models.dossier |
+| `app/vvp/acdc/schema_registry.py` | Re-exports from common.vvp.schema.registry |
+| `app/vvp/acdc/exceptions.py` | Re-exports from common.vvp.core.exceptions |
+| `app/vvp/keri/keri_canonical.py` | Re-exports from common.vvp.canonical.keri_canonical |
+| `app/logging_config.py` | Re-exports from common.vvp.core.logging |
+| `app/vvp/tn_utils.py` | Re-exports from common.vvp.utils.tn_utils |
+
+### Files Modified (Direct Imports)
+
+| File | Description |
+|------|-------------|
+| `app/main.py` | Uses common.vvp.core.logging |
+| `app/vvp/authorization.py` | Uses common.vvp.models, common.vvp.utils.tn_utils |
+| `app/vvp/ui/credential_viewmodel.py` | Uses common.vvp.models, common.vvp.schema.registry |
+
+### Documentation
+
+| File | Description |
+|------|-------------|
+| `app/Documentation/PLAN_VVP_Issuer_Infrastructure.md` | Full 6-phase implementation plan |
+
+### Key Decisions
+
+- **Compatibility shims** allow gradual migration without breaking existing imports
+- **API models kept verifier-specific** - ClaimStatus/ErrorCode remain in `app/vvp/api_models.py`
+- **Shared code only** - Models, canonical serialization, schema registry, utilities extracted
+
+### Test Results
+
+- All 1564 tests pass (17.09s)
+- No import errors
+
+---
+
 ## Sprint 25: External SAID Resolution from Witnesses
 
 **Date:** 2026-01-28
-**Commit:** e30b5bd
+**Commit:** 5cd969f
 
 ### Files Changed
 

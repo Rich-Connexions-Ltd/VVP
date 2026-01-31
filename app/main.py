@@ -16,7 +16,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 import httpx
 
-from app.logging_config import configure_logging
+from common.vvp.core.logging import configure_logging
 from app.vvp.api_models import VerifyRequest, VerifyCalleeRequest
 from app.vvp.exceptions import PassportError
 from app.vvp.passport import parse_passport
@@ -1440,6 +1440,40 @@ async def ui_verify_result(
                     issuer_identities,
                 )
 
+                # Resolve key states for display (Sprint 26: KeyStateInfo)
+                # Resolve ALL issuer AIDs using witness pool to construct OOBI URLs
+                key_states: dict[str, Any] = {}
+                from app.vvp.keri import resolve_key_state, get_witness_pool
+
+                # Collect unique issuer AIDs from all credentials
+                issuer_aids = {acdc.issuer_aid for acdc, _, _ in parsed_acdcs if acdc is not None}
+                log.debug(f"Resolving key states for {len(issuer_aids)} issuer AIDs...")
+
+                # Get witness URLs from the pool (triggers GLEIF discovery)
+                pool = get_witness_pool()
+                witnesses = await pool.get_all_witnesses()
+                witness_urls = [w.url for w in witnesses]
+
+                for aid in issuer_aids:
+                    if aid in key_states:
+                        continue
+                    # Try each witness to construct an OOBI URL
+                    for witness_url in witness_urls:
+                        try:
+                            oobi_url = f"{witness_url}/oobi/{aid}"
+                            key_state = await resolve_key_state(
+                                kid=aid,
+                                oobi_url=oobi_url,
+                                reference_time=None,  # Use current time for display
+                                _allow_test_mode=False,
+                            )
+                            key_states[aid] = key_state
+                            log.debug(f"Resolved key state for issuer {aid[:16]}... via {witness_url}")
+                            break  # Success, move to next AID
+                        except Exception as e:
+                            log.debug(f"Could not resolve {aid[:16]}... via {witness_url}: {e}")
+                            continue  # Try next witness
+
                 # Build view-models for each credential
                 for acdc, acdc_dict, said in parsed_acdcs:
                     if acdc is None:
@@ -1454,6 +1488,7 @@ async def ui_verify_result(
                             revocation_result=revocation_result,
                             available_saids=all_saids,
                             issuer_identities=issuer_identities,
+                            key_states=key_states,
                         )
 
                         # Build schema info with fetch
@@ -1792,6 +1827,40 @@ async def ui_simple_verify(
             issuer_identities,
         ) if verify_response.delegation_chain else None
 
+        # Resolve key states for display (Sprint 26: KeyStateInfo)
+        # Resolve ALL issuer AIDs using witness pool to construct OOBI URLs
+        key_states: dict[str, Any] = {}
+        from app.vvp.keri import resolve_key_state, get_witness_pool
+
+        # Collect unique issuer AIDs from all credentials
+        issuer_aids = {acdc.issuer_aid for acdc, _, _ in parsed_acdcs if acdc is not None}
+        log.debug(f"Resolving key states for {len(issuer_aids)} issuer AIDs...")
+
+        # Get witness URLs from the pool (triggers GLEIF discovery)
+        pool = get_witness_pool()
+        witnesses = await pool.get_all_witnesses()
+        witness_urls = [w.url for w in witnesses]
+
+        for aid in issuer_aids:
+            if aid in key_states:
+                continue
+            # Try each witness to construct an OOBI URL
+            for witness_url in witness_urls:
+                try:
+                    oobi_url = f"{witness_url}/oobi/{aid}"
+                    key_state = await resolve_key_state(
+                        kid=aid,
+                        oobi_url=oobi_url,
+                        reference_time=reference_time,
+                        _allow_test_mode=False,
+                    )
+                    key_states[aid] = key_state
+                    log.debug(f"Resolved key state for issuer {aid[:16]}... via {witness_url}")
+                    break  # Success, move to next AID
+                except Exception as e:
+                    log.debug(f"Could not resolve {aid[:16]}... via {witness_url}: {e}")
+                    continue  # Try next witness
+
         credential_vms: dict[str, Any] = {}
         for acdc, acdc_dict, said in parsed_acdcs:
             if acdc is None:
@@ -1806,6 +1875,7 @@ async def ui_simple_verify(
                     revocation_result=revocation_result,
                     available_saids=all_saids,
                     issuer_identities=issuer_identities,
+                    key_states=key_states,
                 )
 
                 schema_info = await build_schema_info_with_fetch(acdc)
