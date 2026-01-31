@@ -62,13 +62,16 @@ async def create_registry(
             no_backers=request.no_backers,
         )
 
-        # Publish TEL event to witnesses
+        # Publish anchoring IXN event to witnesses
+        # Note: Witnesses receipt KEL events (ixn), not TEL events (vcp) directly.
+        # The registry vcp is anchored to the issuer's KEL via an ixn event.
         publish_results: list[WitnessPublishResult] | None = None
         if request.publish_to_witnesses and WITNESS_IURLS:
             try:
-                tel_bytes = await registry_mgr.get_tel_bytes(registry_info.registry_key)
+                # Get the anchoring ixn event from the issuer's KEL
+                ixn_bytes = await registry_mgr.get_anchor_ixn_bytes(registry_info.registry_key)
                 publisher = get_witness_publisher()
-                result = await publisher.publish_event(registry_info.registry_key, tel_bytes)
+                result = await publisher.publish_event(registry_info.issuer_aid, ixn_bytes)
 
                 publish_results = [
                     WitnessPublishResult(
@@ -85,7 +88,7 @@ async def create_registry(
                         f"{result.success_count}/{result.total_count}"
                     )
             except Exception as e:
-                log.error(f"Failed to publish TEL to witnesses: {e}")
+                log.error(f"Failed to publish anchor ixn to witnesses: {e}")
                 # Don't fail registry creation if witness publishing fails
 
         # Audit log the creation

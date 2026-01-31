@@ -272,6 +272,9 @@ class CredentialRegistryManager:
         Uses Reger.cloneTvt() to get properly CESR-encoded TEL event
         with signatures and attachments, suitable for publishing.
 
+        NOTE: TEL events (vcp) cannot be receipted by witnesses directly.
+        Use get_anchor_ixn_bytes() to get the anchoring KEL event instead.
+
         Args:
             registry_key: The registry prefix (regk)
 
@@ -290,6 +293,51 @@ class CredentialRegistryManager:
             # registry.vcp.saidb is the digest of the inception event
             pre = registry_key.encode() if isinstance(registry_key, str) else registry_key
             msg = self.regery.reger.cloneTvt(pre=pre, dig=registry.vcp.saidb)
+            return bytes(msg)
+
+    async def get_anchor_ixn_bytes(self, registry_key: str) -> bytes:
+        """Get the KEL interaction event that anchors the TEL registry.
+
+        When a registry is created with noBackers=True, the TEL inception
+        event (vcp) is anchored to the issuer's KEL via an interaction (ixn)
+        event. Witnesses receipt this ixn event, not the vcp directly.
+
+        Args:
+            registry_key: The registry prefix (regk)
+
+        Returns:
+            CESR-encoded interaction event with signatures
+
+        Raises:
+            ValueError: If registry not found or anchor event missing
+        """
+        async with self._lock:
+            registry = self.regery.regs.get(registry_key)
+            if registry is None:
+                raise ValueError(f"Registry not found: {registry_key}")
+
+            # Get the issuer's hab
+            hab = registry.hab
+            if hab is None:
+                raise ValueError(f"Registry {registry_key} has no associated hab")
+
+            # The anchoring ixn is the latest event on the issuer's KEL
+            # after registry creation. Get the latest event.
+            identity_mgr = await get_identity_manager()
+            hby = identity_mgr.habery
+
+            # Get the latest ixn event for this hab
+            # The registry anchor is at the current sequence number
+            sn = hab.kever.sn  # Current sequence number
+            dgkey = hby.db.getKeLast(hab.pre.encode())
+            if dgkey is None:
+                raise ValueError(f"No KEL events found for issuer {hab.pre}")
+
+            # Clone the event message with signatures
+            msg = hby.db.cloneEvtMsg(pre=hab.pre.encode(), fn=sn, dig=dgkey)
+            if msg is None:
+                raise ValueError(f"Failed to clone anchor ixn for registry {registry_key}")
+
             return bytes(msg)
 
 
