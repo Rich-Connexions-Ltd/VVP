@@ -18,6 +18,7 @@ from app.keri.identity import (
     close_identity_manager,
     IssuerIdentityManager,
 )
+from app.keri.issuer import reset_credential_issuer, close_credential_issuer
 from app.keri.persistence import reset_persistence_manager, PersistenceManager
 from app.keri.registry import (
     reset_registry_manager,
@@ -194,6 +195,7 @@ async def client(temp_dir: Path) -> AsyncGenerator[AsyncClient, None]:
     # Reset singletons to pick up new config
     reset_identity_manager()
     reset_registry_manager()
+    reset_credential_issuer()
     reset_persistence_manager()
     reset_witness_publisher()
     reset_api_key_store()
@@ -214,12 +216,14 @@ async def client(temp_dir: Path) -> AsyncGenerator[AsyncClient, None]:
         yield async_client
 
     # Close managers to release LMDB locks
+    await close_credential_issuer()
     await close_registry_manager()
     await close_identity_manager()
 
     # Cleanup after test
     reset_identity_manager()
     reset_registry_manager()
+    reset_credential_issuer()
     reset_persistence_manager()
     reset_witness_publisher()
     reset_api_key_store()
@@ -259,6 +263,7 @@ async def client_with_auth(temp_dir: Path) -> AsyncGenerator[AsyncClient, None]:
     # Reset singletons
     reset_identity_manager()
     reset_registry_manager()
+    reset_credential_issuer()
     reset_persistence_manager()
     reset_witness_publisher()
     reset_api_key_store()
@@ -278,11 +283,13 @@ async def client_with_auth(temp_dir: Path) -> AsyncGenerator[AsyncClient, None]:
         yield async_client
 
     # Cleanup
+    await close_credential_issuer()
     await close_registry_manager()
     await close_identity_manager()
 
     reset_identity_manager()
     reset_registry_manager()
+    reset_credential_issuer()
     reset_persistence_manager()
     reset_witness_publisher()
     reset_api_key_store()

@@ -165,3 +165,70 @@ class SchemaValidationResponse(BaseModel):
     said: str = Field(..., description="Schema SAID that was validated")
     valid: bool = Field(..., description="Whether the SAID is recognized")
     credential_type: Optional[str] = Field(None, description="Credential type if specified")
+
+
+# =============================================================================
+# Credential Models
+# =============================================================================
+
+
+class IssueCredentialRequest(BaseModel):
+    """Request to issue a new credential."""
+
+    registry_name: str = Field(..., description="Registry name to track credential")
+    schema_said: str = Field(..., description="Schema SAID for validation")
+    attributes: dict = Field(..., description="Credential attributes (a section)")
+    recipient_aid: Optional[str] = Field(None, description="Recipient AID if targeted")
+    edges: Optional[dict] = Field(None, description="Edge references for chained creds")
+    rules: Optional[dict] = Field(None, description="Rules section")
+    private: bool = Field(False, description="Add privacy-preserving nonces")
+    publish_to_witnesses: bool = Field(True, description="Publish TEL to witnesses")
+
+
+class CredentialResponse(BaseModel):
+    """Response containing credential information."""
+
+    said: str = Field(..., description="Credential SAID")
+    issuer_aid: str = Field(..., description="Issuing identity AID")
+    recipient_aid: Optional[str] = Field(None, description="Recipient AID")
+    registry_key: str = Field(..., description="Registry tracking this credential")
+    schema_said: str = Field(..., description="Schema SAID")
+    issuance_dt: str = Field(..., description="Issuance datetime")
+    status: str = Field(..., description="issued or revoked")
+    revocation_dt: Optional[str] = Field(None, description="Revocation datetime")
+
+
+class CredentialDetailResponse(CredentialResponse):
+    """Detailed credential response including attributes."""
+
+    attributes: dict = Field(default_factory=dict, description="Credential attributes")
+    edges: Optional[dict] = Field(None, description="Edge references")
+    rules: Optional[dict] = Field(None, description="Rules section")
+
+
+class IssueCredentialResponse(BaseModel):
+    """Response from credential issuance."""
+
+    credential: CredentialResponse
+    publish_results: Optional[list[WitnessPublishResult]] = None
+
+
+class RevokeCredentialRequest(BaseModel):
+    """Request to revoke a credential."""
+
+    reason: Optional[str] = Field(None, description="Optional revocation reason")
+    publish_to_witnesses: bool = Field(True, description="Publish TEL to witnesses")
+
+
+class RevokeCredentialResponse(BaseModel):
+    """Response from credential revocation."""
+
+    credential: CredentialResponse
+    publish_results: Optional[list[WitnessPublishResult]] = None
+
+
+class CredentialListResponse(BaseModel):
+    """Response listing credentials."""
+
+    credentials: list[CredentialResponse]
+    count: int

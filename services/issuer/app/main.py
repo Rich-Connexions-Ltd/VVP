@@ -10,10 +10,11 @@ from fastapi.responses import FileResponse, JSONResponse
 from starlette.middleware.authentication import AuthenticationMiddleware
 
 from common.vvp.core.logging import configure_logging
-from app.api import admin, health, identity, registry, schema
+from app.api import admin, credential, health, identity, registry, schema
 from app.auth.api_key import APIKeyBackend, get_api_key_store
 from app.config import AUTH_ENABLED, get_auth_exempt_paths
 from app.keri.identity import get_identity_manager, close_identity_manager
+from app.keri.issuer import get_credential_issuer, close_credential_issuer
 from app.keri.registry import get_registry_manager, close_registry_manager
 
 # Web directory for static files
@@ -38,6 +39,7 @@ async def lifespan(app: FastAPI):
 
         await get_identity_manager()
         await get_registry_manager()
+        await get_credential_issuer()
         log.info("VVP Issuer service started")
     except Exception as e:
         log.error(f"Failed to initialize managers: {e}")
@@ -47,6 +49,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown: Close managers
     log.info("Shutting down VVP Issuer service...")
+    await close_credential_issuer()
     await close_registry_manager()
     await close_identity_manager()
     log.info("VVP Issuer service stopped")
@@ -109,6 +112,12 @@ def schemas_ui():
     return FileResponse(WEB_DIR / "schemas.html", media_type="text/html")
 
 
+@app.get("/credentials/ui", response_class=FileResponse)
+def credentials_ui():
+    """Serve the credential management web UI."""
+    return FileResponse(WEB_DIR / "credentials.html", media_type="text/html")
+
+
 # -----------------------------------------------------------------------------
 # API Routers
 # -----------------------------------------------------------------------------
@@ -117,6 +126,7 @@ app.include_router(health.router)
 app.include_router(identity.router)
 app.include_router(registry.router)
 app.include_router(schema.router)
+app.include_router(credential.router)
 app.include_router(admin.router)
 
 

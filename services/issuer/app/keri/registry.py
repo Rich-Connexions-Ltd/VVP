@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
+from keri.core import coring, eventing
 from keri.vdr.credentialing import Regery
 from keri.vdr.viring import Reger
 
@@ -145,6 +146,35 @@ class CredentialRegistryManager:
                 name=name,
                 prefix=issuer_aid,
                 noBackers=no_backers,
+            )
+
+            # Anchor the registry inception (vcp) to the issuer's KEL
+            # This creates a seal in the KEL that points to the TEL inception
+            # Without this anchor, the Tevery won't process the VCP and tever won't be created
+            hab = registry.hab
+            rseal = eventing.SealEvent(registry.vcp.pre, registry.vcp.snh, registry.vcp.said)
+            anc = hab.interact(data=[dict(i=rseal.i, s=rseal.s, d=rseal.d)])
+
+            # Get anchor reference from the KEL event we just created
+            seqner = coring.Seqner(sn=hab.kever.sn)
+            saider = coring.Saider(qb64=hab.kever.serder.said)
+
+            # Store the anchor in the reger database
+            registry.anchorMsg(
+                pre=registry.regk,
+                regd=registry.regd,
+                seqner=seqner,
+                saider=saider,
+            )
+
+            # Re-process the VCP event with the anchor reference
+            # This will create the tever in reger.tevers
+            # We call tvy.processEvent directly because Registry.processEvent
+            # doesn't pass seqner/saider to the tevery
+            self.regery.tvy.processEvent(
+                serder=registry.vcp,
+                seqner=seqner,
+                saider=saider,
             )
 
             log.info(f"Created registry: {name} ({registry.regk[:16]}...) for issuer {issuer_aid[:16]}...")

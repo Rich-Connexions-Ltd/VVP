@@ -15,9 +15,10 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 28 | Issuer Service Skeleton | COMPLETE | Sprint 27 |
 | 29 | Credential Registry | COMPLETE | Sprint 28 |
 | 30 | Security Model | COMPLETE | Sprint 29 |
-| 31 | ACDC Issuance | Ready | Sprint 30 |
-| 32 | Dossier Assembly | Blocked | Sprint 31 |
+| 31 | ACDC Issuance | COMPLETE | Sprint 30 |
+| 32 | Dossier Assembly | Ready | Sprint 31 |
 | 33 | Azure Deployment | Blocked | Sprint 32 |
+| 34 | Schema Management | Ready | Sprint 29 |
 
 ---
 
@@ -275,55 +276,60 @@ services/issuer/tests/
 
 ---
 
-## Sprint 31: ACDC Credential Issuance
+## Sprint 31: ACDC Credential Issuance (COMPLETE)
 
 **Goal:** Core credential issuance using keripy.
 
 **Prerequisites:** Sprint 30 (Security) MUST be complete.
 
 **Deliverables:**
-- [ ] `CredentialIssuer` class using `keri.vc.proving.credential()`
-- [ ] Issuance API with schema validation
-- [ ] TEL issuance event (iss) anchoring
-- [ ] Witness receipt collection
-- [ ] Revocation API
-- [ ] Consider UI functionality needed to expose this sprint's capabilities
+- [x] `CredentialIssuer` class using `keri.vc.proving.credential()`
+- [x] Issuance API with schema validation
+- [x] TEL issuance event (iss) anchoring to KEL
+- [x] Witness receipt collection (anchor IXN publishing)
+- [x] Revocation API with TEL rev event
+- [x] Credential management UI at `/credentials/ui`
 
 **Key Files:**
 ```
 services/issuer/app/
 ├── keri/
-│   └── issuer.py            # CredentialIssuer
-└── api/
-    └── credential.py        # POST /credential/issue, POST /credential/{said}/revoke
+│   ├── issuer.py            # CredentialIssuer class
+│   └── registry.py          # Updated with TEL anchoring
+├── api/
+│   ├── credential.py        # POST /credential/issue, GET /credential, etc.
+│   └── models.py            # Credential request/response models
+└── main.py                  # Lifecycle integration
+services/issuer/web/
+└── credentials.html         # Credential management UI
+services/issuer/tests/
+└── test_credential.py       # 18 unit tests + 1 integration test
 ```
 
 **API Endpoints:**
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
 | `/credential/issue` | POST | operator | Issue new ACDC |
+| `/credential` | GET | readonly | List all credentials |
 | `/credential/{said}` | GET | readonly | Get credential by SAID |
 | `/credential/{said}/revoke` | POST | admin | Revoke credential |
+| `/credentials/ui` | GET | exempt | Credential management UI |
 
-**Issuance Flow:**
-1. Validate request (schema, attributes, recipient)
-2. Create ACDC via `keri.vc.proving.credential()`
-3. Sign with issuer Hab
-4. Create TEL issuance event (iss)
-5. Publish to witnesses, collect receipts
-6. Store credential + receipts
-7. Return credential SAID
-
-**Supported Credential Types:**
-- Legal Entity (LE)
-- Qualified vLEI Issuer (QVI)
-- OOR Authorization
-- TN Allocation
+**Technical Notes:**
+- TEL events (iss/rev) are anchored to issuer's KEL via interaction events
+- Witnesses receipt the KEL anchor IXN, not TEL events directly
+- `registry.anchorMsg()` stores KEL anchor, then `tvy.processEvent()` populates tevers
+- `reger.getAnc(dgKey(cred_said, tel_event_said))` retrieves KEL anchor for publishing
+- `reger.cancs` stores SealSourceTriples for ACDC wire format (different purpose)
 
 **Exit Criteria:**
-- Issue credential via API
-- Verify with verifier service
-- Revocation updates TEL
+- [x] Issue credential via API returns credential SAID
+- [x] Get credential by SAID returns full details
+- [x] List credentials shows all issued credentials
+- [x] Revoke credential updates status to "revoked"
+- [x] TEL events published to witnesses
+- [x] All 68 tests passing (18 credential + 50 existing)
+- [x] UI allows credential issuance and listing
 
 ---
 
@@ -413,6 +419,49 @@ jobs:
 
 ---
 
+## Sprint 34: Schema Management
+
+**Goal:** Import schemas from WebOfTrust repository, add SAID generation, enhanced schema UI.
+
+**Prerequisites:** Sprint 29 (Credential Registry) complete.
+
+**Deliverables:**
+- [ ] SAID computation module using keripy's `Saider.saidify()`
+- [ ] Schema import from WebOfTrust/schema repository
+- [ ] Schema creation API with auto-SAID generation
+- [ ] Enhanced schema management UI (import, create, delete)
+- [ ] Tests for SAID computation and import
+
+**Key Files:**
+```
+services/issuer/app/schema/
+├── said.py              # SAID computation using keripy Saider
+├── importer.py          # WebOfTrust import with version pinning
+└── store.py             # Enhanced with write capability
+```
+
+**API Endpoints:**
+| Endpoint | Method | Auth | Description |
+|----------|--------|------|-------------|
+| `/schema/import` | POST | admin | Import schema from WebOfTrust registry |
+| `/schema/create` | POST | admin | Create new schema with SAID computation |
+| `/schema/{said}` | DELETE | admin | Remove user-added schema |
+| `/schema/{said}/verify` | GET | readonly | Verify schema SAID is correct |
+
+**Technical Notes:**
+- SAID computation uses `keri.core.coring.Saider.saidify(sad=schema, label="$id")`
+- Embedded schemas: `services/issuer/app/schema/schemas/` (read-only)
+- User schemas: `~/.vvp-issuer/schemas/` or `/data/vvp-issuer/schemas/` (writable)
+- Version pinning via `VVP_SCHEMA_REPO_REF` environment variable
+
+**Exit Criteria:**
+- SAID computation matches WebOfTrust kaslcred tool output
+- Import all vLEI schemas from WebOfTrust repository
+- Create custom schemas with valid SAIDs
+- UI supports full schema lifecycle (view, import, create, delete)
+
+---
+
 ## Quick Reference
 
 To start a sprint, say:
@@ -423,6 +472,7 @@ To start a sprint, say:
 - "Sprint 31" - ACDC credential issuance
 - "Sprint 32" - Dossier assembly
 - "Sprint 33" - Azure deployment
+- "Sprint 34" - Schema management (import, SAID generation, UI)
 
 Each sprint follows the pair programming workflow:
 1. Plan phase (design, review, approval)

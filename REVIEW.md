@@ -1,12 +1,12 @@
-## Plan Review: Sprint 29 - Credential Registry (Revision 2)
+## Code Review: Sprint 31 - ACDC Credential Issuance (Final)
 
 **Verdict:** APPROVED
 
-### Revision Assessment
-The TEL serialization fix using `reger.cloneTvt(pre, dig)` addresses the prior blocker and aligns with keripy’s expected CESR framing (event + attachments). Moving schema validation to `schema.py` and adding a dedicated `publish_event()` method resolves the earlier design concerns. The integration test is appropriately marked and documented for witness-required execution. No remaining blockers.
+### Assessment
+The integration-gated witness publishing test is present and matches the registry integration pattern. It validates that the anchor IXN publish path returns success for all three witnesses when the stack is running. This addresses the last outstanding finding; the prior anchor retrieval fixes remain in place.
 
-### Findings
-- [Low]: `reger.cloneTvt(pre, dig)` requires the correct `pre` and `dig` inputs; ensure the registry inception digest used (`registry.vcp.saidb`) matches the stored event in Reger. Consider a brief comment in the plan noting this dependency.
+### Remaining Issues (if any)
+- None.
 
-### Required Changes (if CHANGES_REQUESTED)
-1. N/A
+### Final Notes
+Good to proceed.
