@@ -10,6 +10,31 @@ permissions:
 
 jobs:
   # =========================================================================
+  # DETECT CHANGED PATHS
+  # =========================================================================
+  # Determine which services have changed to skip unnecessary builds
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      witness: ${{ steps.filter.outputs.witness }}
+      issuer: ${{ steps.filter.outputs.issuer }}
+      verifier: ${{ steps.filter.outputs.verifier }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            witness:
+              - 'services/witness/**'
+            issuer:
+              - 'services/issuer/**'
+              - 'common/**'
+            verifier:
+              - 'services/verifier/**'
+              - 'common/**'
+
+  # =========================================================================
   # TEST JOBS - Run tests for both services
   # =========================================================================
   test-verifier:
@@ -107,7 +132,7 @@ jobs:
   # DEPLOY VERIFIER
   # =========================================================================
   deploy-verifier:
-    needs: [test-verifier, test-issuer, verify-witnesses]
+    needs: [test-verifier, test-issuer]
     runs-on: ubuntu-latest
 
     steps:
@@ -147,7 +172,7 @@ jobs:
   # DEPLOY ISSUER
   # =========================================================================
   deploy-issuer:
-    needs: [test-verifier, test-issuer, verify-witnesses]
+    needs: [test-verifier, test-issuer]
     runs-on: ubuntu-latest
 
     steps:
@@ -187,8 +212,10 @@ jobs:
   # BUILD WITNESS IMAGE
   # =========================================================================
   # Build the custom witness image once, then deploy to all witnesses
+  # Only runs when witness code changes
   build-witness-image:
-    needs: [test-verifier, test-issuer]
+    needs: [changes, test-verifier, test-issuer]
+    if: needs.changes.outputs.witness == 'true'
     runs-on: ubuntu-latest
     outputs:
       image: ${{ steps.build.outputs.image }}
@@ -221,8 +248,10 @@ jobs:
   # DEPLOY WITNESSES
   # =========================================================================
   # Deploy the custom witness image to each witness container app
+  # Only runs when witness code changes
   deploy-witnesses:
-    needs: [build-witness-image]
+    needs: [changes, build-witness-image]
+    if: needs.changes.outputs.witness == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -295,8 +324,10 @@ jobs:
   # =========================================================================
   # VERIFY WITNESSES
   # =========================================================================
+  # Only runs when witness code changes
   verify-witnesses:
-    needs: [deploy-witnesses]
+    needs: [changes, deploy-witnesses]
+    if: needs.changes.outputs.witness == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -333,7 +364,7 @@ jobs:
   # =========================================================================
   # Run full E2E integration tests after deployment to verify the system works
   post-deployment-tests:
-    needs: [deploy-verifier, deploy-issuer, verify-witnesses]
+    needs: [deploy-verifier, deploy-issuer]
     runs-on: ubuntu-latest
 
     env:
