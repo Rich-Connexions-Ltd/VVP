@@ -471,7 +471,7 @@ jobs:
 
           # Submit results
           curl -X POST "${VVP_ISSUER_URL}/admin/deployment-tests" \
-            -H "Authorization: Bearer ${VVP_TEST_API_KEY}" \
+            -H "X-API-Key: ${VVP_TEST_API_KEY}" \
             -H "Content-Type: application/json" \
             -d @- <<EOF
           {
