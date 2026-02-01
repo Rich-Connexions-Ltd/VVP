@@ -57,6 +57,92 @@
             color: white;
         }
 
+        /* Help button and modal */
+        .help-btn {
+            background: var(--vvp-info);
+            color: white;
+            border: none;
+            padding: 0.25rem 0.75rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: background 0.2s;
+        }
+        .help-btn:hover {
+            background: #005599;
+        }
+        .help-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1100;
+        }
+        .help-modal {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            max-width: 650px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        .help-modal h3 {
+            margin-top: 0;
+            border-bottom: 2px solid var(--vvp-muted);
+            padding-bottom: 0.5rem;
+        }
+        .help-section {
+            margin-bottom: 1.5rem;
+        }
+        .help-section h4 {
+            color: var(--vvp-info);
+            margin: 0 0 0.5rem 0;
+        }
+        .help-section h4 a {
+            color: var(--vvp-info);
+            text-decoration: none;
+        }
+        .help-section h4 a:hover {
+            text-decoration: underline;
+        }
+        .help-options {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        .help-options li {
+            padding: 0.5rem 0.75rem;
+            margin-bottom: 0.5rem;
+            background: #f8f9fa;
+            border-radius: 4px;
+            border-left: 3px solid var(--vvp-info);
+        }
+        .help-options li strong {
+            display: block;
+            margin-bottom: 0.15rem;
+        }
+        .help-options li span {
+            font-size: 0.9rem;
+            color: var(--vvp-muted);
+        }
+        .help-tip {
+            background: #e8f4ff;
+            border: 1px solid var(--vvp-info);
+            border-radius: 4px;
+            padding: 0.75rem;
+            margin-top: 1rem;
+            font-size: 0.9rem;
+        }
+        .help-tip strong {
+            color: var(--vvp-info);
+        }
+
         /* 404 error page */
         .error-page {
             text-align: center;
@@ -581,6 +667,7 @@
                     <a href="/verify/simple">Quick Verify</a>
                     <a href="/verify/full">Explorer</a>
                     <a href="/ui/admin">Admin</a>
+                    <button class="help-btn" onclick="showVerifierHelp()">? Help</button>
                 </nav>
             </div>
             <h1>{% block header %}VVP Verifier{% endblock %}</h1>
@@ -652,6 +739,78 @@
             });
         }
         document.addEventListener('DOMContentLoaded', initNavigation);
+
+        // Help modal for VVP Verifier
+        function showVerifierHelp() {
+            const overlay = document.createElement('div');
+            overlay.className = 'help-overlay';
+            overlay.innerHTML = `
+                <div class="help-modal">
+                    <h3>VVP Verifier Help</h3>
+
+                    <div class="help-section">
+                        <h4><a href="/verify">Verify</a></h4>
+                        <p>Main verification interface for VVP PASSporT tokens.</p>
+                        <ul class="help-options">
+                            <li><strong>Paste JWT</strong><span>Enter a VVP PASSporT JWT token to verify</span></li>
+                            <li><strong>View Results</strong><span>See validation status, errors, and credential details</span></li>
+                        </ul>
+                    </div>
+
+                    <div class="help-section">
+                        <h4><a href="/verify/simple">Quick Verify</a></h4>
+                        <p>Simplified verification with streamlined output.</p>
+                        <ul class="help-options">
+                            <li><strong>Paste & Verify</strong><span>Quick JWT verification in one step</span></li>
+                            <li><strong>Testing Mode</strong><span>Use JWT time for expiry check (useful for old test tokens)</span></li>
+                        </ul>
+                    </div>
+
+                    <div class="help-section">
+                        <h4><a href="/verify/full">Explorer</a></h4>
+                        <p>Full credential chain explorer with detailed visualization.</p>
+                        <ul class="help-options">
+                            <li><strong>Credential Graph</strong><span>Visual representation of the credential chain</span></li>
+                            <li><strong>Validation Summary</strong><span>Dashboard showing all validation checks</span></li>
+                            <li><strong>Delegation Chain</strong><span>View the trust hierarchy from root to leaf</span></li>
+                            <li><strong>Evidence Timeline</strong><span>See when evidence was fetched and from where</span></li>
+                        </ul>
+                    </div>
+
+                    <div class="help-section">
+                        <h4><a href="/ui/admin">Admin</a></h4>
+                        <p>Service administration and configuration.</p>
+                        <ul class="help-options">
+                            <li><strong>Service Status</strong><span>View health, version, and runtime information</span></li>
+                            <li><strong>Configuration</strong><span>View policy settings and trusted root AIDs</span></li>
+                            <li><strong>Log Level</strong><span>Adjust logging verbosity at runtime</span></li>
+                        </ul>
+                    </div>
+
+                    <div class="help-tip">
+                        <strong>Tip:</strong> Use Quick Verify for fast checks, or Explorer for detailed credential chain analysis.
+                    </div>
+
+                    <button onclick="this.closest('.help-overlay').remove()" style="margin-top:1rem;">Close</button>
+                </div>
+            `;
+
+            // Close on overlay click
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) overlay.remove();
+            });
+
+            // Close on Escape key
+            const escHandler = (e) => {
+                if (e.key === 'Escape') {
+                    overlay.remove();
+                    document.removeEventListener('keydown', escHandler);
+                }
+            };
+            document.addEventListener('keydown', escHandler);
+
+            document.body.appendChild(overlay);
+        }
     </script>
 
     {% block scripts %}{% endblock %}
