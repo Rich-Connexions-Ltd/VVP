@@ -284,3 +284,36 @@ class CredentialListResponse(BaseModel):
 
     credentials: list[CredentialResponse]
     count: int
+
+
+# =============================================================================
+# Dossier Models
+# =============================================================================
+
+
+class BuildDossierRequest(BaseModel):
+    """Request to build a dossier from credential chain."""
+
+    root_said: str = Field(..., description="Root credential SAID")
+    root_saids: Optional[list[str]] = Field(None, description="Multiple roots for aggregate")
+    format: str = Field("cesr", description="Output format: cesr or json")
+    include_tel: bool = Field(True, description="Include TEL events (CESR only)")
+
+
+class DossierInfoResponse(BaseModel):
+    """Information about a built dossier."""
+
+    root_said: str = Field(..., description="Primary root credential SAID")
+    root_saids: list[str] = Field(..., description="All root SAIDs")
+    credential_count: int = Field(..., description="Number of credentials in dossier")
+    is_aggregate: bool = Field(..., description="Whether multiple roots")
+    format: str = Field(..., description="Output format used")
+    content_type: str = Field(..., description="HTTP Content-Type header")
+    size_bytes: int = Field(..., description="Size of serialized dossier")
+    warnings: list[str] = Field(default_factory=list, description="Non-fatal issues")
+
+
+class BuildDossierResponse(BaseModel):
+    """Response from dossier build (metadata only, content in body)."""
+
+    dossier: DossierInfoResponse

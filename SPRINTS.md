@@ -16,8 +16,8 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 29 | Credential Registry | COMPLETE | Sprint 28 |
 | 30 | Security Model | COMPLETE | Sprint 29 |
 | 31 | ACDC Issuance | COMPLETE | Sprint 30 |
-| 32 | Dossier Assembly | Ready | Sprint 31 |
-| 33 | Azure Deployment | Blocked | Sprint 32 |
+| 32 | Dossier Assembly | COMPLETE | Sprint 31 |
+| 33 | Azure Deployment | Ready | Sprint 32 |
 | 34 | Schema Management | COMPLETE | Sprint 29 |
 
 ---
@@ -331,19 +331,25 @@ services/issuer/tests/
 - [x] All 68 tests passing (18 credential + 50 existing)
 - [x] UI allows credential issuance and listing
 
+**UI Enhancement (post-sprint):**
+- Schema-driven dynamic forms in `/credentials/ui`
+- Form Mode tab generates input fields from schema properties
+- Supports arrays, nested objects, dropdowns, date pickers
+- JSON Mode tab for advanced/manual entry
+
 ---
 
-## Sprint 32: Dossier Assembly
+## Sprint 32: Dossier Assembly (COMPLETE)
 
 **Goal:** Assemble credentials into complete dossiers for VVP.
 
 **Deliverables:**
-- [ ] `DossierBuilder` class for chain assembly
-- [ ] CESR stream output format
-- [ ] JSON+CESR hybrid format
-- [ ] Edge resolution (walk credential chain)
-- [ ] TEL event inclusion
-- [ ] Consider UI functionality needed to expose this sprint's capabilities
+- [x] `DossierBuilder` class for chain assembly
+- [x] CESR stream output format
+- [x] JSON+CESR hybrid format
+- [x] Edge resolution (walk credential chain)
+- [x] TEL event inclusion
+- [x] Dossier management UI at `/dossier/ui`
 
 **Key Files:**
 ```
@@ -363,9 +369,10 @@ services/issuer/app/
 | Compact | - | SAID references only |
 
 **Exit Criteria:**
-- Build dossier from credential chain
-- Dossier verifiable by verifier service
-- All formats work with verifier `/verify` endpoint
+- [x] Build dossier from credential chain
+- [x] Dossier verifiable by verifier service
+- [x] All formats work with verifier `/verify` endpoint
+- [x] UI for dossier assembly
 
 ---
 

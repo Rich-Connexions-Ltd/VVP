@@ -25,6 +25,7 @@ from app.keri.registry import (
     close_registry_manager,
 )
 from app.keri.witness import reset_witness_publisher
+from app.dossier.builder import reset_dossier_builder
 
 
 # =============================================================================
@@ -200,6 +201,7 @@ async def client(temp_dir: Path) -> AsyncGenerator[AsyncClient, None]:
     reset_witness_publisher()
     reset_api_key_store()
     reset_audit_logger()
+    reset_dossier_builder()
 
     # Import and reload config module to pick up the new env var
     import app.config as config_module
@@ -228,6 +230,7 @@ async def client(temp_dir: Path) -> AsyncGenerator[AsyncClient, None]:
     reset_witness_publisher()
     reset_api_key_store()
     reset_audit_logger()
+    reset_dossier_builder()
 
     # Restore original environment
     if original_data_dir is not None:

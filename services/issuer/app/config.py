@@ -138,5 +138,7 @@ def get_auth_exempt_paths() -> set[str]:
         exempt.add("/create")
         exempt.add("/registry/ui")
         exempt.add("/schemas/ui")
+        exempt.add("/credentials/ui")
+        exempt.add("/dossier/ui")
 
     return exempt

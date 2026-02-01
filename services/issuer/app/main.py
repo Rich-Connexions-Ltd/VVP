@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from starlette.middleware.authentication import AuthenticationMiddleware
 
 from common.vvp.core.logging import configure_logging
-from app.api import admin, credential, health, identity, registry, schema
+from app.api import admin, credential, dossier, health, identity, registry, schema
 from app.auth.api_key import APIKeyBackend, get_api_key_store
 from app.config import AUTH_ENABLED, get_auth_exempt_paths
 from app.keri.identity import get_identity_manager, close_identity_manager
@@ -118,6 +118,12 @@ def credentials_ui():
     return FileResponse(WEB_DIR / "credentials.html", media_type="text/html")
 
 
+@app.get("/dossier/ui", response_class=FileResponse)
+def dossier_ui():
+    """Serve the dossier assembly web UI."""
+    return FileResponse(WEB_DIR / "dossier.html", media_type="text/html")
+
+
 # -----------------------------------------------------------------------------
 # API Routers
 # -----------------------------------------------------------------------------
@@ -127,6 +133,7 @@ app.include_router(identity.router)
 app.include_router(registry.router)
 app.include_router(schema.router)
 app.include_router(credential.router)
+app.include_router(dossier.router)
 app.include_router(admin.router)
 
 
