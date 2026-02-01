@@ -118,11 +118,10 @@ async def issue_credential(
 async def list_credentials(
     registry_key: Optional[str] = None,
     status: Optional[str] = None,
-    principal: Principal = require_readonly,
 ) -> CredentialListResponse:
     """List issued credentials with optional filtering.
 
-    Requires: issuer:readonly role
+    This endpoint is public (no auth required) for UI access.
     """
     issuer = await get_credential_issuer()
 
@@ -154,13 +153,10 @@ async def list_credentials(
 
 
 @router.get("/{said}", response_model=CredentialDetailResponse)
-async def get_credential(
-    said: str,
-    principal: Principal = require_readonly,
-) -> CredentialDetailResponse:
+async def get_credential(said: str) -> CredentialDetailResponse:
     """Get credential details by SAID.
 
-    Requires: issuer:readonly role
+    This endpoint is public (no auth required) for UI access.
     """
     issuer = await get_credential_issuer()
 

@@ -122,12 +122,10 @@ async def create_registry(
 
 
 @router.get("", response_model=RegistryListResponse)
-async def list_registries(
-    principal: Principal = require_readonly,
-) -> RegistryListResponse:
+async def list_registries() -> RegistryListResponse:
     """List all managed registries.
 
-    Requires: issuer:readonly role
+    This endpoint is public (no auth required) for UI access.
     """
     registry_mgr = await get_registry_manager()
     registries = await registry_mgr.list_registries()
@@ -149,13 +147,10 @@ async def list_registries(
 
 
 @router.get("/{registry_key}", response_model=RegistryResponse)
-async def get_registry(
-    registry_key: str,
-    principal: Principal = require_readonly,
-) -> RegistryResponse:
+async def get_registry(registry_key: str) -> RegistryResponse:
     """Get registry information by registry key.
 
-    Requires: issuer:readonly role
+    This endpoint is public (no auth required) for UI access.
     """
     try:
         registry_mgr = await get_registry_manager()

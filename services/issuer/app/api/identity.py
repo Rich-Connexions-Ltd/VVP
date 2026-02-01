@@ -122,12 +122,10 @@ async def create_identity(
 
 
 @router.get("", response_model=IdentityListResponse)
-async def list_identities(
-    principal: Principal = require_readonly,
-) -> IdentityListResponse:
+async def list_identities() -> IdentityListResponse:
     """List all managed identities.
 
-    Requires: issuer:readonly role
+    This endpoint is public (no auth required) for UI access.
     """
     mgr = await get_identity_manager()
     identities = await mgr.list_identities()
@@ -150,13 +148,10 @@ async def list_identities(
 
 
 @router.get("/{aid}", response_model=IdentityResponse)
-async def get_identity(
-    aid: str,
-    principal: Principal = require_readonly,
-) -> IdentityResponse:
+async def get_identity(aid: str) -> IdentityResponse:
     """Get identity information by AID.
 
-    Requires: issuer:readonly role
+    This endpoint is public (no auth required) for UI access.
     """
     mgr = await get_identity_manager()
     info = await mgr.get_identity(aid)
@@ -176,13 +171,10 @@ async def get_identity(
 
 
 @router.get("/{aid}/oobi", response_model=OobiResponse)
-async def get_oobi(
-    aid: str,
-    principal: Principal = require_readonly,
-) -> OobiResponse:
+async def get_oobi(aid: str) -> OobiResponse:
     """Get OOBI URLs for an identity.
 
-    Requires: issuer:readonly role
+    This endpoint is public (no auth required) for UI access.
     """
     mgr = await get_identity_manager()
     info = await mgr.get_identity(aid)

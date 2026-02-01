@@ -55,14 +55,12 @@ from app.schema.importer import (
 
 
 @router.get("", response_model=SchemaListResponse)
-async def list_schemas(
-    principal: Principal = require_readonly,
-) -> SchemaListResponse:
+async def list_schemas() -> SchemaListResponse:
     """List all available schemas.
 
     Returns schemas from both embedded and user-added stores.
 
-    Requires: issuer:readonly role
+    This endpoint is public (no auth required) for UI access.
     """
     all_schemas = list_all_schemas()
 
@@ -84,14 +82,12 @@ async def list_schemas(
 
 
 @router.get("/weboftrust/registry", response_model=WebOfTrustRegistryResponse)
-async def list_weboftrust_schemas(
-    principal: Principal = require_readonly,
-) -> WebOfTrustRegistryResponse:
+async def list_weboftrust_schemas() -> WebOfTrustRegistryResponse:
     """List schemas available in WebOfTrust registry.
 
     Fetches the registry.json from WebOfTrust/schema repository.
 
-    Requires: issuer:readonly role
+    This endpoint is public (no auth required) for UI access.
     """
     importer = get_schema_importer()
     try:
@@ -106,10 +102,7 @@ async def list_weboftrust_schemas(
 
 
 @router.get("/{said}", response_model=SchemaResponse)
-async def get_schema(
-    said: str,
-    principal: Principal = require_readonly,
-) -> SchemaResponse:
+async def get_schema(said: str) -> SchemaResponse:
     """Get a schema by SAID.
 
     Args:
@@ -118,7 +111,7 @@ async def get_schema(
     Returns:
         Schema with full document if found
 
-    Requires: issuer:readonly role
+    This endpoint is public (no auth required) for UI access.
     """
     schema_doc = store_get_schema(said)
 
@@ -137,10 +130,7 @@ async def get_schema(
 
 
 @router.get("/{said}/verify", response_model=SchemaVerifyResponse)
-async def verify_schema(
-    said: str,
-    principal: Principal = require_readonly,
-) -> SchemaVerifyResponse:
+async def verify_schema(said: str) -> SchemaVerifyResponse:
     """Verify a schema's SAID is correct.
 
     Computes the SAID from the schema content and compares
@@ -152,7 +142,7 @@ async def verify_schema(
     Returns:
         Verification result
 
-    Requires: issuer:readonly role
+    This endpoint is public (no auth required) for UI access.
     """
     schema_doc = store_get_schema(said)
 

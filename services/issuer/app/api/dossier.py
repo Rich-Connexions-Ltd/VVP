@@ -186,13 +186,12 @@ async def get_dossier(
     said: str,
     format: str = Query("cesr", description="Output format: cesr or json"),
     include_tel: bool = Query(True, description="Include TEL events (CESR only)"),
-    principal: Principal = require_readonly,
 ) -> Response:
     """Get a dossier by root credential SAID.
 
     Builds the dossier on-demand from the credential chain.
 
-    **Authentication:** Requires `issuer:readonly` role or higher.
+    This endpoint is public (no auth required) for UI access.
     """
     try:
         dossier_format = DossierFormat(format.lower())
