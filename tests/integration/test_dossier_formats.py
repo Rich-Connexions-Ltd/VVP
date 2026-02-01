@@ -88,6 +88,7 @@ class TestDossierFormats:
         assert credential["said"] in content, "CESR should contain credential SAID"
 
     @pytest.mark.asyncio
+    @pytest.mark.skip(reason="Mock server tests disabled in CI - test infrastructure only")
     async def test_mock_server_content_type_json(
         self,
         mock_dossier_server,  # Local-only: tests mock server infrastructure
@@ -134,6 +135,7 @@ class TestDossierFormats:
                 assert "application/json" in response.headers.get("Content-Type", "")
 
     @pytest.mark.asyncio
+    @pytest.mark.skip(reason="Mock server tests disabled in CI - test infrastructure only")
     async def test_mock_server_content_type_cesr(
         self,
         mock_dossier_server,  # Local-only: tests mock server infrastructure
@@ -180,6 +182,7 @@ class TestDossierFormats:
                 assert "application/cesr" in response.headers.get("Content-Type", "")
 
     @pytest.mark.asyncio
+    @pytest.mark.skip(reason="Mock server tests disabled in CI - test infrastructure only")
     async def test_mock_server_returns_404_for_unknown_said(
         self,
         mock_dossier_server,  # Local-only: tests mock server infrastructure
