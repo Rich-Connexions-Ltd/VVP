@@ -708,15 +708,13 @@ def _save_deployment_test_history(results: list[DeploymentTestResult]) -> None:
 
 
 @router.get("/deployment-tests", response_model=DeploymentTestHistoryResponse)
-async def get_deployment_tests(
-    principal: Principal = require_admin,
-) -> DeploymentTestHistoryResponse:
+async def get_deployment_tests() -> DeploymentTestHistoryResponse:
     """Get deployment test results history.
 
     Returns the latest deployment test run and historical results (up to 20).
     Shows pass/fail status for post-deployment integration tests.
 
-    Requires: issuer:admin role
+    This endpoint is public (no auth required) as deployment status is not sensitive.
     """
     history = _load_deployment_test_history()
 
