@@ -72,6 +72,34 @@ class IssuerClient:
         response.raise_for_status()
         return response.json()
 
+    async def rotate_identity(
+        self,
+        aid: str,
+        next_key_count: int | None = None,
+        next_threshold: str | None = None,
+        publish_to_witnesses: bool = False,
+    ) -> dict:
+        """Rotate keys for an identity.
+
+        Args:
+            aid: AID of the identity to rotate
+            next_key_count: Number of next keys to generate
+            next_threshold: Signing threshold for next keys
+            publish_to_witnesses: Whether to publish rotation to witnesses
+
+        Returns:
+            Response containing rotation details
+        """
+        payload = {"publish_to_witnesses": publish_to_witnesses}
+        if next_key_count is not None:
+            payload["next_key_count"] = next_key_count
+        if next_threshold is not None:
+            payload["next_threshold"] = next_threshold
+
+        response = await self.client.post(f"/identity/{aid}/rotate", json=payload)
+        response.raise_for_status()
+        return response.json()
+
     async def create_registry(
         self,
         name: str,

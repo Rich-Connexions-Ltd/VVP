@@ -1,15 +1,13 @@
-## Code Review: Sprint 34 - Schema Management
+## Plan Review: Sprint 36 - Key Management & Rotation (Revision 2)
 
 **Verdict:** APPROVED
 
-### Fix Assessment
-The metadata stripping update resolves the SAID verification issue: `get_schema()` now returns a metadata-free copy by default, and `_strip_metadata()` prevents `_source` from polluting the schema payload. The importer comment now matches the actual behavior when SAID mismatches occur. `services/issuer/app/schema/store.py`, `services/issuer/app/schema/importer.py`
+### Changes Assessment
+Rotation event bytes are now explicitly sourced from `hab.rotate()` and described as the full CESR message, which resolves the earlier ambiguity. Threshold validation rules cover the required numeric cases and defer weighted thresholds to keripy appropriately. The persistence/rehydration test adds the missing durability check and includes a verifier resolution step. Per-witness publish details plus a threshold flag provide actionable operator visibility. The UI feedback and retry flow are a good improvement for partial publish scenarios.
 
-### Test Coverage
-The new tests explicitly cover metadata stripping and post-storage SAID verification for user schemas, which closes the prior gap. Existing SAID/import coverage remains adequate. `services/issuer/tests/test_schema.py`
+### Remaining Concerns
+- None blocking. Ensure the weighted-threshold deferral is covered by keripy exceptions and mapped to InvalidRotationThresholdError where appropriate.
 
-### Remaining Findings (if any)
-- None.
-
-### Required Changes (if not APPROVED)
-1. N/A
+### Recommendations
+- Consider asserting that `hab.rotate()` returns a message containing the expected sequence number (quick sanity check) to guard against unexpected keripy behavior changes.
+- If feasible, add a small helper to normalize witness publish results to keep API/UI logic consistent.

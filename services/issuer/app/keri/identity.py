@@ -1,7 +1,7 @@
 """KERI identity management for VVP Issuer.
 
 Wraps keripy's Habery to provide identity lifecycle management including
-creation, persistence, and OOBI URL generation.
+creation, persistence, key rotation, and OOBI URL generation.
 """
 import asyncio
 import logging
@@ -21,6 +21,11 @@ from app.config import (
     DEFAULT_NEXT_THRESHOLD,
 )
 from app.keri.persistence import get_persistence_manager
+from app.keri.exceptions import (
+    IdentityNotFoundError,
+    NonTransferableIdentityError,
+    InvalidRotationThresholdError,
+)
 
 log = logging.getLogger(__name__)
 
@@ -36,6 +41,18 @@ class IdentityInfo:
     key_count: int  # Number of signing keys
     sequence_number: int  # Current key event sequence
     transferable: bool  # Whether keys can rotate
+
+
+@dataclass
+class RotationResult:
+    """Result of identity key rotation."""
+
+    aid: str  # Autonomic Identifier (AID)
+    name: str  # Human-readable alias
+    previous_sequence_number: int  # Sequence number before rotation
+    new_sequence_number: int  # Sequence number after rotation
+    new_key_count: int  # Number of signing keys after rotation
+    rotation_event_bytes: bytes  # CESR-encoded rotation event for witness publishing
 
 
 class IssuerIdentityManager:
@@ -297,6 +314,110 @@ class IssuerIdentityManager:
                 raise ValueError(f"No KEL found for {aid}")
 
             return bytes(msg)
+
+    def _validate_rotation_threshold(
+        self, next_key_count: int, next_threshold: str
+    ) -> None:
+        """Validate next_key_count and next_threshold consistency.
+
+        Args:
+            next_key_count: Number of next keys to generate
+            next_threshold: Signing threshold for next keys
+
+        Raises:
+            InvalidRotationThresholdError: If configuration is invalid
+        """
+        if next_key_count < 1:
+            raise InvalidRotationThresholdError(
+                f"next_key_count must be >= 1, got {next_key_count}"
+            )
+
+        # Simple numeric threshold validation
+        try:
+            threshold_int = int(next_threshold)
+            if threshold_int < 1:
+                raise InvalidRotationThresholdError(
+                    f"next_threshold must be >= 1, got {next_threshold}"
+                )
+            if threshold_int > next_key_count:
+                raise InvalidRotationThresholdError(
+                    f"next_threshold ({next_threshold}) cannot exceed "
+                    f"next_key_count ({next_key_count})"
+                )
+        except ValueError:
+            # Weighted threshold format (e.g., "1/2,1/2") - defer to keripy validation
+            pass
+
+    async def rotate_identity(
+        self,
+        aid: str,
+        next_key_count: Optional[int] = None,
+        next_threshold: Optional[str] = None,
+    ) -> RotationResult:
+        """Rotate the keys for an identity.
+
+        Promotes the current next keys to active signing keys and generates
+        new next keys for future rotations.
+
+        Args:
+            aid: The AID of the identity to rotate
+            next_key_count: Number of next keys to generate (for future rotation)
+            next_threshold: Signing threshold for next keys
+
+        Returns:
+            RotationResult with rotation event bytes for witness publishing
+
+        Raises:
+            IdentityNotFoundError: If AID not found
+            NonTransferableIdentityError: If identity is non-transferable
+            InvalidRotationThresholdError: If threshold configuration is invalid
+        """
+        async with self._lock:
+            hab = self.hby.habByPre(aid)
+            if hab is None:
+                raise IdentityNotFoundError(f"Identity not found: {aid}")
+
+            # Check if identity is transferable
+            if not hab.kever.transferable:
+                raise NonTransferableIdentityError(
+                    f"Cannot rotate non-transferable identity: {aid}"
+                )
+
+            # Validate threshold parameters if provided
+            effective_ncount = next_key_count or DEFAULT_NEXT_KEY_COUNT
+            effective_nsith = next_threshold or DEFAULT_NEXT_THRESHOLD
+            self._validate_rotation_threshold(effective_ncount, effective_nsith)
+
+            # Record previous state
+            previous_sn = hab.kever.sn
+
+            # Perform rotation - hab.rotate() returns the signed rotation event
+            rotation_msg = hab.rotate(
+                ncount=next_key_count,
+                nsith=next_threshold,
+            )
+
+            # Verify rotation was successful
+            new_sn = hab.kever.sn
+            if new_sn != previous_sn + 1:
+                raise RuntimeError(
+                    f"Rotation failed: sequence number did not increment "
+                    f"(expected {previous_sn + 1}, got {new_sn})"
+                )
+
+            log.info(
+                f"Rotated identity: {hab.name} ({aid[:16]}...) "
+                f"sn: {previous_sn} -> {new_sn}"
+            )
+
+            return RotationResult(
+                aid=aid,
+                name=hab.name,
+                previous_sequence_number=previous_sn,
+                new_sequence_number=new_sn,
+                new_key_count=len(hab.kever.verfers),
+                rotation_event_bytes=bytes(rotation_msg),
+            )
 
 
 # Module-level singleton

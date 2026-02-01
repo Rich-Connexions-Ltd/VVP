@@ -178,6 +178,10 @@
               ? '<span class="badge badge-transferable">Transferable</span>'
               : '<span class="badge badge-non-transferable">Non-transferable</span>';
 
+            const rotateBtn = identity.transferable
+              ? `<button onclick="rotateIdentity('${identity.aid}', '${identity.name}')" style="margin-top:0.5rem;margin-left:0.5rem;padding:0.25rem 0.5rem;font-size:0.85rem;background:#ffc107;color:#000;">Rotate Keys</button>`
+              : `<button disabled style="margin-top:0.5rem;margin-left:0.5rem;padding:0.25rem 0.5rem;font-size:0.85rem;background:#ccc;color:#666;cursor:not-allowed;" title="Non-transferable identities cannot rotate keys">Rotate Keys</button>`;
+
             html += `<div class="identity-item">
               <h4>${identity.name} ${badge}</h4>
               <div class="aid">${identity.aid}</div>
@@ -186,7 +190,10 @@
                 <span>Witnesses: ${identity.witness_count}</span>
                 <span>Seq: ${identity.sequence_number}</span>
               </div>
-              <button onclick="showOobi('${identity.aid}')" style="margin-top:0.5rem;padding:0.25rem 0.5rem;font-size:0.85rem;background:#17a2b8;">View OOBI URLs</button>
+              <div>
+                <button onclick="showOobi('${identity.aid}')" style="margin-top:0.5rem;padding:0.25rem 0.5rem;font-size:0.85rem;background:#17a2b8;">View OOBI URLs</button>
+                ${rotateBtn}
+              </div>
             </div>`;
           }
           html += '</div>';
@@ -222,6 +229,94 @@
 
         } catch (err) {
           alert('Failed to load OOBI URLs: ' + err.message);
+        }
+      }
+
+      // Rotate identity keys
+      async function rotateIdentity(aid, name) {
+        if (!confirm(`Are you sure you want to rotate keys for "${name}"?\n\nThis action cannot be undone. The current signing keys will be replaced with new ones.`)) {
+          return;
+        }
+
+        // Show loading modal
+        const modal = document.createElement('div');
+        modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);display:flex;justify-content:center;align-items:center;z-index:1000;';
+        modal.innerHTML = `<div style="background:white;padding:1.5rem;border-radius:8px;max-width:600px;text-align:center;">
+          <span class="spinner"></span> Rotating keys...
+        </div>`;
+        document.body.appendChild(modal);
+
+        try {
+          const res = await fetch(`/identity/${aid}/rotate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ publish_to_witnesses: true })
+          });
+
+          const data = await res.json();
+
+          if (!res.ok) {
+            modal.innerHTML = `<div style="background:white;padding:1.5rem;border-radius:8px;max-width:600px;">
+              <div class="error">
+                <strong>Rotation Failed</strong><br>
+                ${data.detail || 'Unknown error'}
+              </div>
+              <button onclick="this.closest('div').parentElement.remove()" style="margin-top:1rem;background:#6c757d;">Close</button>
+            </div>`;
+            return;
+          }
+
+          // Build success message
+          let html = `<div class="success">
+            <strong>Keys Rotated Successfully!</strong>
+            <div class="result-field">
+              <strong>Identity:</strong>
+              <code>${data.identity.name}</code>
+            </div>
+            <div class="result-field">
+              <strong>Previous Sequence:</strong>
+              <code>${data.previous_sequence_number}</code>
+            </div>
+            <div class="result-field">
+              <strong>New Sequence:</strong>
+              <code>${data.identity.sequence_number}</code>
+            </div>
+          </div>`;
+
+          // Per-witness publish results
+          if (data.publish_results && data.publish_results.length > 0) {
+            const successCount = data.publish_results.filter(r => r.success).length;
+            const thresholdClass = data.publish_threshold_met ? '' : 'style="color:#dc3545;"';
+            html += `<div class="publish-results">
+              <strong ${thresholdClass}>Witness Publishing:</strong> ${successCount}/${data.publish_results.length} succeeded`;
+
+            if (!data.publish_threshold_met) {
+              html += `<div style="color:#dc3545;margin:0.5rem 0;"><strong>Warning:</strong> Witness threshold not met. Some witnesses may not have the rotation event.</div>`;
+            }
+
+            for (const result of data.publish_results) {
+              const cls = result.success ? 'witness-success' : 'witness-fail';
+              const icon = result.success ? '✓' : '✗';
+              html += `<div class="witness-result ${cls}">
+                ${icon} ${result.witness_url}${result.error ? ` (${result.error})` : ''}
+              </div>`;
+            }
+            html += `</div>`;
+          }
+
+          modal.innerHTML = `<div style="background:white;padding:1.5rem;border-radius:8px;max-width:600px;max-height:80vh;overflow:auto;">
+            ${html}
+            <button onclick="this.closest('div').parentElement.remove()" style="margin-top:1rem;background:#6c757d;">Close</button>
+          </div>`;
+
+          // Refresh the identity list
+          loadIdentities();
+
+        } catch (err) {
+          modal.innerHTML = `<div style="background:white;padding:1.5rem;border-radius:8px;max-width:600px;">
+            <div class="error">Network error: ${err.message}</div>
+            <button onclick="this.closest('div').parentElement.remove()" style="margin-top:1rem;background:#6c757d;">Close</button>
+          </div>`;
         }
       }
 

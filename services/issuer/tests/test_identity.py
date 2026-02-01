@@ -311,3 +311,255 @@ async def test_witness_publishing_integration():
         for url in oobi_urls:
             assert identity["aid"] in url
             assert "/oobi/" in url
+
+
+# =============================================================================
+# Rotation Tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_rotate_identity_success(temp_dir):
+    """Test successful identity key rotation."""
+    from app.keri.identity import IssuerIdentityManager
+
+    name = unique_name("rotate")
+
+    mgr = IssuerIdentityManager(
+        name="test-rotate",
+        base_dir=temp_dir,
+        temp=True,
+    )
+    await mgr.initialize()
+
+    # Create transferable identity
+    info = await mgr.create_identity(name=name, transferable=True)
+    assert info.sequence_number == 0
+
+    # Rotate keys
+    result = await mgr.rotate_identity(info.aid)
+
+    # Verify sequence number incremented
+    assert result.previous_sequence_number == 0
+    assert result.new_sequence_number == 1
+    assert result.aid == info.aid
+    assert result.name == name
+    assert result.new_key_count >= 1
+
+    # Verify rotation event bytes are present
+    assert result.rotation_event_bytes is not None
+    assert len(result.rotation_event_bytes) > 0
+
+    # Verify identity state is updated
+    updated = await mgr.get_identity(info.aid)
+    assert updated.sequence_number == 1
+
+    await mgr.close()
+
+
+@pytest.mark.asyncio
+async def test_rotate_identity_not_found(temp_dir):
+    """Test rotation of non-existent identity raises error."""
+    from app.keri.identity import IssuerIdentityManager
+    from app.keri.exceptions import IdentityNotFoundError
+
+    mgr = IssuerIdentityManager(
+        name="test-rotate-notfound",
+        base_dir=temp_dir,
+        temp=True,
+    )
+    await mgr.initialize()
+
+    # Try to rotate non-existent identity
+    with pytest.raises(IdentityNotFoundError):
+        await mgr.rotate_identity("Enonexistent12345678901234567890123456789012")
+
+    await mgr.close()
+
+
+@pytest.mark.asyncio
+async def test_rotate_invalid_threshold(temp_dir):
+    """Test rotation with invalid threshold raises error."""
+    from app.keri.identity import IssuerIdentityManager
+    from app.keri.exceptions import InvalidRotationThresholdError
+
+    mgr = IssuerIdentityManager(
+        name="test-rotate-threshold",
+        base_dir=temp_dir,
+        temp=True,
+    )
+    await mgr.initialize()
+
+    # Create identity
+    info = await mgr.create_identity(name=unique_name("threshold"))
+
+    # Try to rotate with threshold > key count
+    with pytest.raises(InvalidRotationThresholdError):
+        await mgr.rotate_identity(
+            info.aid,
+            next_key_count=1,
+            next_threshold="2",  # Threshold exceeds key count
+        )
+
+    await mgr.close()
+
+
+@pytest.mark.asyncio
+async def test_rotate_with_custom_next_threshold(temp_dir):
+    """Test rotation with custom next key configuration."""
+    from app.keri.identity import IssuerIdentityManager
+
+    mgr = IssuerIdentityManager(
+        name="test-rotate-custom",
+        base_dir=temp_dir,
+        temp=True,
+    )
+    await mgr.initialize()
+
+    # Create identity
+    info = await mgr.create_identity(name=unique_name("custom"))
+
+    # Rotate with custom next key count
+    result = await mgr.rotate_identity(
+        info.aid,
+        next_key_count=2,
+        next_threshold="1",
+    )
+
+    assert result.new_sequence_number == 1
+    # Rotation should succeed with valid threshold
+    assert result.rotation_event_bytes is not None
+
+    await mgr.close()
+
+
+@pytest.mark.asyncio
+async def test_rotation_event_bytes_valid(temp_dir):
+    """Test that rotation event bytes contain expected content."""
+    from app.keri.identity import IssuerIdentityManager
+
+    mgr = IssuerIdentityManager(
+        name="test-rotate-bytes",
+        base_dir=temp_dir,
+        temp=True,
+    )
+    await mgr.initialize()
+
+    # Create identity
+    info = await mgr.create_identity(name=unique_name("bytes"))
+
+    # Rotate keys
+    result = await mgr.rotate_identity(info.aid)
+
+    # Verify rotation event contains the AID
+    assert info.aid.encode() in result.rotation_event_bytes
+
+    await mgr.close()
+
+
+@pytest.mark.asyncio
+async def test_rotation_persists_across_restart(temp_dir):
+    """Test that rotated key state survives manager restart."""
+    from app.keri.identity import IssuerIdentityManager
+
+    name = unique_name("persist-rotate")
+
+    # Create first manager and identity
+    mgr1 = IssuerIdentityManager(
+        name="test-rotate-persist",
+        base_dir=temp_dir,
+        temp=False,  # Use persistent storage
+    )
+    await mgr1.initialize()
+
+    info = await mgr1.create_identity(name=name)
+    assert info.sequence_number == 0
+
+    # Rotate keys
+    result = await mgr1.rotate_identity(info.aid)
+    assert result.new_sequence_number == 1
+
+    # Close and recreate manager (simulates restart)
+    await mgr1.close()
+
+    # Create new manager pointing to same storage
+    mgr2 = IssuerIdentityManager(
+        name="test-rotate-persist",
+        base_dir=temp_dir,
+        temp=False,
+    )
+    await mgr2.initialize()
+
+    # Verify rotated state persisted
+    restored = await mgr2.get_identity(info.aid)
+    assert restored is not None
+    assert restored.sequence_number == 1  # Still 1 after restart
+
+    await mgr2.close()
+
+
+# =============================================================================
+# Rotation API Tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_rotate_endpoint_success(client: AsyncClient):
+    """Test rotation via API endpoint."""
+    name = unique_name("api-rotate")
+
+    # Create identity first
+    create_response = await client.post(
+        "/identity",
+        json={"name": name, "transferable": True},
+    )
+    assert create_response.status_code == 200
+    aid = create_response.json()["identity"]["aid"]
+    original_sn = create_response.json()["identity"]["sequence_number"]
+    assert original_sn == 0
+
+    # Rotate keys
+    rotate_response = await client.post(
+        f"/identity/{aid}/rotate",
+        json={"publish_to_witnesses": False},
+    )
+    assert rotate_response.status_code == 200
+    data = rotate_response.json()
+
+    # Verify response
+    assert data["previous_sequence_number"] == 0
+    assert data["identity"]["sequence_number"] == 1
+    assert data["identity"]["aid"] == aid
+
+
+@pytest.mark.asyncio
+async def test_rotate_endpoint_not_found(client: AsyncClient):
+    """Test rotation of non-existent identity returns 404."""
+    response = await client.post(
+        "/identity/Enonexistent12345678901234567890123456789012/rotate",
+        json={},
+    )
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_rotate_endpoint_invalid_threshold(client: AsyncClient):
+    """Test rotation with invalid threshold returns 400."""
+    name = unique_name("api-rotate-invalid")
+
+    # Create identity first
+    create_response = await client.post(
+        "/identity",
+        json={"name": name, "transferable": True},
+    )
+    assert create_response.status_code == 200
+    aid = create_response.json()["identity"]["aid"]
+
+    # Try to rotate with invalid threshold
+    rotate_response = await client.post(
+        f"/identity/{aid}/rotate",
+        json={"next_key_count": 1, "next_threshold": "5"},  # Threshold > key count
+    )
+    assert rotate_response.status_code == 400
+    assert "threshold" in rotate_response.json()["detail"].lower()

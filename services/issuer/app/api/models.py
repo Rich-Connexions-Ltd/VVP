@@ -64,6 +64,50 @@ class CreateIdentityResponse(BaseModel):
     publish_results: Optional[list[WitnessPublishResult]] = None
 
 
+class RotateIdentityRequest(BaseModel):
+    """Request to rotate an identity's keys."""
+
+    next_key_count: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Number of next keys to generate for future rotation",
+    )
+    next_threshold: Optional[str] = Field(
+        None,
+        description="Signing threshold for next keys (e.g., '1', '2', '1/2,1/2')",
+    )
+    publish_to_witnesses: bool = Field(
+        True,
+        description="Publish rotation event to witnesses",
+    )
+
+
+class WitnessPublishDetail(BaseModel):
+    """Per-witness publish result for operator visibility."""
+
+    witness_url: str = Field(..., description="Witness URL that was called")
+    success: bool = Field(..., description="Whether publish succeeded")
+    error: Optional[str] = Field(None, description="Error message if failed")
+
+
+class RotateIdentityResponse(BaseModel):
+    """Response from identity rotation."""
+
+    identity: IdentityResponse = Field(..., description="Updated identity info")
+    previous_sequence_number: int = Field(
+        ...,
+        description="Sequence number before rotation",
+    )
+    publish_results: Optional[list[WitnessPublishDetail]] = Field(
+        None,
+        description="Per-witness publish results",
+    )
+    publish_threshold_met: bool = Field(
+        True,
+        description="Whether enough witnesses receipted the rotation",
+    )
+
+
 class IdentityListResponse(BaseModel):
     """Response listing all identities."""
 

@@ -9,6 +9,9 @@ from app.api.models import (
     IdentityResponse,
     IdentityListResponse,
     OobiResponse,
+    RotateIdentityRequest,
+    RotateIdentityResponse,
+    WitnessPublishDetail,
     WitnessPublishResult,
 )
 from app.auth.api_key import Principal
@@ -17,6 +20,11 @@ from app.audit import get_audit_logger
 from app.config import WITNESS_IURLS
 from app.keri.identity import get_identity_manager
 from app.keri.witness import get_witness_publisher
+from app.keri.exceptions import (
+    IdentityNotFoundError,
+    NonTransferableIdentityError,
+    InvalidRotationThresholdError,
+)
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/identity", tags=["identity"])
@@ -189,3 +197,105 @@ async def get_oobi(
         oobi_urls.append(oobi_url)
 
     return OobiResponse(aid=aid, oobi_urls=oobi_urls)
+
+
+@router.post("/{aid}/rotate", response_model=RotateIdentityResponse)
+async def rotate_identity(
+    aid: str,
+    request: RotateIdentityRequest,
+    http_request: Request,
+    principal: Principal = require_admin,
+) -> RotateIdentityResponse:
+    """Rotate the keys for an identity.
+
+    Promotes the current next keys to active signing keys and generates
+    new next keys for future rotations. The rotation event is published
+    to witnesses for OOBI resolution.
+
+    Requires: issuer:admin role
+
+    Raises:
+        404: Identity not found
+        400: Non-transferable identity or invalid threshold configuration
+    """
+    mgr = await get_identity_manager()
+    audit = get_audit_logger()
+
+    try:
+        # Perform the rotation
+        result = await mgr.rotate_identity(
+            aid=aid,
+            next_key_count=request.next_key_count,
+            next_threshold=request.next_threshold,
+        )
+
+        # Publish rotation event to witnesses
+        publish_results: list[WitnessPublishDetail] | None = None
+        threshold_met = True
+
+        if request.publish_to_witnesses and WITNESS_IURLS:
+            try:
+                publisher = get_witness_publisher()
+                pub_result = await publisher.publish_event(
+                    pre=aid,
+                    event_bytes=result.rotation_event_bytes,
+                )
+
+                publish_results = [
+                    WitnessPublishDetail(
+                        witness_url=wr.url,
+                        success=wr.success,
+                        error=wr.error,
+                    )
+                    for wr in pub_result.witnesses
+                ]
+                threshold_met = pub_result.threshold_met
+
+                if not threshold_met:
+                    log.warning(
+                        f"Witness threshold not met for rotation {aid}: "
+                        f"{pub_result.success_count}/{pub_result.total_count}"
+                    )
+            except Exception as e:
+                log.error(f"Failed to publish rotation to witnesses: {e}")
+                threshold_met = False
+
+        # Audit log the rotation
+        audit.log_access(
+            action="identity.rotate",
+            principal_id=principal.key_id,
+            resource=aid,
+            details={
+                "previous_sn": result.previous_sequence_number,
+                "new_sn": result.new_sequence_number,
+            },
+            request=http_request,
+        )
+
+        # Get updated identity info
+        updated_info = await mgr.get_identity(aid)
+
+        return RotateIdentityResponse(
+            identity=IdentityResponse(
+                aid=updated_info.aid,
+                name=updated_info.name,
+                created_at=updated_info.created_at or None,
+                witness_count=updated_info.witness_count,
+                key_count=updated_info.key_count,
+                sequence_number=updated_info.sequence_number,
+                transferable=updated_info.transferable,
+            ),
+            previous_sequence_number=result.previous_sequence_number,
+            publish_results=publish_results,
+            publish_threshold_met=threshold_met,
+        )
+
+    except IdentityNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except NonTransferableIdentityError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except InvalidRotationThresholdError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        log.error(f"Failed to rotate identity: {e}")
+        raise HTTPException(status_code=500, detail="Internal error rotating identity")
