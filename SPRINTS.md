@@ -417,16 +417,11 @@ services/witness/
 ```
 
 **Exit Criteria:** ✅ All met
-- All 5 services deployed and healthy on rcnx.io custom domains
-- CI/CD pipeline successfully builds and deploys all services
-- Witness AIDs match expected deterministic values
-3. Verify deployment with `./services/issuer/scripts/verify-azure-deployment.sh`
-
-**Exit Criteria:**
-- [ ] End-to-end: issue in Azure, verify in Azure
-- [ ] Issuer not accessible from public internet
-- [ ] Keeper persists across restarts
-- [ ] Backup/restore tested
+- [x] All 5 services deployed and healthy on rcnx.io custom domains
+- [x] CI/CD pipeline successfully builds and deploys all services
+- [x] Witness AIDs match expected deterministic values
+- [x] HTTPS certificates working for all custom domains
+- [x] Health endpoints responding (`/healthz` for services, `/oobi` for witnesses)
 
 ---
 
