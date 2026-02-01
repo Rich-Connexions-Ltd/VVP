@@ -9,7 +9,10 @@ permissions:
   id-token: write   # required for OIDC to Azure
 
 jobs:
-  test:
+  # =========================================================================
+  # TEST JOBS - Run tests for both services
+  # =========================================================================
+  test-verifier:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -29,7 +32,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libsodium-dev
-          # Verify libsodium is properly installed
           ldconfig -p | grep libsodium || echo "libsodium found in apt paths"
 
       - name: Install common package
@@ -54,8 +56,59 @@ jobs:
           file: services/verifier/coverage.xml
         continue-on-error: true
 
-  build-and-deploy:
-    needs: test
+  test-issuer:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/issuer
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install libsodium
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsodium-dev
+          ldconfig -p | grep libsodium || echo "libsodium found in apt paths"
+
+      - name: Install keripy
+        working-directory: keripy
+        run: pip install -e .
+
+      - name: Install common package
+        working-directory: common
+        run: pip install -e .
+
+      - name: Install dependencies
+        run: |
+          pip install -e .
+          pip install pytest pytest-asyncio pytest-cov
+
+      - name: Verify pysodium import
+        run: python3 -c "import pysodium; print('pysodium OK')"
+
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ -v --cov=app --cov-report=xml --cov-fail-under=60
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          file: services/issuer/coverage.xml
+        continue-on-error: true
+
+  # =========================================================================
+  # DEPLOY VERIFIER
+  # =========================================================================
+  deploy-verifier:
+    needs: [test-verifier, test-issuer]
     runs-on: ubuntu-latest
 
     steps:
@@ -73,18 +126,56 @@ jobs:
         run: |
           az acr login -n "${{ secrets.ACR_NAME }}"
 
-      - name: Build and push image
+      - name: Build and push verifier image
         run: |
           IMAGE="${{ secrets.ACR_LOGIN_SERVER }}/vvp-verifier:${{ github.sha }}"
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
           docker build -t "$IMAGE" -f services/verifier/Dockerfile .
           docker push "$IMAGE"
 
-      - name: Deploy new revision
+      - name: Deploy verifier
         run: |
           az containerapp update \
             --resource-group "${{ secrets.AZURE_RG }}" \
             --name "${{ secrets.AZURE_CONTAINERAPP_NAME }}" \
             --image "$IMAGE" \
             --min-replicas 1 \
-            --set-env-vars "GIT_SHA=${{ github.sha }}"
+            --set-env-vars "GIT_SHA=${{ github.sha }}" "GITHUB_REPOSITORY=${{ github.repository }}"
+
+  # =========================================================================
+  # DEPLOY ISSUER
+  # =========================================================================
+  deploy-issuer:
+    needs: [test-verifier, test-issuer]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Login to ACR
+        run: |
+          az acr login -n "${{ secrets.ACR_NAME }}"
+
+      - name: Build and push issuer image
+        run: |
+          IMAGE="${{ secrets.ACR_LOGIN_SERVER }}/vvp-issuer:${{ github.sha }}"
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+          docker build -t "$IMAGE" -f services/issuer/Dockerfile .
+          docker push "$IMAGE"
+
+      - name: Deploy issuer
+        run: |
+          az containerapp update \
+            --resource-group "${{ secrets.AZURE_RG }}" \
+            --name "vvp-issuer" \
+            --image "$IMAGE" \
+            --min-replicas 1 \
+            --set-env-vars "GIT_SHA=${{ github.sha }}" "GITHUB_REPOSITORY=${{ github.repository }}"

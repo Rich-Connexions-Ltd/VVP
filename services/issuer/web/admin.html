@@ -376,7 +376,12 @@
         // Fetch version
         const versionResp = await fetch('/version');
         const version = await versionResp.json();
-        document.getElementById('version-value').textContent = version.git_sha || 'unknown';
+        const versionEl = document.getElementById('version-value');
+        if (version.github_url) {
+          versionEl.innerHTML = `<a href="${version.github_url}" target="_blank" rel="noopener">${version.short_sha}</a>`;
+        } else {
+          versionEl.textContent = version.git_sha || 'unknown';
+        }
 
         // Fetch admin config (may require auth)
         const configResp = await fetch('/admin/config');

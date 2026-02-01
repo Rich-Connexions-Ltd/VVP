@@ -98,8 +98,16 @@ app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
 @app.get("/version")
 def version():
-    """Return service version."""
-    return {"git_sha": os.getenv("GIT_SHA", "unknown")}
+    """Return service version with GitHub commit link."""
+    git_sha = os.getenv("GIT_SHA", "unknown")
+    repo = os.getenv("GITHUB_REPOSITORY", "andrewbalercnx/vvp-verifier")
+
+    result = {"git_sha": git_sha}
+    if git_sha != "unknown":
+        result["github_url"] = f"https://github.com/{repo}/commit/{git_sha}"
+        result["short_sha"] = git_sha[:7]
+
+    return result
 
 
 @app.get("/")

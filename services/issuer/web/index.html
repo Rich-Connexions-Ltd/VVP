@@ -183,7 +183,11 @@
       try {
         const res = await fetch('/version');
         const data = await res.json();
-        versionEl.textContent = data.git_sha ? data.git_sha.substring(0, 7) : 'Unknown';
+        if (data.github_url) {
+          versionEl.innerHTML = `<a href="${data.github_url}" target="_blank" rel="noopener">${data.short_sha}</a>`;
+        } else {
+          versionEl.textContent = data.git_sha ? data.git_sha.substring(0, 7) : 'Unknown';
+        }
       } catch (err) {
         versionEl.textContent = 'Unknown';
       }

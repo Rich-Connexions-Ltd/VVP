@@ -174,8 +174,17 @@ async def verify_callee(req: VerifyCalleeRequest, request: Request):
 
 @app.get("/version")
 def version():
+    """Return service version with GitHub commit link."""
     # GIT_SHA is injected at deploy time by GitHub Actions
-    return {"git_sha": os.getenv("GIT_SHA", "unknown")}
+    git_sha = os.getenv("GIT_SHA", "unknown")
+    repo = os.getenv("GITHUB_REPOSITORY", "andrewbalercnx/vvp-verifier")
+
+    result = {"git_sha": git_sha}
+    if git_sha != "unknown":
+        result["github_url"] = f"https://github.com/{repo}/commit/{git_sha}"
+        result["short_sha"] = git_sha[:7]
+
+    return result
 
 
 @app.get("/admin")
