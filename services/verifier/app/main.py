@@ -370,7 +370,7 @@ async def admin_witness_discover():
         pool = get_witness_pool()
         # Force rediscovery by resetting the discovery flag
         pool._gleif_discovered = False
-        await pool.ensure_gleif_discovered()
+        await pool._ensure_gleif_discovered()
         witnesses = await pool.get_all_witnesses()
 
         log.info(f"GLEIF witness discovery triggered via admin endpoint, found {len(witnesses)} witnesses")
