@@ -550,7 +550,7 @@
         const healthResp = await fetch('/healthz');
         const health = await healthResp.json();
         const healthEl = document.getElementById('health-status');
-        if (health.status === 'healthy') {
+        if (health.ok === true) {
           healthEl.innerHTML = '<span class="status-dot healthy"></span> Healthy';
         } else {
           healthEl.innerHTML = '<span class="status-dot error"></span> Unhealthy';
