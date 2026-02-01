@@ -22,6 +22,7 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 35 | E2E Integration Testing | COMPLETE | Sprint 33 |
 | 36 | Key Management & Rotation | COMPLETE | Sprint 30 |
 | 37 | Session-Based Authentication | COMPLETE | Sprint 30 |
+| 38 | OAuth (Microsoft M365) | PLANNED | Sprint 30 |
 
 ---
 
@@ -702,6 +703,71 @@ services/issuer/tests/
 
 ---
 
+## Sprint 38: OAuth (Microsoft M365) (PLANNED)
+
+**Goal:** Add Microsoft M365 OAuth login for the Issuer UI, enabling SSO alongside existing API key and username/password flows.
+
+**Prerequisites:** Sprint 30 (Security Model) complete, Sprint 37 (Session-Based Authentication) complete.
+
+**Background:**
+Current UI authentication uses sessions created from API keys or username/password. This sprint adds Microsoft Entra ID (Azure AD) OAuth login to exchange a validated Microsoft identity for a VVP session. The existing API key and user auth remain supported for backward compatibility.
+
+**Deliverables:**
+- [ ] OAuth login endpoints (`GET /auth/oauth/m365/start`, `GET /auth/oauth/m365/callback`)
+- [ ] Microsoft Entra application registration configuration (tenant ID, client ID, client secret)
+- [ ] Token validation and user identity mapping (email -> VVP user record)
+- [ ] Optional auto-provisioning for first-time users (configurable)
+- [ ] Session creation on successful OAuth callback
+- [ ] UI login modal button: “Sign in with Microsoft”
+- [ ] Admin configuration visibility for OAuth settings (read-only)
+- [ ] Tests for OAuth flow (mocked token exchange and callback)
+- [ ] Documentation for setup steps and required Microsoft app permissions
+
+**Key Files:**
+```
+services/issuer/app/
+├── api/
+│   └── auth.py              # OAuth start/callback endpoints
+├── auth/
+│   └── oauth.py             # OAuth helpers, token validation
+├── config.py                # OAUTH_* settings
+└── main.py                  # Auth router + callback integration
+services/issuer/web/
+├── shared.js                # Add Microsoft login button + flow
+└── styles.css               # OAuth button styles
+services/issuer/tests/
+└── test_oauth.py            # OAuth flow tests (mocked)
+```
+
+**OAuth Flow:**
+1. UI clicks “Sign in with Microsoft”
+2. `GET /auth/oauth/m365/start` redirects to Microsoft authorization URL
+3. User authenticates with Microsoft, returns to callback URL
+4. `GET /auth/oauth/m365/callback` exchanges code for tokens
+5. Validate ID token (issuer, audience, nonce, expiry)
+6. Map email to VVP user; optionally auto-provision
+7. Create VVP session and redirect back to UI
+
+**Configuration:**
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VVP_OAUTH_M365_ENABLED` | `false` | Enable Microsoft OAuth login |
+| `VVP_OAUTH_M365_TENANT_ID` | - | Azure tenant ID |
+| `VVP_OAUTH_M365_CLIENT_ID` | - | App registration client ID |
+| `VVP_OAUTH_M365_CLIENT_SECRET` | - | App registration client secret |
+| `VVP_OAUTH_M365_REDIRECT_URI` | - | OAuth callback URL |
+| `VVP_OAUTH_M365_AUTO_PROVISION` | `false` | Auto-create user on first login |
+| `VVP_OAUTH_M365_ALLOWED_DOMAINS` | - | Optional allowed email domains |
+
+**Exit Criteria:**
+- [ ] OAuth login works end-to-end with Microsoft Entra
+- [ ] Session created and UI authenticated after OAuth callback
+- [ ] API key and username/password auth still function
+- [ ] Token validation and domain restrictions enforced
+- [ ] OAuth tests pass (mocked)
+
+---
+
 ## Quick Reference
 
 To start a sprint, say:
@@ -716,6 +782,7 @@ To start a sprint, say:
 - "Sprint 35" - End-to-end integration testing (against Azure)
 - "Sprint 36" - Key management & rotation
 - "Sprint 37" - Session-based authentication (UI login flow)
+- "Sprint 38" - OAuth (Microsoft M365) for UI SSO
 
 Each sprint follows the pair programming workflow:
 1. Plan phase (design, review, approval)
