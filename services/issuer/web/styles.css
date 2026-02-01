@@ -776,3 +776,136 @@ tr.selected {
 .help-tip strong {
   color: var(--vvp-info);
 }
+
+/* ==========================================================================
+   Authentication UI
+   ========================================================================== */
+.auth-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+  padding-left: 1rem;
+}
+
+.auth-user {
+  font-size: 0.875rem;
+  color: var(--vvp-text);
+  font-weight: 500;
+}
+
+/* Login Modal */
+.login-modal-overlay {
+  background: rgba(0,0,0,0.6);
+}
+
+.login-modal {
+  min-width: 350px;
+  max-width: 400px;
+}
+
+.login-form {
+  margin-top: 1rem;
+}
+
+.login-tabs {
+  display: flex;
+  border-bottom: 1px solid #ddd;
+  margin-bottom: 1rem;
+}
+
+.login-tab {
+  flex: 1;
+  padding: 0.5rem;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: var(--vvp-text-muted);
+  transition: all 0.2s;
+}
+
+.login-tab:hover {
+  color: var(--vvp-primary);
+}
+
+.login-tab.active {
+  color: var(--vvp-primary);
+  border-bottom-color: var(--vvp-primary);
+  font-weight: 500;
+}
+
+.login-tab-content {
+  display: none;
+}
+
+.login-tab-content.active {
+  display: block;
+}
+
+.login-field {
+  margin-bottom: 0.75rem;
+}
+
+.login-field label {
+  display: block;
+  margin-bottom: 0.25rem;
+  font-weight: 500;
+  font-size: 0.9rem;
+}
+
+.login-description {
+  color: var(--vvp-text-muted);
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+}
+
+.login-form input[type="password"],
+.login-form input[type="email"],
+.login-form input[type="text"] {
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 1rem;
+  box-sizing: border-box;
+}
+
+.login-form input[type="password"]:focus,
+.login-form input[type="email"]:focus,
+.login-form input[type="text"]:focus {
+  outline: none;
+  border-color: var(--vvp-primary);
+  box-shadow: 0 0 0 2px rgba(42,157,143,0.2);
+}
+
+.login-form .error {
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  font-size: 0.875rem;
+}
+
+.login-buttons {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.login-buttons button {
+  flex: 1;
+}
+
+.login-buttons button.primary {
+  background: var(--vvp-primary);
+}
+
+.login-buttons button.primary:hover {
+  background: var(--vvp-primary-hover);
+}
+
+/* Toast animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}

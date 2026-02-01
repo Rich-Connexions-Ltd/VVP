@@ -135,9 +135,45 @@ AUTH_RELOAD_INTERVAL: int = int(os.getenv("VVP_AUTH_RELOAD_INTERVAL", "60"))  # 
 AUTH_RELOAD_ENABLED: bool = os.getenv("VVP_AUTH_RELOAD_ENABLED", "true").lower() == "true"
 
 
+# =============================================================================
+# SESSION CONFIGURATION
+# =============================================================================
+
+# Session cookie settings
+SESSION_TTL_SECONDS: int = int(os.getenv("VVP_SESSION_TTL", "3600"))  # 1 hour default
+SESSION_COOKIE_SECURE: bool = os.getenv("VVP_SESSION_SECURE", "true").lower() == "true"
+SESSION_CLEANUP_INTERVAL: int = int(os.getenv("VVP_SESSION_CLEANUP_INTERVAL", "300"))  # 5 min
+
+# Login rate limiting
+LOGIN_RATE_LIMIT_MAX_ATTEMPTS: int = int(os.getenv("VVP_LOGIN_RATE_LIMIT_MAX", "5"))
+LOGIN_RATE_LIMIT_WINDOW_SECONDS: int = int(os.getenv("VVP_LOGIN_RATE_LIMIT_WINDOW", "900"))  # 15 min
+
+
+# =============================================================================
+# USER AUTHENTICATION
+# =============================================================================
+
+def _get_users_file() -> str:
+    """Get path to users configuration file."""
+    return os.getenv(
+        "VVP_USERS_FILE",
+        str(Path(__file__).parent.parent / "config" / "users.json")
+    )
+
+
+# User authentication (alongside API keys)
+USERS_FILE: str = _get_users_file()
+USERS_JSON: str | None = os.getenv("VVP_USERS")  # Inline JSON override
+
+
 def get_auth_exempt_paths() -> set[str]:
     """Get the full set of auth-exempt paths based on configuration."""
     exempt = set(AUTH_EXEMPT_PATHS)
+
+    # Auth endpoints must be exempt (login/logout don't require existing auth)
+    exempt.add("/auth/login")
+    exempt.add("/auth/logout")
+    exempt.add("/auth/status")
 
     if DOCS_AUTH_EXEMPT:
         exempt.add("/docs")

@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from app.auth.api_key import get_api_key_store, Principal
 from app.auth.roles import require_admin
+from app.auth.users import get_user_store, hash_password
 from app.audit import get_audit_logger
 
 log = logging.getLogger(__name__)
@@ -97,6 +98,367 @@ async def get_auth_status(
         version=store.version,
         reload_interval=AUTH_RELOAD_INTERVAL,
     )
+
+
+# =============================================================================
+# User Management Endpoints
+# =============================================================================
+
+
+class UserResponse(BaseModel):
+    """User information response (without password hash)."""
+
+    email: str
+    name: str
+    roles: list[str]
+    enabled: bool
+
+
+class UsersListResponse(BaseModel):
+    """Response for listing all users."""
+
+    users: list[UserResponse]
+    count: int
+
+
+class CreateUserRequest(BaseModel):
+    """Request to create a new user."""
+
+    email: str
+    name: str
+    password: str
+    roles: list[str] | None = None  # Defaults to ["issuer:readonly"]
+    enabled: bool = True
+
+
+class UpdateUserRequest(BaseModel):
+    """Request to update a user."""
+
+    name: str | None = None
+    password: str | None = None
+    roles: list[str] | None = None
+    enabled: bool | None = None
+
+
+class UserReloadResponse(BaseModel):
+    """Response for user config reload."""
+
+    success: bool
+    user_count: int
+    message: str
+
+
+@router.get("/users", response_model=UsersListResponse)
+async def list_users(
+    principal: Principal = require_admin,
+) -> UsersListResponse:
+    """List all configured users.
+
+    Returns user information without password hashes.
+
+    Requires: issuer:admin role
+    """
+    user_store = get_user_store()
+    users = user_store.list_users()
+
+    return UsersListResponse(
+        users=[UserResponse(**u) for u in users],
+        count=len(users),
+    )
+
+
+@router.post("/users", response_model=UserResponse)
+async def create_user(
+    req: CreateUserRequest,
+    request: Request,
+    principal: Principal = require_admin,
+) -> UserResponse:
+    """Create a new user.
+
+    Creates a user with the specified credentials. The password is
+    automatically hashed with bcrypt.
+
+    Note: This updates the in-memory store. To persist, update the
+    users.json config file.
+
+    Requires: issuer:admin role
+    """
+    import json
+    from pathlib import Path
+    from app.auth.users import UserConfig
+
+    audit = get_audit_logger()
+    user_store = get_user_store()
+
+    # Check if user already exists
+    if user_store.get_user(req.email):
+        raise HTTPException(
+            status_code=409,
+            detail=f"User with email '{req.email}' already exists",
+        )
+
+    # Hash password
+    password_hash = hash_password(req.password)
+
+    # Create user config
+    roles = req.roles if req.roles else ["issuer:readonly"]
+    new_user = UserConfig(
+        email=req.email.lower(),
+        name=req.name,
+        password_hash=password_hash,
+        roles=set(roles),
+        enabled=req.enabled,
+    )
+
+    # Add to store
+    user_store._users[new_user.email] = new_user
+
+    # Persist to config file
+    from app.config import USERS_FILE
+
+    config_path = Path(USERS_FILE)
+    if config_path.exists():
+        try:
+            config_data = json.loads(config_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            config_data = {"users": []}
+    else:
+        config_data = {"users": []}
+
+    config_data["users"].append({
+        "email": new_user.email,
+        "name": new_user.name,
+        "password_hash": new_user.password_hash,
+        "roles": list(new_user.roles),
+        "enabled": new_user.enabled,
+    })
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps(config_data, indent=2))
+
+    audit.log_access(
+        principal_id=principal.key_id,
+        resource="admin/users",
+        action="create",
+        request=request,
+        details={"email": new_user.email, "roles": list(new_user.roles)},
+    )
+
+    log.info(f"User {new_user.email} created by {principal.key_id}")
+
+    return UserResponse(
+        email=new_user.email,
+        name=new_user.name,
+        roles=list(new_user.roles),
+        enabled=new_user.enabled,
+    )
+
+
+@router.patch("/users/{email}", response_model=UserResponse)
+async def update_user(
+    email: str,
+    req: UpdateUserRequest,
+    request: Request,
+    principal: Principal = require_admin,
+) -> UserResponse:
+    """Update an existing user.
+
+    Can update name, password, roles, or enabled status.
+    Leave fields as null to keep existing values.
+
+    Note: This updates the in-memory store and persists to config file.
+
+    Requires: issuer:admin role
+    """
+    import json
+    from pathlib import Path
+
+    audit = get_audit_logger()
+    user_store = get_user_store()
+
+    # Find user
+    user = user_store.get_user(email)
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail=f"User with email '{email}' not found",
+        )
+
+    # Track what was updated
+    updates = {}
+
+    if req.name is not None:
+        user.name = req.name
+        updates["name"] = req.name
+
+    if req.password is not None:
+        user.password_hash = hash_password(req.password)
+        updates["password"] = "(changed)"
+
+    if req.roles is not None:
+        user.roles = set(req.roles)
+        updates["roles"] = req.roles
+
+    if req.enabled is not None:
+        user.enabled = req.enabled
+        updates["enabled"] = req.enabled
+
+    # Persist to config file
+    from app.config import USERS_FILE
+
+    config_path = Path(USERS_FILE)
+    if config_path.exists():
+        try:
+            config_data = json.loads(config_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            config_data = {"users": []}
+    else:
+        config_data = {"users": []}
+
+    # Update or add user in config
+    user_found = False
+    for u in config_data.get("users", []):
+        if u.get("email", "").lower() == email.lower():
+            u["name"] = user.name
+            u["password_hash"] = user.password_hash
+            u["roles"] = list(user.roles)
+            u["enabled"] = user.enabled
+            user_found = True
+            break
+
+    if not user_found:
+        config_data["users"].append({
+            "email": user.email,
+            "name": user.name,
+            "password_hash": user.password_hash,
+            "roles": list(user.roles),
+            "enabled": user.enabled,
+        })
+
+    config_path.write_text(json.dumps(config_data, indent=2))
+
+    audit.log_access(
+        principal_id=principal.key_id,
+        resource=f"admin/users/{email}",
+        action="update",
+        request=request,
+        details=updates,
+    )
+
+    log.info(f"User {email} updated by {principal.key_id}: {updates}")
+
+    return UserResponse(
+        email=user.email,
+        name=user.name,
+        roles=list(user.roles),
+        enabled=user.enabled,
+    )
+
+
+@router.delete("/users/{email}")
+async def delete_user(
+    email: str,
+    request: Request,
+    principal: Principal = require_admin,
+) -> dict:
+    """Delete a user.
+
+    Removes user from memory and config file.
+    Any active sessions for this user will be invalidated.
+
+    Requires: issuer:admin role
+    """
+    import json
+    from pathlib import Path
+
+    audit = get_audit_logger()
+    user_store = get_user_store()
+
+    # Find user
+    user = user_store.get_user(email)
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail=f"User with email '{email}' not found",
+        )
+
+    # Remove from store
+    del user_store._users[email.lower()]
+
+    # Invalidate all sessions for this user
+    from app.auth.session import get_session_store
+
+    session_store = get_session_store()
+    deleted_sessions = await session_store.delete_by_key_id(f"user:{email.lower()}")
+
+    # Persist to config file
+    from app.config import USERS_FILE
+
+    config_path = Path(USERS_FILE)
+    if config_path.exists():
+        try:
+            config_data = json.loads(config_path.read_text())
+            config_data["users"] = [
+                u for u in config_data.get("users", [])
+                if u.get("email", "").lower() != email.lower()
+            ]
+            config_path.write_text(json.dumps(config_data, indent=2))
+        except (json.JSONDecodeError, OSError) as e:
+            log.warning(f"Failed to update config file: {e}")
+
+    audit.log_access(
+        principal_id=principal.key_id,
+        resource=f"admin/users/{email}",
+        action="delete",
+        request=request,
+        details={"sessions_invalidated": deleted_sessions},
+    )
+
+    log.info(f"User {email} deleted by {principal.key_id}")
+
+    return {
+        "success": True,
+        "message": f"User {email} deleted",
+        "sessions_invalidated": deleted_sessions,
+    }
+
+
+@router.post("/users/reload", response_model=UserReloadResponse)
+async def reload_users(
+    request: Request,
+    principal: Principal = require_admin,
+) -> UserReloadResponse:
+    """Reload users configuration from file.
+
+    Forces an immediate reload of the users configuration,
+    picking up any new, modified, or removed users.
+
+    Requires: issuer:admin role
+    """
+    user_store = get_user_store()
+    audit = get_audit_logger()
+
+    success = user_store.reload()
+
+    if success:
+        audit.log_access(
+            principal_id=principal.key_id,
+            resource="admin/users/reload",
+            action="reload",
+            request=request,
+            details={"user_count": user_store.user_count},
+        )
+        return UserReloadResponse(
+            success=True,
+            user_count=user_store.user_count,
+            message=f"Reloaded {user_store.user_count} users",
+        )
+    else:
+        return UserReloadResponse(
+            success=False,
+            user_count=user_store.user_count,
+            message="Failed to reload users",
+        )
 
 
 # =============================================================================

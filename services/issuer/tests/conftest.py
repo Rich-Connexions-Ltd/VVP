@@ -12,6 +12,8 @@ import pytest
 from httpx import AsyncClient, ASGITransport
 
 from app.auth.api_key import reset_api_key_store
+from app.auth.session import reset_session_store, reset_rate_limiter
+from app.auth.users import reset_user_store
 from app.audit.logger import reset_audit_logger
 from app.keri.identity import (
     reset_identity_manager,
@@ -200,6 +202,9 @@ async def client(temp_dir: Path) -> AsyncGenerator[AsyncClient, None]:
     reset_persistence_manager()
     reset_witness_publisher()
     reset_api_key_store()
+    reset_user_store()
+    reset_session_store()
+    reset_rate_limiter()
     reset_audit_logger()
     reset_dossier_builder()
 
@@ -229,6 +234,9 @@ async def client(temp_dir: Path) -> AsyncGenerator[AsyncClient, None]:
     reset_persistence_manager()
     reset_witness_publisher()
     reset_api_key_store()
+    reset_user_store()
+    reset_session_store()
+    reset_rate_limiter()
     reset_audit_logger()
     reset_dossier_builder()
 
@@ -270,6 +278,9 @@ async def client_with_auth(temp_dir: Path) -> AsyncGenerator[AsyncClient, None]:
     reset_persistence_manager()
     reset_witness_publisher()
     reset_api_key_store()
+    reset_user_store()
+    reset_session_store()
+    reset_rate_limiter()
     reset_audit_logger()
 
     # Reload config and main
@@ -296,6 +307,9 @@ async def client_with_auth(temp_dir: Path) -> AsyncGenerator[AsyncClient, None]:
     reset_persistence_manager()
     reset_witness_publisher()
     reset_api_key_store()
+    reset_user_store()
+    reset_session_store()
+    reset_rate_limiter()
     reset_audit_logger()
 
     # Restore environment

@@ -1,4 +1,5 @@
 """VVP Issuer FastAPI application."""
+import asyncio
 import logging
 import os
 import time
@@ -11,9 +12,10 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.authentication import AuthenticationMiddleware
 
 from common.vvp.core.logging import configure_logging
-from app.api import admin, credential, dossier, health, identity, registry, schema
+from app.api import admin, auth, credential, dossier, health, identity, registry, schema
 from app.auth.api_key import APIKeyBackend, get_api_key_store
-from app.config import AUTH_ENABLED, get_auth_exempt_paths
+from app.auth.session import get_session_store
+from app.config import AUTH_ENABLED, SESSION_CLEANUP_INTERVAL, get_auth_exempt_paths
 from app.keri.identity import get_identity_manager, close_identity_manager
 from app.keri.issuer import get_credential_issuer, close_credential_issuer
 from app.keri.registry import get_registry_manager, close_registry_manager
@@ -25,16 +27,35 @@ configure_logging()
 log = logging.getLogger("vvp-issuer")
 
 
+async def _session_cleanup_task():
+    """Periodically clean up expired sessions."""
+    while True:
+        await asyncio.sleep(SESSION_CLEANUP_INTERVAL)
+        try:
+            store = get_session_store()
+            count = await store.cleanup_expired()
+            if count > 0:
+                log.debug(f"Session cleanup: removed {count} expired sessions")
+        except Exception as e:
+            log.error(f"Session cleanup error: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler for startup/shutdown."""
     # Startup: Initialize managers
     log.info("Starting VVP Issuer service...")
+    cleanup_task = None
+
     try:
         # Initialize API key store if auth is enabled
         if AUTH_ENABLED:
             store = get_api_key_store()
             log.info(f"Auth enabled: loaded {store.key_count} API keys")
+
+            # Start session cleanup background task
+            cleanup_task = asyncio.create_task(_session_cleanup_task())
+            log.info(f"Session cleanup task started (interval: {SESSION_CLEANUP_INTERVAL}s)")
         else:
             log.warning("Auth disabled: VVP_AUTH_ENABLED=false")
 
@@ -50,6 +71,16 @@ async def lifespan(app: FastAPI):
 
     # Shutdown: Close managers
     log.info("Shutting down VVP Issuer service...")
+
+    # Cancel session cleanup task
+    if cleanup_task:
+        cleanup_task.cancel()
+        try:
+            await cleanup_task
+        except asyncio.CancelledError:
+            pass
+        log.info("Session cleanup task stopped")
+
     await close_credential_issuer()
     await close_registry_manager()
     await close_identity_manager()
@@ -209,6 +240,7 @@ def redirect_benchmarks():
 # -----------------------------------------------------------------------------
 
 app.include_router(health.router)
+app.include_router(auth.router)
 app.include_router(identity.router)
 app.include_router(registry.router)
 app.include_router(schema.router)

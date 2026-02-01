@@ -1,0 +1,12 @@
+{
+  "_comment": "Default user is DISABLED. Enable via /admin/users UI or set VVP_USERS env var in production.",
+  "users": [
+    {
+      "email": "andrew.bale@rcnx.io",
+      "name": "Andrew Bale",
+      "password_hash": "$2b$12$qEkp8EfQlBlW1NqlH/3Q.eKoXlB8tsdjk6aXN8/p2yNWBBEFW4jEa",
+      "roles": ["issuer:admin", "issuer:operator", "issuer:readonly"],
+      "enabled": false
+    }
+  ]
+}

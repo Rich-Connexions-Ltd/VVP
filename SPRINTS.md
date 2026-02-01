@@ -21,6 +21,7 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 34 | Schema Management | COMPLETE | Sprint 29 |
 | 35 | E2E Integration Testing | COMPLETE | Sprint 33 |
 | 36 | Key Management & Rotation | COMPLETE | Sprint 30 |
+| 37 | Session-Based Authentication | COMPLETE | Sprint 30 |
 
 ---
 
@@ -604,6 +605,103 @@ tests/integration/
 
 ---
 
+## Sprint 37: Session-Based Authentication (COMPLETE)
+
+**Goal:** Implement session-based authentication for UI write operations, enabling users to log in once and perform authenticated operations without entering API keys for each request.
+
+**Prerequisites:** Sprint 30 (Security Model) complete.
+
+**Background:**
+Currently, API endpoints require API keys via the `X-API-Key` header. GET endpoints are public for UI access, but write operations (POST/DELETE) require authentication. This sprint adds session-based auth so UI users can:
+1. Log in once with their API key OR email/password
+2. Have a session cookie that persists across requests
+3. Perform write operations from the UI without manual API key entry
+
+**Deliverables:**
+- [x] Session management with secure cookies (HttpOnly, SameSite, Secure in production)
+- [x] Login/logout API endpoints (`POST /auth/login`, `POST /auth/logout`, `GET /auth/status`)
+- [x] Session store (in-memory with async locks; Redis stub for future)
+- [x] Login UI modal with tabbed interface for email/password and API key authentication
+- [x] Authenticated fetch wrapper (`authFetch()`) for UI JavaScript
+- [x] Dual-mode auth: checks both session cookie and `X-API-Key` header
+- [x] Session expiry and automatic cleanup via background task
+- [x] Logout functionality in UI header
+- [x] Login rate limiting (5 attempts per 15 minutes per IP)
+- [x] CSRF protection via `X-Requested-With` header for cookie-authenticated requests
+- [x] Tests for session lifecycle (login, auth, expiry, logout)
+- [x] **Bonus:** Username/password authentication with bcrypt password hashing
+- [x] **Bonus:** User management CRUD endpoints under `/admin/users`
+- [x] **Bonus:** User management UI in admin panel
+- [x] Session invalidation when user disabled or API key revoked (with `reload_if_stale()` checks)
+
+**Key Files:**
+```
+services/issuer/app/
+├── auth/
+│   ├── session.py           # SessionStore, SessionMiddleware
+│   └── api_key.py           # Updated to support session auth
+├── api/
+│   └── auth.py              # POST /auth/login, POST /auth/logout, GET /auth/status
+├── config.py                # SESSION_SECRET, SESSION_EXPIRY, etc.
+└── main.py                  # Session middleware integration
+services/issuer/web/
+├── shared.js                # authFetch() wrapper, session state management
+├── login.html               # Standalone login page (optional)
+└── *.html                   # Add login modal to existing UI pages
+services/issuer/tests/
+└── test_session.py          # Session management tests
+```
+
+**API Endpoints:**
+| Endpoint | Method | Auth | Description |
+|----------|--------|------|-------------|
+| `/auth/login` | POST | None | Exchange API key for session cookie |
+| `/auth/logout` | POST | Session | Invalidate current session |
+| `/auth/status` | GET | Session | Get current session status and user info |
+
+**Login Flow:**
+1. User visits UI page (e.g., `/ui/credentials`)
+2. UI checks session status via `GET /auth/status`
+3. If no session, show login modal prompting for API key
+4. User enters API key, UI calls `POST /auth/login` with key
+5. Server validates key, creates session, sets `vvp_session` cookie
+6. UI stores session state, enables write operations
+7. Subsequent requests use `authFetch()` which includes credentials
+
+**Session Cookie:**
+| Attribute | Value | Description |
+|-----------|-------|-------------|
+| Name | `vvp_session` | Session identifier |
+| HttpOnly | `true` | Prevent JavaScript access |
+| SameSite | `Lax` | CSRF protection |
+| Secure | `true` (prod) | HTTPS only in production |
+| Max-Age | `3600` (1 hour) | Session duration |
+
+**Configuration:**
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VVP_SESSION_SECRET` | (required) | Secret key for session signing |
+| `VVP_SESSION_EXPIRY` | `3600` | Session expiry in seconds |
+| `VVP_SESSION_STORE` | `memory` | Session backend (memory, redis) |
+
+**Technical Notes:**
+- Sessions stored server-side; cookie contains signed session ID only
+- Dual-mode auth: Accept either session cookie OR `X-API-Key` header
+- Session inherits roles from the API key used at login
+- In-memory store suitable for single-instance; Redis for multi-instance
+- CSRF protection via SameSite cookie + optional token for state-changing ops
+
+**Exit Criteria:**
+- [ ] Login via UI sets session cookie
+- [ ] Write operations work with session auth (no manual API key needed)
+- [ ] Session expires after configured duration
+- [ ] Logout clears session
+- [ ] Both session and API key auth work concurrently
+- [ ] UI shows logged-in state and user info
+- [ ] All session tests pass
+
+---
+
 ## Quick Reference
 
 To start a sprint, say:
@@ -617,6 +715,7 @@ To start a sprint, say:
 - "Sprint 34" - Schema management (import, SAID generation, UI)
 - "Sprint 35" - End-to-end integration testing (against Azure)
 - "Sprint 36" - Key management & rotation
+- "Sprint 37" - Session-based authentication (UI login flow)
 
 Each sprint follows the pair programming workflow:
 1. Plan phase (design, review, approval)

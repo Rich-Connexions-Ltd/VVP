@@ -17,9 +17,12 @@ class TestAuthentication:
         self, client_with_auth: AsyncClient
     ):
         """Unauthenticated requests to protected endpoints return 401."""
-        response = await client_with_auth.get("/identity")
+        # Use POST /identity which requires admin auth (GET is public for UI access)
+        response = await client_with_auth.post(
+            "/identity",
+            json={"name": "test", "publish_to_witnesses": False},
+        )
         assert response.status_code == 401
-        assert "API key required" in response.json()["detail"]
 
     async def test_invalid_key_returns_401(
         self, client_with_auth: AsyncClient, invalid_headers: dict

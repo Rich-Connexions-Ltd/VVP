@@ -29,6 +29,14 @@ log = logging.getLogger(__name__)
 # Default bcrypt cost factor (2^12 = 4096 iterations)
 BCRYPT_COST_FACTOR = 12
 
+# Session cookie name (must match api/auth.py)
+SESSION_COOKIE_NAME = "vvp_session"
+
+# CSRF protection headers
+CSRF_HEADER = "X-Requested-With"
+CSRF_HEADER_VALUE = "XMLHttpRequest"
+STATE_CHANGING_METHODS = {"POST", "PUT", "DELETE", "PATCH"}
+
 
 @dataclass
 class Principal(BaseUser):
@@ -266,10 +274,13 @@ def reset_api_key_store() -> None:
 
 
 class APIKeyBackend(AuthenticationBackend):
-    """Starlette authentication backend for API keys.
+    """Dual-mode authentication backend: session cookie OR API key.
 
-    Extracts API key from X-API-Key header and validates against
-    the configured key store.
+    Checks for authentication in this order:
+    1. Session cookie (vvp_session) - for browser-based UI access
+    2. X-API-Key header - for programmatic API access
+
+    CSRF protection is enforced for cookie-authenticated state-changing requests.
     """
 
     def __init__(self, exempt_paths: set[str] | None = None):
@@ -284,6 +295,9 @@ class APIKeyBackend(AuthenticationBackend):
         self, conn: HTTPConnection
     ) -> tuple[AuthCredentials, Principal] | None:
         """Authenticate a request.
+
+        Checks session cookie first, then falls back to API key header.
+        For cookie-based auth, enforces CSRF header on state-changing methods.
 
         Args:
             conn: The HTTP connection
@@ -301,11 +315,34 @@ class APIKeyBackend(AuthenticationBackend):
             if path.startswith(exempt):
                 return None
 
-        # Get API key from header
+        # === Check session cookie first ===
+        session_id = conn.cookies.get(SESSION_COOKIE_NAME)
+        if session_id:
+            # Import here to avoid circular dependency
+            from app.auth.session import get_session_store
+
+            session_store = get_session_store()
+            session = await session_store.get(session_id)
+
+            if session is not None:
+                # Valid session found - enforce CSRF for state-changing methods
+                method = conn.scope.get("method", "GET")
+                if method in STATE_CHANGING_METHODS:
+                    csrf_header = conn.headers.get(CSRF_HEADER)
+                    if csrf_header != CSRF_HEADER_VALUE:
+                        raise AuthenticationError(
+                            "CSRF header required for cookie-authenticated requests"
+                        )
+
+                return AuthCredentials(list(session.principal.roles)), session.principal
+
+            # Session invalid/expired - fall through to check API key
+
+        # === Check API key header ===
         api_key = conn.headers.get("X-API-Key")
 
         if not api_key:
-            # No key provided - let the route handler decide if auth is required
+            # No auth provided - let the route handler decide if auth is required
             return None
 
         # Check for stale config
@@ -320,7 +357,7 @@ class APIKeyBackend(AuthenticationBackend):
             # Note: We use the same error message for security (no info leak)
             raise AuthenticationError("Invalid API key")
 
-        # Create credentials from roles
+        # Create credentials from roles (no CSRF check for API key auth)
         return AuthCredentials(list(principal.roles)), principal
 
 

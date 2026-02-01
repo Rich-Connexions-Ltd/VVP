@@ -182,6 +182,420 @@ async function apiDelete(url) {
 }
 
 // =============================================================================
+// Session Authentication
+// =============================================================================
+
+/**
+ * Current session state, populated by checkAuthStatus().
+ */
+let currentSession = {
+  authenticated: false,
+  method: null,
+  keyId: null,
+  name: null,
+  roles: [],
+  expiresAt: null,
+};
+
+/**
+ * Single-flight guard for login modal.
+ * Prevents multiple concurrent login prompts.
+ */
+let loginModalPromise = null;
+
+/**
+ * Check current authentication status from the server.
+ * Updates currentSession state.
+ * @returns {Promise<Object>} Auth status
+ */
+async function checkAuthStatus() {
+  try {
+    const response = await fetch('/auth/status');
+    if (response.ok) {
+      const data = await response.json();
+      currentSession = {
+        authenticated: data.authenticated,
+        method: data.method,
+        keyId: data.key_id,
+        name: data.name,
+        roles: data.roles || [],
+        expiresAt: data.expires_at,
+      };
+    }
+  } catch (err) {
+    console.error('Failed to check auth status:', err);
+  }
+  return currentSession;
+}
+
+/**
+ * Show login modal and return promise that resolves when logged in.
+ * Uses single-flight pattern to prevent multiple concurrent modals.
+ * Supports both email/password and API key authentication.
+ * @returns {Promise<boolean>} True if login successful, false if cancelled
+ */
+function showLoginModal() {
+  // Reuse existing modal if already showing
+  if (loginModalPromise) {
+    return loginModalPromise;
+  }
+
+  loginModalPromise = new Promise((resolve) => {
+    const html = `
+      <div class="login-form">
+        <div class="login-tabs">
+          <button class="login-tab active" data-tab="user">Email/Password</button>
+          <button class="login-tab" data-tab="apikey">API Key</button>
+        </div>
+
+        <div class="login-tab-content active" id="login-tab-user">
+          <div class="login-field">
+            <label for="login-email">Email</label>
+            <input type="email" id="login-email" placeholder="Enter your email" autocomplete="email">
+          </div>
+          <div class="login-field">
+            <label for="login-password">Password</label>
+            <input type="password" id="login-password" placeholder="Enter your password" autocomplete="current-password">
+          </div>
+        </div>
+
+        <div class="login-tab-content" id="login-tab-apikey">
+          <div class="login-field">
+            <label for="login-api-key">API Key</label>
+            <input type="password" id="login-api-key" placeholder="Enter your API key" autocomplete="off">
+          </div>
+        </div>
+
+        <div id="login-error" class="error" style="display: none;"></div>
+        <div class="login-buttons">
+          <button id="login-submit" class="primary">Login</button>
+          <button id="login-cancel" class="secondary">Cancel</button>
+        </div>
+      </div>
+    `;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay login-modal-overlay';
+
+    let modalHtml = '<div class="modal login-modal">';
+    modalHtml += '<h3>Authentication Required</h3>';
+    modalHtml += html;
+    modalHtml += '</div>';
+
+    overlay.innerHTML = modalHtml;
+
+    // Store resolve function for handlers
+    overlay._loginResolve = resolve;
+    overlay._loginTab = 'user';  // Default to email/password
+
+    // Handle tab switching
+    overlay.querySelectorAll('.login-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        const tabName = tab.dataset.tab;
+        overlay._loginTab = tabName;
+
+        // Update tab buttons
+        overlay.querySelectorAll('.login-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+
+        // Update tab content
+        overlay.querySelectorAll('.login-tab-content').forEach(c => c.classList.remove('active'));
+        overlay.querySelector(`#login-tab-${tabName}`).classList.add('active');
+
+        // Focus appropriate input
+        if (tabName === 'user') {
+          overlay.querySelector('#login-email').focus();
+        } else {
+          overlay.querySelector('#login-api-key').focus();
+        }
+      });
+    });
+
+    // Handle cancel button
+    overlay.querySelector('#login-cancel').onclick = () => {
+      overlay.remove();
+      loginModalPromise = null;
+      resolve(false);
+    };
+
+    // Handle submit button
+    overlay.querySelector('#login-submit').onclick = () => submitLoginFromModal(overlay);
+
+    // Handle Enter key in inputs
+    overlay.querySelectorAll('input').forEach(input => {
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          submitLoginFromModal(overlay);
+        }
+      });
+    });
+
+    // Handle Escape key
+    const escHandler = (e) => {
+      if (e.key === 'Escape') {
+        overlay.remove();
+        document.removeEventListener('keydown', escHandler);
+        loginModalPromise = null;
+        resolve(false);
+      }
+    };
+    document.addEventListener('keydown', escHandler);
+    overlay._escHandler = escHandler;
+
+    // Handle overlay click (close on background click)
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) {
+        overlay.remove();
+        document.removeEventListener('keydown', overlay._escHandler);
+        loginModalPromise = null;
+        resolve(false);
+      }
+    });
+
+    document.body.appendChild(overlay);
+
+    // Focus email input after a short delay (for animation)
+    setTimeout(() => {
+      const input = document.getElementById('login-email');
+      if (input) input.focus();
+    }, 100);
+  }).finally(() => {
+    loginModalPromise = null;
+  });
+
+  return loginModalPromise;
+}
+
+/**
+ * Submit login from modal.
+ * Handles both email/password and API key authentication.
+ * @param {HTMLElement} overlay - The modal overlay element
+ */
+async function submitLoginFromModal(overlay) {
+  const errorEl = overlay.querySelector('#login-error');
+  const submitBtn = overlay.querySelector('#login-submit');
+  const resolve = overlay._loginResolve;
+  const loginTab = overlay._loginTab || 'user';
+
+  let body = {};
+
+  if (loginTab === 'user') {
+    // Email/password login
+    const email = overlay.querySelector('#login-email')?.value?.trim();
+    const password = overlay.querySelector('#login-password')?.value;
+
+    if (!email) {
+      errorEl.textContent = 'Email is required';
+      errorEl.style.display = 'block';
+      return;
+    }
+    if (!password) {
+      errorEl.textContent = 'Password is required';
+      errorEl.style.display = 'block';
+      return;
+    }
+
+    body = { email, password };
+  } else {
+    // API key login
+    const apiKey = overlay.querySelector('#login-api-key')?.value?.trim();
+
+    if (!apiKey) {
+      errorEl.textContent = 'API key is required';
+      errorEl.style.display = 'block';
+      return;
+    }
+
+    body = { api_key: apiKey };
+  }
+
+  setButtonLoading(submitBtn, 'Logging in...');
+  errorEl.style.display = 'none';
+
+  try {
+    const response = await fetch('/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    const result = await response.json();
+
+    if (response.status === 429) {
+      // Rate limited
+      errorEl.textContent = result.error || 'Too many attempts. Please try again later.';
+      errorEl.style.display = 'block';
+      resetButton(submitBtn);
+      return;
+    }
+
+    if (result.success) {
+      currentSession = {
+        authenticated: true,
+        method: 'session',
+        keyId: result.key_id,
+        name: result.name,
+        roles: result.roles || [],
+        expiresAt: result.expires_at,
+      };
+
+      // Clean up and resolve
+      if (overlay._escHandler) {
+        document.removeEventListener('keydown', overlay._escHandler);
+      }
+      overlay.remove();
+      showToast(`Logged in as ${result.name}`, 'success');
+      updateAuthUI();
+      resolve?.(true);
+    } else {
+      const errorMsg = loginTab === 'user' ? 'Invalid email or password' : 'Invalid API key';
+      errorEl.textContent = errorMsg;
+      errorEl.style.display = 'block';
+      resetButton(submitBtn);
+    }
+  } catch (err) {
+    errorEl.textContent = 'Login failed: ' + err.message;
+    errorEl.style.display = 'block';
+    resetButton(submitBtn);
+  }
+}
+
+/**
+ * Logout and clear session.
+ */
+async function logout() {
+  try {
+    await fetch('/auth/logout', { method: 'POST' });
+    currentSession = {
+      authenticated: false,
+      method: null,
+      keyId: null,
+      name: null,
+      roles: [],
+      expiresAt: null,
+    };
+    showToast('Logged out', 'info');
+    updateAuthUI();
+  } catch (err) {
+    console.error('Logout failed:', err);
+  }
+}
+
+/**
+ * Update UI elements to reflect auth state.
+ */
+function updateAuthUI() {
+  const authStatus = document.getElementById('auth-status');
+  if (authStatus) {
+    if (currentSession.authenticated) {
+      authStatus.innerHTML = `
+        <span class="auth-user">${escapeHtml(currentSession.name || currentSession.keyId)}</span>
+        <button onclick="logout()" class="small secondary">Logout</button>
+      `;
+    } else {
+      authStatus.innerHTML = `
+        <button onclick="showLoginModal()" class="small primary">Login</button>
+      `;
+    }
+  }
+}
+
+/**
+ * Make an authenticated API request.
+ * Shows login modal on 401, retries after successful login.
+ * Includes CSRF header for cookie-authenticated requests.
+ * @param {string} url - API endpoint
+ * @param {Object} options - Fetch options
+ * @returns {Promise<Response>} Fetch response
+ */
+async function authFetch(url, options = {}) {
+  const mergedOptions = {
+    ...options,
+    headers: {
+      'X-Requested-With': 'XMLHttpRequest', // CSRF protection
+      ...options.headers,
+    },
+  };
+
+  const response = await fetch(url, mergedOptions);
+
+  if (response.status === 401) {
+    // Try to login
+    const loggedIn = await showLoginModal();
+    if (loggedIn) {
+      // Retry the request with new session
+      return authFetch(url, options);
+    } else {
+      // User cancelled login
+      const error = new Error('Authentication required');
+      error.status = 401;
+      throw error;
+    }
+  }
+
+  return response;
+}
+
+/**
+ * Make an authenticated API request and parse JSON response.
+ * @param {string} url - API endpoint
+ * @param {Object} options - Fetch options
+ * @returns {Promise<Object>} Response data
+ */
+async function authRequest(url, options = {}) {
+  const defaultOptions = {
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  };
+
+  const mergedOptions = {
+    ...defaultOptions,
+    ...options,
+    headers: {
+      ...defaultOptions.headers,
+      ...options.headers,
+    },
+  };
+
+  const response = await authFetch(url, mergedOptions);
+  const data = await response.json();
+
+  if (!response.ok) {
+    const error = new Error(data.detail || data.message || 'Request failed');
+    error.status = response.status;
+    error.data = data;
+    throw error;
+  }
+
+  return data;
+}
+
+/**
+ * POST JSON data to an API endpoint with authentication.
+ * @param {string} url - API endpoint
+ * @param {Object} body - Request body
+ * @returns {Promise<Object>} Response data
+ */
+async function authPost(url, body) {
+  return authRequest(url, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+/**
+ * DELETE to an API endpoint with authentication.
+ * @param {string} url - API endpoint
+ * @returns {Promise<Object>} Response data
+ */
+async function authDelete(url) {
+  return authRequest(url, {
+    method: 'DELETE',
+  });
+}
+
+// =============================================================================
 // UI Helpers
 // =============================================================================
 
@@ -426,7 +840,7 @@ function showToast(message, type = 'info') {
 // Initialize on DOM ready
 // =============================================================================
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   initNavigation();
 
   // Add help button to header nav if it doesn't exist
@@ -439,4 +853,17 @@ document.addEventListener('DOMContentLoaded', () => {
     helpBtn.onclick = showIssuerHelp;
     nav.appendChild(helpBtn);
   }
+
+  // Add auth status container to header if it doesn't exist
+  const header = document.querySelector('header');
+  if (header && !document.getElementById('auth-status')) {
+    const authStatus = document.createElement('div');
+    authStatus.id = 'auth-status';
+    authStatus.className = 'auth-status';
+    header.appendChild(authStatus);
+  }
+
+  // Check auth status on page load
+  await checkAuthStatus();
+  updateAuthUI();
 });

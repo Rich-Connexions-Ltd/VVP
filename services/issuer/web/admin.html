@@ -241,6 +241,165 @@
       font-size: 0.85em;
       color: var(--vvp-muted);
     }
+
+    /* User Management Styles */
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .data-table th,
+    .data-table td {
+      padding: 0.75rem;
+      text-align: left;
+      border-bottom: 1px solid #dee2e6;
+    }
+    .data-table th {
+      background: #f8f9fa;
+      font-weight: 600;
+      font-size: 0.9em;
+      color: var(--vvp-muted);
+    }
+    .data-table tbody tr:hover {
+      background: #f8f9fa;
+    }
+    .data-table .actions {
+      display: flex;
+      gap: 0.5rem;
+    }
+    .data-table .actions button {
+      padding: 0.25rem 0.5rem;
+      font-size: 0.85em;
+    }
+    .badge-enabled {
+      background: var(--vvp-success);
+      color: white;
+    }
+    .badge-disabled {
+      background: var(--vvp-muted);
+      color: white;
+    }
+
+    /* Modal Styles */
+    .modal {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+    .modal-content {
+      background: white;
+      border-radius: 8px;
+      width: 90%;
+      max-width: 500px;
+      max-height: 90vh;
+      overflow-y: auto;
+    }
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 1rem;
+      border-bottom: 1px solid #dee2e6;
+    }
+    .modal-header h3 {
+      margin: 0;
+    }
+    .modal-close {
+      background: none;
+      border: none;
+      font-size: 1.5rem;
+      cursor: pointer;
+      padding: 0;
+      color: var(--vvp-muted);
+    }
+    .modal-close:hover {
+      color: var(--vvp-danger);
+    }
+
+    /* Form Styles */
+    .form-group {
+      padding: 0 1rem;
+      margin-bottom: 1rem;
+    }
+    .form-group label {
+      display: block;
+      margin-bottom: 0.25rem;
+      font-weight: 500;
+    }
+    .form-group input[type="text"],
+    .form-group input[type="email"],
+    .form-group input[type="password"] {
+      width: 100%;
+      padding: 0.5rem;
+      border: 1px solid #dee2e6;
+      border-radius: 4px;
+      font-size: 1rem;
+    }
+    .form-group small {
+      display: block;
+      margin-top: 0.25rem;
+      color: var(--vvp-muted);
+      font-size: 0.85em;
+    }
+    .checkbox-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .checkbox-group label {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-weight: normal;
+    }
+    .form-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.5rem;
+      padding: 1rem;
+      border-top: 1px solid #dee2e6;
+      margin-top: 1rem;
+    }
+    .btn-secondary {
+      background: #6c757d;
+      color: white;
+      border: none;
+      padding: 0.5rem 1rem;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .btn-secondary:hover {
+      background: #5a6268;
+    }
+    .btn-primary {
+      background: var(--vvp-primary);
+      color: white;
+      border: none;
+      padding: 0.5rem 1rem;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .btn-primary:hover {
+      opacity: 0.9;
+    }
+    .btn-danger {
+      background: var(--vvp-danger);
+      color: white;
+      border: none;
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.85em;
+    }
+    .btn-danger:hover {
+      opacity: 0.9;
+    }
   </style>
 </head>
 <body>
@@ -382,6 +541,78 @@
         <button onclick="reloadAuth()">Reload API Keys</button>
       </div>
     </details>
+
+    <!-- User Management -->
+    <details class="config-section" open>
+      <summary>
+        <span class="section-title">User Management</span>
+        <span class="badge badge-info" id="user-count">Loading...</span>
+      </summary>
+      <div style="padding: 1rem;">
+        <div style="margin-bottom: 1rem;">
+          <button onclick="showAddUserModal()">Add User</button>
+          <button onclick="reloadUsers()">Reload Users</button>
+        </div>
+        <table class="data-table" id="users-table">
+          <thead>
+            <tr>
+              <th>Email</th>
+              <th>Name</th>
+              <th>Roles</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="users-tbody">
+            <tr><td colspan="5">Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
+
+    <!-- Add/Edit User Modal -->
+    <div id="user-modal" class="modal" style="display: none;">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 id="user-modal-title">Add User</h3>
+          <button class="modal-close" onclick="closeUserModal()">&times;</button>
+        </div>
+        <form id="user-form" onsubmit="submitUserForm(event)">
+          <div class="form-group">
+            <label for="user-email">Email</label>
+            <input type="email" id="user-email" name="email" required>
+          </div>
+          <div class="form-group">
+            <label for="user-name">Name</label>
+            <input type="text" id="user-name" name="name" required>
+          </div>
+          <div class="form-group">
+            <label for="user-password">Password</label>
+            <input type="password" id="user-password" name="password">
+            <small id="password-hint">Leave blank to keep existing password (edit only)</small>
+          </div>
+          <div class="form-group">
+            <label for="user-roles">Roles</label>
+            <div class="checkbox-group">
+              <label><input type="checkbox" name="roles" value="issuer:admin"> Admin</label>
+              <label><input type="checkbox" name="roles" value="issuer:operator"> Operator</label>
+              <label><input type="checkbox" name="roles" value="issuer:readonly" checked> Read-only</label>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>
+              <input type="checkbox" id="user-enabled" name="enabled" checked>
+              Enabled
+            </label>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="btn-secondary" onclick="closeUserModal()">Cancel</button>
+            <button type="submit" class="btn-primary" id="user-submit-btn">Add User</button>
+          </div>
+          <input type="hidden" id="user-edit-email" value="">
+        </form>
+      </div>
+    </div>
 
     <!-- Witness Configuration -->
     <details class="config-section">
@@ -701,10 +932,210 @@
       }
     }
 
+    // ===== User Management Functions =====
+
+    async function loadUsers() {
+      try {
+        const resp = await authFetch('/admin/users');
+        if (!resp.ok) {
+          if (resp.status === 401) {
+            document.getElementById('user-count').textContent = 'Auth Required';
+            document.getElementById('users-tbody').innerHTML = '<tr><td colspan="5">Authentication required</td></tr>';
+            return;
+          }
+          throw new Error('Failed to fetch users');
+        }
+        const data = await resp.json();
+
+        document.getElementById('user-count').textContent = data.count + ' users';
+
+        const tbody = document.getElementById('users-tbody');
+        if (data.users.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="5">No users configured</td></tr>';
+          return;
+        }
+
+        tbody.innerHTML = data.users.map(user => {
+          const rolesBadges = user.roles.map(r => {
+            const roleName = r.replace('issuer:', '');
+            return `<span class="badge badge-info">${roleName}</span>`;
+          }).join(' ');
+
+          const statusBadge = user.enabled
+            ? '<span class="badge badge-enabled">Enabled</span>'
+            : '<span class="badge badge-disabled">Disabled</span>';
+
+          return `
+            <tr>
+              <td>${escapeHtml(user.email)}</td>
+              <td>${escapeHtml(user.name)}</td>
+              <td>${rolesBadges}</td>
+              <td>${statusBadge}</td>
+              <td class="actions">
+                <button onclick="editUser('${escapeHtml(user.email)}')">Edit</button>
+                <button class="btn-danger" onclick="deleteUser('${escapeHtml(user.email)}')">Delete</button>
+              </td>
+            </tr>
+          `;
+        }).join('');
+      } catch (err) {
+        console.error('Failed to load users:', err);
+        document.getElementById('users-tbody').innerHTML = '<tr><td colspan="5">Failed to load users</td></tr>';
+      }
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    function showAddUserModal() {
+      document.getElementById('user-modal-title').textContent = 'Add User';
+      document.getElementById('user-submit-btn').textContent = 'Add User';
+      document.getElementById('user-form').reset();
+      document.getElementById('user-email').disabled = false;
+      document.getElementById('user-password').required = true;
+      document.getElementById('password-hint').style.display = 'none';
+      document.getElementById('user-edit-email').value = '';
+
+      // Default to readonly role
+      document.querySelectorAll('#user-form input[name="roles"]').forEach(cb => {
+        cb.checked = cb.value === 'issuer:readonly';
+      });
+
+      document.getElementById('user-modal').style.display = 'flex';
+    }
+
+    async function editUser(email) {
+      try {
+        const resp = await authFetch('/admin/users');
+        if (!resp.ok) throw new Error('Failed to fetch users');
+        const data = await resp.json();
+
+        const user = data.users.find(u => u.email === email);
+        if (!user) {
+          showToast('User not found', 'error');
+          return;
+        }
+
+        document.getElementById('user-modal-title').textContent = 'Edit User';
+        document.getElementById('user-submit-btn').textContent = 'Save Changes';
+        document.getElementById('user-email').value = user.email;
+        document.getElementById('user-email').disabled = true;
+        document.getElementById('user-name').value = user.name;
+        document.getElementById('user-password').value = '';
+        document.getElementById('user-password').required = false;
+        document.getElementById('password-hint').style.display = 'block';
+        document.getElementById('user-enabled').checked = user.enabled;
+        document.getElementById('user-edit-email').value = email;
+
+        // Set roles
+        document.querySelectorAll('#user-form input[name="roles"]').forEach(cb => {
+          cb.checked = user.roles.includes(cb.value);
+        });
+
+        document.getElementById('user-modal').style.display = 'flex';
+      } catch (err) {
+        showToast('Failed to load user: ' + err.message, 'error');
+      }
+    }
+
+    function closeUserModal() {
+      document.getElementById('user-modal').style.display = 'none';
+    }
+
+    async function submitUserForm(event) {
+      event.preventDefault();
+
+      const form = event.target;
+      const editEmail = document.getElementById('user-edit-email').value;
+      const isEdit = !!editEmail;
+
+      const roles = Array.from(form.querySelectorAll('input[name="roles"]:checked'))
+        .map(cb => cb.value);
+
+      const data = {
+        name: form.name.value,
+        roles: roles,
+        enabled: form.enabled.checked,
+      };
+
+      if (!isEdit) {
+        data.email = form.email.value;
+        data.password = form.password.value;
+      } else if (form.password.value) {
+        data.password = form.password.value;
+      }
+
+      try {
+        const url = isEdit ? `/admin/users/${encodeURIComponent(editEmail)}` : '/admin/users';
+        const method = isEdit ? 'PATCH' : 'POST';
+
+        const resp = await authFetch(url, {
+          method: method,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+        });
+
+        if (!resp.ok) {
+          const error = await resp.json();
+          throw new Error(error.detail || 'Failed to save user');
+        }
+
+        showToast(isEdit ? 'User updated successfully' : 'User created successfully', 'success');
+        closeUserModal();
+        loadUsers();
+      } catch (err) {
+        showToast('Failed to save user: ' + err.message, 'error');
+      }
+    }
+
+    async function deleteUser(email) {
+      if (!confirm(`Are you sure you want to delete user "${email}"?`)) {
+        return;
+      }
+
+      try {
+        const resp = await authFetch(`/admin/users/${encodeURIComponent(email)}`, {
+          method: 'DELETE',
+        });
+
+        if (!resp.ok) {
+          const error = await resp.json();
+          throw new Error(error.detail || 'Failed to delete user');
+        }
+
+        const result = await resp.json();
+        showToast(`User deleted. ${result.sessions_invalidated} sessions invalidated.`, 'success');
+        loadUsers();
+      } catch (err) {
+        showToast('Failed to delete user: ' + err.message, 'error');
+      }
+    }
+
+    async function reloadUsers() {
+      try {
+        const resp = await authFetch('/admin/users/reload', {
+          method: 'POST',
+        });
+        const result = await resp.json();
+        if (result.success) {
+          showToast('Reloaded ' + result.user_count + ' users', 'success');
+          loadUsers();
+        } else {
+          showToast('Failed to reload: ' + result.message, 'error');
+        }
+      } catch (err) {
+        showToast('Failed to reload users: ' + err.message, 'error');
+      }
+    }
+
     // Load data on page load
     document.addEventListener('DOMContentLoaded', () => {
       loadAdminData();
       loadDeploymentTests();
+      loadUsers();
     });
   </script>
 </body>
