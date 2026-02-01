@@ -54,11 +54,9 @@ elif [ "$MODE" = "docker" ]; then
     export VVP_ISSUER_URL="${VVP_ISSUER_URL:-http://localhost:8001}"
     export VVP_VERIFIER_URL="${VVP_VERIFIER_URL:-http://localhost:8000}"
 elif [ "$MODE" = "azure" ]; then
-    # Azure URLs should be set via environment
-    if [ -z "$VVP_ISSUER_URL" ] || [ -z "$VVP_VERIFIER_URL" ]; then
-        echo "Error: VVP_ISSUER_URL and VVP_VERIFIER_URL must be set for Azure mode"
-        exit 1
-    fi
+    # Default to production Azure FQDNs
+    export VVP_ISSUER_URL="${VVP_ISSUER_URL:-https://vvp-issuer.rcnx.io}"
+    export VVP_VERIFIER_URL="${VVP_VERIFIER_URL:-https://vvp-verifier.rcnx.io}"
 fi
 
 # Select markers based on mode

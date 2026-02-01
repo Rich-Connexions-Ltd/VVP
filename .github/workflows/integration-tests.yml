@@ -184,8 +184,8 @@ jobs:
       - name: Run Azure integration tests
         env:
           VVP_TEST_MODE: azure
-          VVP_ISSUER_URL: ${{ secrets.AZURE_ISSUER_URL }}
-          VVP_VERIFIER_URL: ${{ secrets.AZURE_VERIFIER_URL }}
+          VVP_ISSUER_URL: https://vvp-issuer.rcnx.io
+          VVP_VERIFIER_URL: https://vvp-verifier.rcnx.io
           VVP_TEST_API_KEY: ${{ secrets.AZURE_TEST_API_KEY }}
           VVP_AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
           VVP_BENCHMARK_OUTPUT_DIR: ${{ github.workspace }}/benchmark-output
