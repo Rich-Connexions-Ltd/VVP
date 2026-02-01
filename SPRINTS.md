@@ -17,7 +17,7 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 30 | Security Model | COMPLETE | Sprint 29 |
 | 31 | ACDC Issuance | COMPLETE | Sprint 30 |
 | 32 | Dossier Assembly | COMPLETE | Sprint 31 |
-| 33 | Azure Deployment | Ready | Sprint 32 |
+| 33 | Azure Deployment | IN PROGRESS | Sprint 32 |
 | 34 | Schema Management | COMPLETE | Sprint 29 |
 | 35 | E2E Integration Testing | Ready | Sprint 33 |
 
@@ -377,53 +377,68 @@ services/issuer/app/
 
 ---
 
-## Sprint 33: Azure Deployment
+## Sprint 33: Azure Deployment (IN PROGRESS)
 
 **Goal:** Deploy issuer to Azure alongside verifier.
 
+**Status:** CI/CD and documentation complete. Azure resource provisioning pending.
+
+**Note:** vvp-env does NOT have VNet integration, so using Azure Files SMB (not NFS) with single-replica mitigation.
+
 **Deliverables:**
 - [ ] Azure Container App configuration (internal ingress)
-- [ ] Azure Files for Keeper persistence
+- [ ] Azure Files for Keeper persistence (SMB fallback)
 - [ ] Key Vault integration for API keys
-- [ ] CI/CD pipeline updates
-- [ ] Backup/restore procedures
-- [ ] Consider UI functionality needed to expose this sprint's capabilities
+- [x] CI/CD pipeline updates (`.github/workflows/deploy.yml`)
+- [x] Backup/restore procedures (`Documentation/AZURE_RESTORE.md`)
+- [x] Deployment documentation (`Documentation/AZURE_DEPLOYMENT.md`)
+- [x] Verification scripts (`services/issuer/scripts/verify-azure-deployment.sh`)
 
 **Infrastructure:**
-| Component | Azure Service |
-|-----------|---------------|
-| Issuer Service | Container App (internal) |
-| Keeper Storage | Azure Files (Premium) |
-| Secrets | Key Vault |
-| Logging | Log Analytics |
-| Backup | Blob Storage |
+| Component | Azure Service | Status |
+|-----------|---------------|--------|
+| Issuer Service | Container App (internal) | Pending |
+| Keeper Storage | Azure Files (SMB) | Pending |
+| Secrets | Key Vault | Pending |
+| Logging | Log Analytics | Auto |
+| Backup | Recovery Services | Pending |
 
 **Network Configuration:**
 ```
-Azure VNet
-├── Public Subnet
-│   └── Verifier Container App (external)
-└── Private Subnet
-    ├── Issuer Container App (internal)
-    └── Witness Container Apps (internal)
+Azure Container Apps Environment (vvp-env)
+├── vvp-verifier (external ingress) ─── Public Internet
+└── vvp-issuer (internal ingress) ─── Internal Only
+    └── Azure Files SMB (/data/vvp-issuer)
 ```
 
 **CI/CD Updates:**
 ```yaml
 jobs:
-  deploy-issuer:
-    needs: [test, deploy-verifier]
-    steps:
-      - Build issuer image
-      - Push to ACR
-      - Deploy with internal ingress
+  test-verifier:    # Tests verifier (79% coverage)
+  test-issuer:      # Tests issuer (60% coverage)
+  deploy-verifier:  # Builds and deploys verifier
+  deploy-issuer:    # Builds and deploys issuer (internal ingress)
 ```
 
+**Key Files:**
+```
+.github/workflows/deploy.yml              # Updated CI/CD
+Documentation/AZURE_DEPLOYMENT.md         # Setup guide
+Documentation/AZURE_RESTORE.md            # Restore procedures
+services/issuer/scripts/verify-azure-deployment.sh
+scripts/monitor-issuer-deploy.sh
+```
+
+**Manual Steps Required:**
+1. Run Phase 1 commands from `Documentation/AZURE_DEPLOYMENT.md`
+2. Configure backup via `Documentation/AZURE_RESTORE.md`
+3. Verify deployment with `./services/issuer/scripts/verify-azure-deployment.sh`
+
 **Exit Criteria:**
-- End-to-end: issue in Azure, verify in Azure
-- Issuer not accessible from public internet
-- Keeper persists across restarts
-- Backup/restore tested
+- [ ] End-to-end: issue in Azure, verify in Azure
+- [ ] Issuer not accessible from public internet
+- [ ] Keeper persists across restarts
+- [ ] Backup/restore tested
 
 ---
 

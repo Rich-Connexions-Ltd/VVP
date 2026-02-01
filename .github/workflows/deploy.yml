@@ -79,8 +79,7 @@ jobs:
           ldconfig -p | grep libsodium || echo "libsodium found in apt paths"
 
       - name: Install keripy
-        working-directory: keripy
-        run: pip install -e .
+        run: pip install keri>=1.2.0
 
       - name: Install common package
         working-directory: common
@@ -108,7 +107,7 @@ jobs:
   # DEPLOY VERIFIER
   # =========================================================================
   deploy-verifier:
-    needs: [test-verifier, test-issuer]
+    needs: [test-verifier, test-issuer, verify-witnesses]
     runs-on: ubuntu-latest
 
     steps:
@@ -146,7 +145,7 @@ jobs:
   # DEPLOY ISSUER
   # =========================================================================
   deploy-issuer:
-    needs: [test-verifier, test-issuer]
+    needs: [test-verifier, test-issuer, verify-witnesses]
     runs-on: ubuntu-latest
 
     steps:
@@ -179,3 +178,136 @@ jobs:
             --image "$IMAGE" \
             --min-replicas 1 \
             --set-env-vars "GIT_SHA=${{ github.sha }}" "GITHUB_REPOSITORY=${{ github.repository }}"
+
+  # =========================================================================
+  # BUILD WITNESS IMAGE
+  # =========================================================================
+  # Build the custom witness image once, then deploy to all witnesses
+  build-witness-image:
+    needs: [test-verifier, test-issuer]
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.build.outputs.image }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Login to ACR
+        run: |
+          az acr login -n "${{ secrets.ACR_NAME }}"
+
+      - name: Build and push witness image
+        id: build
+        run: |
+          IMAGE="${{ secrets.ACR_LOGIN_SERVER }}/vvp-witness:${{ github.sha }}"
+          echo "Building witness image: $IMAGE"
+          docker build -t "$IMAGE" -f services/witness/Dockerfile .
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
+
+  # =========================================================================
+  # DEPLOY WITNESSES
+  # =========================================================================
+  # Deploy the custom witness image to each witness container app
+  deploy-witnesses:
+    needs: [build-witness-image]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        witness:
+          - name: vvp-witness1
+            witness_name: wan
+            http_port: 5642
+            tcp_port: 5632
+          - name: vvp-witness2
+            witness_name: wil
+            http_port: 5643
+            tcp_port: 5633
+          - name: vvp-witness3
+            witness_name: wes
+            http_port: 5644
+            tcp_port: 5634
+
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy witness
+        run: |
+          IMAGE="${{ needs.build-witness-image.outputs.image }}"
+          echo "Deploying ${{ matrix.witness.name }} with image: $IMAGE"
+
+          # Update the container app with the new image and environment variables
+          az containerapp update \
+            --name ${{ matrix.witness.name }} \
+            --resource-group ${{ secrets.AZURE_RG }} \
+            --image "$IMAGE" \
+            --set-env-vars \
+              "WITNESS_NAME=${{ matrix.witness.witness_name }}" \
+              "HTTP_PORT=${{ matrix.witness.http_port }}" \
+              "TCP_PORT=${{ matrix.witness.tcp_port }}" \
+              "GIT_SHA=${{ github.sha }}"
+
+      - name: Wait for witness to be ready
+        run: |
+          echo "Waiting for witness ${{ matrix.witness.name }} to be ready..."
+          for i in {1..30}; do
+            STATUS=$(az containerapp show \
+              --name ${{ matrix.witness.name }} \
+              --resource-group ${{ secrets.AZURE_RG }} \
+              --query "properties.runningStatus" -o tsv)
+            if [ "$STATUS" = "Running" ]; then
+              echo "Witness is running"
+              break
+            fi
+            echo "Attempt $i/30: Status is $STATUS, waiting..."
+            sleep 10
+          done
+
+  # =========================================================================
+  # VERIFY WITNESSES
+  # =========================================================================
+  verify-witnesses:
+    needs: [deploy-witnesses]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        witness:
+          - name: vvp-witness1
+            aid: BBilc4-L3tFUnfM_wJr4S4OJanAv_VmF_dJNN6vkf2Ha
+          - name: vvp-witness2
+            aid: BLskRTInXnMxWaGqcpSyMgo0nYbalW99cGZESrz3zapM
+          - name: vvp-witness3
+            aid: BIKKuvBwpmDVA4Ds-EpL5bt9OqPzWPja2LigFYZN2YfX
+
+    steps:
+      - name: Verify witness OOBI endpoint
+        run: |
+          WITNESS_URL="https://${{ matrix.witness.name }}.rcnx.io"
+          OOBI_URL="${WITNESS_URL}/oobi/${{ matrix.witness.aid }}/controller"
+          echo "Checking OOBI endpoint: $OOBI_URL"
+
+          # Retry a few times in case witness is still warming up
+          for i in {1..5}; do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "$OOBI_URL" || echo "000")
+            echo "Attempt $i: HTTP response code: $HTTP_CODE"
+            if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "202" ]; then
+              echo "Witness OOBI endpoint is healthy"
+              exit 0
+            fi
+            sleep 10
+          done
+
+          echo "::warning::Witness OOBI endpoint returned $HTTP_CODE after 5 attempts"

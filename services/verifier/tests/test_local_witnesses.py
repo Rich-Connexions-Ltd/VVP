@@ -7,9 +7,9 @@ They require witnesses to be running (via ./scripts/local-witnesses.sh start).
 Run with: pytest tests/test_local_witnesses.py -v --run-local-witnesses
 
 NOTE: These tests are skipped by default. Use --run-local-witnesses to enable them.
+The pytest hooks (pytest_addoption, pytest_configure, pytest_collection_modifyitems)
+and the witness_base_url fixture are defined in conftest.py.
 """
-
-import os
 
 import httpx
 import pytest
@@ -26,40 +26,6 @@ DEMO_WITNESS_PORTS = {
     "wil": 5643,
     "wes": 5644,
 }
-
-
-def pytest_addoption(parser):
-    """Add --run-local-witnesses option to pytest."""
-    parser.addoption(
-        "--run-local-witnesses",
-        action="store_true",
-        default=False,
-        help="Run tests that require local witnesses (docker-compose)",
-    )
-
-
-def pytest_configure(config):
-    """Register the local_witnesses marker."""
-    config.addinivalue_line(
-        "markers", "local_witnesses: mark test as requiring local witnesses"
-    )
-
-
-def pytest_collection_modifyitems(config, items):
-    """Skip local_witnesses tests unless --run-local-witnesses is provided."""
-    if config.getoption("--run-local-witnesses"):
-        return
-
-    skip_marker = pytest.mark.skip(reason="Need --run-local-witnesses to run")
-    for item in items:
-        if "local_witnesses" in item.keywords:
-            item.add_marker(skip_marker)
-
-
-@pytest.fixture
-def witness_base_url():
-    """Get witness base URL from environment or use default localhost."""
-    return os.getenv("VVP_LOCAL_WITNESS_HOST", "http://127.0.0.1")
 
 
 class TestWitnessConnectivity:
