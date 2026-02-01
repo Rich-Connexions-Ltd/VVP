@@ -695,13 +695,13 @@ services/issuer/tests/
 - CSRF protection via SameSite cookie + optional token for state-changing ops
 
 **Exit Criteria:**
-- [ ] Login via UI sets session cookie
-- [ ] Write operations work with session auth (no manual API key needed)
-- [ ] Session expires after configured duration
-- [ ] Logout clears session
-- [ ] Both session and API key auth work concurrently
-- [ ] UI shows logged-in state and user info
-- [ ] All session tests pass
+- [x] Login via UI sets session cookie
+- [x] Write operations work with session auth (no manual API key needed)
+- [x] Session expires after configured duration
+- [x] Logout clears session
+- [x] Both session and API key auth work concurrently
+- [x] UI shows logged-in state and user info
+- [x] All session tests pass
 
 ---
 
