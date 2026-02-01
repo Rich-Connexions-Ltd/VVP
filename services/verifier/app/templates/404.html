@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+
+{% block title %}Page Not Found - VVP Verifier{% endblock %}
+{% block header %}404{% endblock %}
+
+{% block content %}
+<section class="error-page">
+    <h2>Page Not Found</h2>
+    <p>The page you're looking for doesn't exist or has been moved.</p>
+    <div class="error-actions">
+        <a href="/" role="button">Go to Home</a>
+        <a href="/verify/simple" role="button" class="secondary">Try Quick Verify</a>
+    </div>
+</section>
+{% endblock %}

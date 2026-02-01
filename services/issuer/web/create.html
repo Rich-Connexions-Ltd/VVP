@@ -1,194 +1,26 @@
-<!doctype html>
-<html>
+<!DOCTYPE html>
+<html lang="en">
   <head>
-    <meta charset="utf-8"/>
-    <title>VVP Issuer - Create Identity</title>
-    <style>
-      body {
-        font-family: system-ui, -apple-system, sans-serif;
-        margin: 0;
-        padding: 2rem;
-        max-width: 900px;
-        background: #f8f9fa;
-      }
-      h1 { color: #2c3e50; margin-bottom: 0.5rem; }
-      .subtitle { color: #666; margin-bottom: 2rem; }
-      .card {
-        background: white;
-        border-radius: 8px;
-        padding: 1.5rem;
-        margin-bottom: 1.5rem;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-      }
-      .card h2 { margin-top: 0; color: #34495e; }
-      label { display: block; margin-bottom: 0.5rem; font-weight: 500; }
-      input[type="text"] {
-        width: 100%;
-        padding: 0.75rem;
-        border: 1px solid #ddd;
-        border-radius: 4px;
-        font-size: 1rem;
-        box-sizing: border-box;
-      }
-      input[type="text"]:focus {
-        outline: none;
-        border-color: #3498db;
-        box-shadow: 0 0 0 2px rgba(52,152,219,0.2);
-      }
-      .checkbox-row {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        margin: 1rem 0;
-      }
-      .checkbox-row input { width: auto; }
-      .checkbox-row label { margin: 0; font-weight: normal; }
-      button {
-        background: #3498db;
-        color: white;
-        border: none;
-        padding: 0.75rem 1.5rem;
-        border-radius: 4px;
-        font-size: 1rem;
-        cursor: pointer;
-        transition: background 0.2s;
-      }
-      button:hover { background: #2980b9; }
-      button:disabled { background: #bdc3c7; cursor: not-allowed; }
-      .success {
-        background: #d4edda;
-        border: 1px solid #c3e6cb;
-        color: #155724;
-        padding: 1rem;
-        border-radius: 4px;
-        margin-top: 1rem;
-      }
-      .error {
-        background: #f8d7da;
-        border: 1px solid #f5c6cb;
-        color: #721c24;
-        padding: 1rem;
-        border-radius: 4px;
-        margin-top: 1rem;
-      }
-      .result-field {
-        margin: 0.75rem 0;
-        padding: 0.5rem;
-        background: #f8f9fa;
-        border-radius: 4px;
-      }
-      .result-field strong { color: #495057; }
-      .result-field code {
-        display: block;
-        margin-top: 0.25rem;
-        padding: 0.5rem;
-        background: #e9ecef;
-        border-radius: 4px;
-        font-family: 'SFMono-Regular', Consolas, monospace;
-        font-size: 0.85rem;
-        word-break: break-all;
-      }
-      .oobi-url {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        margin: 0.25rem 0;
-      }
-      .oobi-url code {
-        flex: 1;
-        margin: 0;
-        font-size: 0.8rem;
-      }
-      .copy-btn {
-        padding: 0.25rem 0.5rem;
-        font-size: 0.75rem;
-        background: #6c757d;
-      }
-      .copy-btn:hover { background: #5a6268; }
-      .identity-list {
-        display: grid;
-        gap: 1rem;
-      }
-      .identity-item {
-        background: #f8f9fa;
-        border: 1px solid #dee2e6;
-        border-radius: 4px;
-        padding: 1rem;
-      }
-      .identity-item h4 { margin: 0 0 0.5rem 0; color: #2c3e50; }
-      .identity-item .aid {
-        font-family: monospace;
-        font-size: 0.85rem;
-        color: #6c757d;
-        word-break: break-all;
-      }
-      .identity-meta {
-        display: flex;
-        gap: 1rem;
-        margin-top: 0.5rem;
-        font-size: 0.85rem;
-        color: #666;
-      }
-      .badge {
-        display: inline-block;
-        padding: 0.125rem 0.5rem;
-        border-radius: 12px;
-        font-size: 0.75rem;
-        font-weight: 500;
-      }
-      .badge-transferable { background: #d4edda; color: #155724; }
-      .badge-non-transferable { background: #f8d7da; color: #721c24; }
-      .loading { opacity: 0.6; pointer-events: none; }
-      .spinner {
-        display: inline-block;
-        width: 1rem;
-        height: 1rem;
-        border: 2px solid #fff;
-        border-top-color: transparent;
-        border-radius: 50%;
-        animation: spin 0.8s linear infinite;
-        margin-right: 0.5rem;
-      }
-      @keyframes spin { to { transform: rotate(360deg); } }
-      .publish-results { margin-top: 1rem; }
-      .witness-result {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        padding: 0.25rem 0;
-        font-size: 0.85rem;
-      }
-      .witness-success { color: #28a745; }
-      .witness-fail { color: #dc3545; }
-      .nav-links {
-        display: flex;
-        gap: 1rem;
-        margin-bottom: 1.5rem;
-      }
-      .nav-links a {
-        color: #3498db;
-        text-decoration: none;
-        padding: 0.5rem 1rem;
-        border-radius: 4px;
-        background: white;
-        box-shadow: 0 1px 2px rgba(0,0,0,0.1);
-      }
-      .nav-links a:hover { background: #e8f4ff; }
-      .nav-links a.active {
-        background: #3498db;
-        color: white;
-      }
-    </style>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VVP Issuer - Identities</title>
+    <link rel="stylesheet" href="/static/styles.css">
   </head>
   <body>
-    <h1>VVP Issuer</h1>
-    <p class="subtitle">Create and manage KERI identities for credential issuance</p>
+    <header class="site-header">
+      <a href="/ui/" class="logo">VVP Issuer</a>
+      <nav class="nav-links">
+        <a href="/ui/identity" class="active">Identities</a>
+        <a href="/ui/registry">Registries</a>
+        <a href="/ui/schemas">Schemas</a>
+        <a href="/ui/credentials">Credentials</a>
+        <a href="/ui/dossier">Dossiers</a>
+        <a href="/ui/admin">Admin</a>
+      </nav>
+    </header>
 
-    <nav class="nav-links">
-      <a href="/create" class="active">Identities</a>
-      <a href="/registry/ui">Registries</a>
-      <a href="/schemas/ui">Schemas</a>
-    </nav>
+    <h1>Identity Management</h1>
+    <p class="subtitle">Create and manage KERI identities for credential issuance</p>
 
     <div class="card">
       <h2>Create New Identity</h2>
@@ -408,5 +240,6 @@
       // Initial load
       loadIdentities();
     </script>
+    <script src="/static/shared.js"></script>
   </body>
 </html>

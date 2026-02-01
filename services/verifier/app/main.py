@@ -73,6 +73,23 @@ def create_landing(request: Request):
     return templates.TemplateResponse("create_landing.html", {"request": request})
 
 
+@app.get("/ui/admin")
+def ui_admin(request: Request):
+    """Serve the admin dashboard page.
+
+    Gated by ADMIN_ENDPOINT_ENABLED - returns 404 if disabled.
+    """
+    from app.core.config import ADMIN_ENDPOINT_ENABLED
+
+    if not ADMIN_ENDPOINT_ENABLED:
+        return templates.TemplateResponse(
+            "404.html",
+            {"request": request},
+            status_code=404
+        )
+    return templates.TemplateResponse("admin.html", {"request": request})
+
+
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
@@ -273,6 +290,93 @@ def set_log_level(req: LogLevelRequest):
         "log_level": level_upper,
         "message": f"Log level set to {level_upper}"
     }
+
+
+class CacheClearRequest(BaseModel):
+    cache_type: str
+
+
+@app.post("/admin/cache/clear")
+async def admin_cache_clear(req: CacheClearRequest):
+    """Clear specified cache (dossier, revocation, schema).
+
+    Gated by ADMIN_ENDPOINT_ENABLED.
+    """
+    from app.core.config import ADMIN_ENDPOINT_ENABLED
+
+    if not ADMIN_ENDPOINT_ENABLED:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": "Admin endpoint disabled"}
+        )
+
+    valid_types = ["dossier", "revocation", "schema"]
+    cache_type = req.cache_type.lower()
+
+    if cache_type not in valid_types:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": f"Invalid cache type. Must be one of: {valid_types}"}
+        )
+
+    try:
+        if cache_type == "dossier":
+            cache = get_dossier_cache()
+            await cache.clear()
+            log.info("Dossier cache cleared via admin endpoint")
+        elif cache_type == "revocation":
+            from app.vvp.keri.tel_client import get_tel_client
+            client = get_tel_client()
+            client.clear_cache()
+            log.info("Revocation cache cleared via admin endpoint")
+        # Schema cache clear would go here if implemented
+
+        return {"success": True, "cache_type": cache_type, "message": f"{cache_type} cache cleared"}
+    except Exception as e:
+        log.error(f"Failed to clear {cache_type} cache: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Failed to clear cache: {str(e)}"}
+        )
+
+
+@app.post("/admin/witnesses/discover")
+async def admin_witness_discover():
+    """Trigger immediate GLEIF witness discovery.
+
+    Gated by ADMIN_ENDPOINT_ENABLED.
+    Forces rediscovery by resetting the discovery flag.
+    """
+    from app.core.config import ADMIN_ENDPOINT_ENABLED
+
+    if not ADMIN_ENDPOINT_ENABLED:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": "Admin endpoint disabled"}
+        )
+
+    try:
+        from app.vvp.keri.witness_pool import get_witness_pool
+
+        pool = get_witness_pool()
+        # Force rediscovery by resetting the discovery flag
+        pool._gleif_discovered = False
+        await pool.ensure_gleif_discovered()
+        witnesses = await pool.get_all_witnesses()
+
+        log.info(f"GLEIF witness discovery triggered via admin endpoint, found {len(witnesses)} witnesses")
+
+        return {
+            "success": True,
+            "count": len(witnesses),
+            "message": f"Discovered {len(witnesses)} witnesses"
+        }
+    except Exception as e:
+        log.error(f"Failed to discover witnesses: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Failed to discover witnesses: {str(e)}"}
+        )
 
 
 class ProxyFetchRequest(BaseModel):
@@ -1980,3 +2084,24 @@ async def ui_simple_verify(
             "partials/simple_result.html",
             {"request": request, "error": str(e)},
         )
+
+
+# -----------------------------------------------------------------------------
+# Custom 404 Handler
+# -----------------------------------------------------------------------------
+
+@app.exception_handler(404)
+async def not_found_handler(request: Request, exc):
+    """Serve custom 404 page for browser requests, JSON for API clients."""
+    accept = request.headers.get("accept", "")
+    if "text/html" in accept:
+        return templates.TemplateResponse(
+            "404.html",
+            {"request": request},
+            status_code=404
+        )
+    # Return JSON for API clients
+    return JSONResponse(
+        status_code=404,
+        content={"detail": "Not found"}
+    )

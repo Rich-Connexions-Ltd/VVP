@@ -21,6 +21,78 @@
             --vvp-muted: #6c757d;
         }
 
+        /* Site header navigation */
+        .site-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.5rem 0;
+            margin-bottom: 1rem;
+            border-bottom: 1px solid var(--vvp-muted);
+        }
+        .site-header .logo {
+            font-weight: bold;
+            font-size: 1.2rem;
+            text-decoration: none;
+            color: inherit;
+        }
+        .site-header .logo:hover {
+            color: var(--vvp-info);
+        }
+        .site-header .nav-links {
+            display: flex;
+            gap: 0.5rem;
+        }
+        .site-header .nav-links a {
+            text-decoration: none;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            color: inherit;
+        }
+        .site-header .nav-links a:hover {
+            background: rgba(0,0,0,0.05);
+        }
+        .site-header .nav-links a.active {
+            background: var(--vvp-info);
+            color: white;
+        }
+
+        /* 404 error page */
+        .error-page {
+            text-align: center;
+            padding: 4rem 2rem;
+        }
+        .error-page h1 {
+            font-size: 6rem;
+            margin: 0;
+            color: var(--vvp-muted);
+        }
+        .error-page h2 {
+            margin-top: 0.5rem;
+        }
+        .error-page p {
+            color: var(--vvp-muted);
+            margin-bottom: 2rem;
+        }
+        .error-actions {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+        }
+        @media (max-width: 768px) {
+            .site-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 0.5rem;
+            }
+            .error-page h1 {
+                font-size: 4rem;
+            }
+            .error-actions {
+                flex-direction: column;
+            }
+        }
+
         /* Status badges */
         .badge {
             display: inline-block;
@@ -370,6 +442,130 @@
                 display: none;
             }
         }
+
+        /* ====================================================================
+           Admin Dashboard Styles
+           ==================================================================== */
+        .admin-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        .status-card {
+            background: #f8f9fa;
+            border-radius: 0.5rem;
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        .status-label {
+            font-size: 0.85em;
+            color: var(--vvp-muted);
+            text-transform: uppercase;
+        }
+        .status-value {
+            font-size: 1.1em;
+            font-weight: 500;
+        }
+        .status-dot {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 0.5rem;
+        }
+        .status-dot.healthy { background: var(--vvp-success); }
+        .status-dot.error { background: var(--vvp-danger); }
+        .status-dot.loading { background: var(--vvp-warning); animation: pulse 1s infinite; }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .config-section {
+            margin: 1rem 0;
+            border: 1px solid #dee2e6;
+            border-radius: 0.5rem;
+        }
+        .config-section > summary {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem 1rem;
+            background: #f8f9fa;
+            border-radius: 0.5rem;
+            cursor: pointer;
+        }
+        .config-section[open] > summary {
+            border-bottom: 1px solid #dee2e6;
+            border-radius: 0.5rem 0.5rem 0 0;
+        }
+        .section-title {
+            font-weight: 600;
+        }
+        .config-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 0.75rem;
+            padding: 1rem;
+        }
+        .config-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.5rem;
+            background: white;
+            border-radius: 0.25rem;
+        }
+        .config-key {
+            font-weight: 500;
+            color: var(--vvp-muted);
+            cursor: help;
+        }
+        .config-value {
+            font-family: monospace;
+            font-size: 0.95em;
+        }
+        .config-value.normative { color: #6f42c1; }
+        .config-value.configurable { color: var(--vvp-info); }
+        .config-value.policy { color: var(--vvp-muted); }
+
+        .admin-controls {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .admin-controls select {
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.25rem;
+            border: 1px solid #dee2e6;
+        }
+        .admin-controls button.small {
+            padding: 0.25rem 0.75rem;
+            font-size: 0.9em;
+        }
+
+        .witness-list {
+            font-family: monospace;
+            font-size: 0.85em;
+            max-height: 200px;
+            overflow-y: auto;
+            background: #f6f6f6;
+            padding: 0.5rem;
+            border-radius: 0.25rem;
+            margin: 0;
+            list-style-position: inside;
+        }
+        .witness-list li {
+            padding: 0.25rem 0;
+            border-bottom: 1px solid #eee;
+        }
+        .witness-list li:last-child {
+            border-bottom: none;
+        }
     </style>
 
     {% block head %}{% endblock %}
@@ -377,6 +573,16 @@
 <body>
     <main class="container">
         <header>
+            <div class="site-header">
+                <a href="/" class="logo">VVP Verifier</a>
+                <nav class="nav-links">
+                    <a href="/">Home</a>
+                    <a href="/verify">Verify</a>
+                    <a href="/verify/simple">Quick Verify</a>
+                    <a href="/verify/full">Explorer</a>
+                    <a href="/ui/admin">Admin</a>
+                </nav>
+            </div>
             <h1>{% block header %}VVP Verifier{% endblock %}</h1>
         </header>
 
@@ -434,6 +640,18 @@
         }
 
         // Note: Graph visualization is now self-contained in credential_graph.html
+
+        // Navigation: mark active link based on current path
+        function initNavigation() {
+            const path = window.location.pathname;
+            document.querySelectorAll('.site-header .nav-links a').forEach(link => {
+                const href = link.getAttribute('href');
+                if (path === href || (href !== '/' && path.startsWith(href))) {
+                    link.classList.add('active');
+                }
+            });
+        }
+        document.addEventListener('DOMContentLoaded', initNavigation);
     </script>
 
     {% block scripts %}{% endblock %}

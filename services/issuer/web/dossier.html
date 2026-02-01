@@ -1,212 +1,26 @@
-<!doctype html>
-<html>
+<!DOCTYPE html>
+<html lang="en">
   <head>
-    <meta charset="utf-8"/>
-    <title>VVP Issuer - Dossier Assembly</title>
-    <style>
-      body {
-        font-family: system-ui, -apple-system, sans-serif;
-        margin: 0;
-        padding: 2rem;
-        max-width: 1100px;
-        background: #f8f9fa;
-      }
-      h1 { color: #2c3e50; margin-bottom: 0.5rem; }
-      .subtitle { color: #666; margin-bottom: 2rem; }
-      .nav-links {
-        display: flex;
-        gap: 1rem;
-        margin-bottom: 1.5rem;
-        flex-wrap: wrap;
-      }
-      .nav-links a {
-        color: #3498db;
-        text-decoration: none;
-        padding: 0.5rem 1rem;
-        border-radius: 4px;
-        background: white;
-        box-shadow: 0 1px 2px rgba(0,0,0,0.1);
-      }
-      .nav-links a:hover { background: #e8f4ff; }
-      .nav-links a.active {
-        background: #3498db;
-        color: white;
-      }
-      .card {
-        background: white;
-        border-radius: 8px;
-        padding: 1.5rem;
-        margin-bottom: 1.5rem;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-      }
-      .card h2 { margin-top: 0; color: #34495e; }
-      label { display: block; margin-bottom: 0.5rem; font-weight: 500; }
-      input[type="text"], select, textarea {
-        width: 100%;
-        padding: 0.75rem;
-        border: 1px solid #ddd;
-        border-radius: 4px;
-        font-size: 1rem;
-        box-sizing: border-box;
-      }
-      textarea {
-        font-family: monospace;
-        min-height: 150px;
-        resize: vertical;
-      }
-      input[type="text"]:focus, select:focus, textarea:focus {
-        outline: none;
-        border-color: #3498db;
-        box-shadow: 0 0 0 2px rgba(52,152,219,0.2);
-      }
-      .form-group { margin-bottom: 1rem; }
-      .checkbox-row {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        margin: 1rem 0;
-      }
-      .checkbox-row input { width: auto; }
-      .checkbox-row label { margin: 0; font-weight: normal; }
-      button {
-        background: #3498db;
-        color: white;
-        border: none;
-        padding: 0.75rem 1.5rem;
-        border-radius: 4px;
-        font-size: 1rem;
-        cursor: pointer;
-        transition: background 0.2s;
-      }
-      button:hover { background: #2980b9; }
-      button:disabled { background: #bdc3c7; cursor: not-allowed; }
-      button.secondary {
-        background: #95a5a6;
-      }
-      button.secondary:hover {
-        background: #7f8c8d;
-      }
-      .success {
-        background: #d4edda;
-        border: 1px solid #c3e6cb;
-        color: #155724;
-        padding: 1rem;
-        border-radius: 4px;
-        margin-top: 1rem;
-      }
-      .error {
-        background: #f8d7da;
-        border: 1px solid #f5c6cb;
-        color: #721c24;
-        padding: 1rem;
-        border-radius: 4px;
-        margin-top: 1rem;
-      }
-      .info {
-        background: #cce5ff;
-        border: 1px solid #b8daff;
-        color: #004085;
-        padding: 1rem;
-        border-radius: 4px;
-        margin-top: 1rem;
-      }
-      .result-field {
-        margin: 0.75rem 0;
-        padding: 0.5rem;
-        background: #f8f9fa;
-        border-radius: 4px;
-      }
-      .result-field strong { color: #495057; }
-      .result-field code {
-        display: block;
-        margin-top: 0.25rem;
-        word-break: break-all;
-        font-family: monospace;
-        font-size: 0.9rem;
-      }
-      table {
-        width: 100%;
-        border-collapse: collapse;
-        margin-top: 1rem;
-      }
-      th, td {
-        text-align: left;
-        padding: 0.75rem;
-        border-bottom: 1px solid #dee2e6;
-      }
-      th { background: #f8f9fa; font-weight: 600; }
-      tr:hover { background: #f8f9fa; }
-      tr.selected { background: #cce5ff; }
-      .status-badge {
-        display: inline-block;
-        padding: 0.25rem 0.5rem;
-        border-radius: 4px;
-        font-size: 0.875rem;
-        font-weight: 500;
-      }
-      .status-issued {
-        background: #d4edda;
-        color: #155724;
-      }
-      .status-revoked {
-        background: #f8d7da;
-        color: #721c24;
-      }
-      .said-cell {
-        font-family: monospace;
-        font-size: 0.875rem;
-        max-width: 200px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      .said-cell:hover {
-        overflow: visible;
-        white-space: normal;
-        word-break: break-all;
-      }
-      .dossier-preview {
-        background: #f8f9fa;
-        border: 1px solid #dee2e6;
-        border-radius: 4px;
-        padding: 1rem;
-        margin-top: 1rem;
-        max-height: 400px;
-        overflow: auto;
-      }
-      .dossier-preview pre {
-        margin: 0;
-        white-space: pre-wrap;
-        word-break: break-all;
-        font-family: monospace;
-        font-size: 0.875rem;
-      }
-      .button-row {
-        display: flex;
-        gap: 1rem;
-        margin-top: 1rem;
-      }
-      .stat-box {
-        display: inline-block;
-        padding: 0.5rem 1rem;
-        background: #e9ecef;
-        border-radius: 4px;
-        margin-right: 0.5rem;
-      }
-      .stat-box strong { color: #495057; }
-    </style>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VVP Issuer - Dossiers</title>
+    <link rel="stylesheet" href="/static/styles.css">
   </head>
   <body>
+    <header class="site-header">
+      <a href="/ui/" class="logo">VVP Issuer</a>
+      <nav class="nav-links">
+        <a href="/ui/identity">Identities</a>
+        <a href="/ui/registry">Registries</a>
+        <a href="/ui/schemas">Schemas</a>
+        <a href="/ui/credentials">Credentials</a>
+        <a href="/ui/dossier" class="active">Dossiers</a>
+        <a href="/ui/admin">Admin</a>
+      </nav>
+    </header>
+
     <h1>Dossier Assembly</h1>
     <p class="subtitle">Build verifiable dossiers from credential chains</p>
-
-    <nav class="nav-links">
-      <a href="/create">Identities</a>
-      <a href="/registry/ui">Registries</a>
-      <a href="/schemas/ui">Schemas</a>
-      <a href="/credentials/ui">Credentials</a>
-      <a href="/dossier/ui" class="active">Dossiers</a>
-    </nav>
 
     <!-- Credential Selection -->
     <div class="card">
@@ -462,5 +276,6 @@
         return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
       }
     </script>
+    <script src="/static/shared.js"></script>
   </body>
 </html>

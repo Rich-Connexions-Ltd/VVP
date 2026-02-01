@@ -6,7 +6,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.authentication import AuthenticationMiddleware
 
 from common.vvp.core.logging import configure_logging
@@ -85,7 +86,14 @@ if AUTH_ENABLED:
 
 
 # -----------------------------------------------------------------------------
-# Static UI Routes (must be before API routers to avoid path conflicts)
+# Static Files
+# -----------------------------------------------------------------------------
+
+app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
+
+
+# -----------------------------------------------------------------------------
+# UI Routes (under /ui/ prefix to avoid conflicts with API routes)
 # -----------------------------------------------------------------------------
 
 @app.get("/version")
@@ -94,34 +102,86 @@ def version():
     return {"git_sha": os.getenv("GIT_SHA", "unknown")}
 
 
-@app.get("/create", response_class=FileResponse)
-def create_identity_ui():
-    """Serve the identity creation web UI."""
+@app.get("/")
+def root_redirect():
+    """Redirect root to UI home."""
+    return RedirectResponse(url="/ui/", status_code=302)
+
+
+@app.get("/ui/", response_class=FileResponse)
+def ui_home():
+    """Serve the issuer home page."""
+    return FileResponse(WEB_DIR / "index.html", media_type="text/html")
+
+
+@app.get("/ui/identity", response_class=FileResponse)
+def ui_identity():
+    """Serve the identity management web UI."""
     return FileResponse(WEB_DIR / "create.html", media_type="text/html")
 
 
-@app.get("/registry/ui", response_class=FileResponse)
-def registry_ui():
+@app.get("/ui/registry", response_class=FileResponse)
+def ui_registry():
     """Serve the registry management web UI."""
     return FileResponse(WEB_DIR / "registry.html", media_type="text/html")
 
 
-@app.get("/schemas/ui", response_class=FileResponse)
-def schemas_ui():
+@app.get("/ui/schemas", response_class=FileResponse)
+def ui_schemas():
     """Serve the schema browser web UI."""
     return FileResponse(WEB_DIR / "schemas.html", media_type="text/html")
 
 
-@app.get("/credentials/ui", response_class=FileResponse)
-def credentials_ui():
+@app.get("/ui/credentials", response_class=FileResponse)
+def ui_credentials():
     """Serve the credential management web UI."""
     return FileResponse(WEB_DIR / "credentials.html", media_type="text/html")
 
 
-@app.get("/dossier/ui", response_class=FileResponse)
-def dossier_ui():
+@app.get("/ui/dossier", response_class=FileResponse)
+def ui_dossier():
     """Serve the dossier assembly web UI."""
     return FileResponse(WEB_DIR / "dossier.html", media_type="text/html")
+
+
+@app.get("/ui/admin", response_class=FileResponse)
+def ui_admin():
+    """Serve the admin management web UI."""
+    return FileResponse(WEB_DIR / "admin.html", media_type="text/html")
+
+
+# -----------------------------------------------------------------------------
+# Backwards-compatible Redirects (302 during rollout, switch to 301 later)
+# -----------------------------------------------------------------------------
+
+@app.get("/create")
+def redirect_create():
+    """Redirect legacy /create to new /ui/identity."""
+    return RedirectResponse(url="/ui/identity", status_code=302)
+
+
+@app.get("/registry/ui")
+def redirect_registry():
+    """Redirect legacy /registry/ui to new /ui/registry."""
+    return RedirectResponse(url="/ui/registry", status_code=302)
+
+
+@app.get("/schemas/ui")
+def redirect_schemas():
+    """Redirect legacy /schemas/ui to new /ui/schemas."""
+    return RedirectResponse(url="/ui/schemas", status_code=302)
+
+
+@app.get("/credentials/ui")
+def redirect_credentials():
+    """Redirect legacy /credentials/ui to new /ui/credentials."""
+    return RedirectResponse(url="/ui/credentials", status_code=302)
+
+
+@app.get("/dossier/ui")
+def redirect_dossier():
+    """Redirect legacy /dossier/ui to new /ui/dossier."""
+    return RedirectResponse(url="/ui/dossier", status_code=302)
 
 
 # -----------------------------------------------------------------------------
@@ -153,3 +213,24 @@ async def request_logging(request: Request, call_next):
         },
     )
     return response
+
+
+# -----------------------------------------------------------------------------
+# Custom 404 Handler
+# -----------------------------------------------------------------------------
+
+@app.exception_handler(404)
+async def not_found_handler(request: Request, exc):
+    """Serve custom 404 page for browser requests, JSON for API clients."""
+    accept = request.headers.get("accept", "")
+    if "text/html" in accept:
+        return FileResponse(
+            WEB_DIR / "404.html",
+            status_code=404,
+            media_type="text/html"
+        )
+    # Return JSON for API clients
+    return JSONResponse(
+        status_code=404,
+        content={"detail": "Not found"}
+    )

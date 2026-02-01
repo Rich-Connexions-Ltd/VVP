@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Dashboard - VVP Issuer</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    .admin-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .status-card {
+      background: white;
+      border-radius: 8px;
+      padding: 1rem;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .status-label {
+      font-size: 0.85em;
+      color: var(--vvp-muted);
+      text-transform: uppercase;
+    }
+    .status-value {
+      font-size: 1.1em;
+      font-weight: 500;
+    }
+    .status-dot {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-right: 0.5rem;
+    }
+    .status-dot.healthy { background: var(--vvp-success); }
+    .status-dot.error { background: var(--vvp-danger); }
+    .status-dot.loading { background: var(--vvp-warning); animation: pulse 1s infinite; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .config-section {
+      background: white;
+      margin: 1rem 0;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      overflow: hidden;
+    }
+    .config-section > summary {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.75rem 1rem;
+      background: #f8f9fa;
+      cursor: pointer;
+      border-bottom: 1px solid transparent;
+    }
+    .config-section[open] > summary {
+      border-bottom: 1px solid #dee2e6;
+    }
+    .section-title {
+      font-weight: 600;
+    }
+    .config-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 0.75rem;
+      padding: 1rem;
+    }
+    .config-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.5rem;
+      background: #f8f9fa;
+      border-radius: 0.25rem;
+    }
+    .config-key {
+      font-weight: 500;
+      color: var(--vvp-muted);
+    }
+    .config-value {
+      font-family: monospace;
+      font-size: 0.95em;
+    }
+    .config-value.path {
+      font-size: 0.85em;
+      word-break: break-all;
+    }
+
+    .admin-controls {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .admin-controls select {
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      border: 1px solid #dee2e6;
+    }
+    .admin-controls button {
+      padding: 0.25rem 0.75rem;
+      font-size: 0.9em;
+    }
+
+    .witness-list {
+      font-family: monospace;
+      font-size: 0.85em;
+      max-height: 200px;
+      overflow-y: auto;
+      background: #f6f6f6;
+      padding: 0.5rem;
+      border-radius: 4px;
+      margin: 0;
+      list-style-position: inside;
+    }
+    .witness-list li {
+      padding: 0.25rem 0;
+      border-bottom: 1px solid #eee;
+    }
+    .witness-list li:last-child {
+      border-bottom: none;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 1rem;
+      padding: 1rem;
+    }
+    .stat-item {
+      text-align: center;
+      padding: 1rem;
+      background: #f8f9fa;
+      border-radius: 8px;
+    }
+    .stat-value {
+      font-size: 2rem;
+      font-weight: bold;
+      color: var(--vvp-primary);
+    }
+    .stat-label {
+      font-size: 0.9em;
+      color: var(--vvp-muted);
+    }
+
+    .auth-info {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 1rem;
+      padding: 1rem;
+    }
+    .auth-item {
+      text-align: center;
+      padding: 0.5rem;
+    }
+    .auth-value {
+      font-size: 1.5rem;
+      font-weight: bold;
+    }
+    .auth-label {
+      font-size: 0.85em;
+      color: var(--vvp-muted);
+    }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/ui/" class="logo">VVP Issuer</a>
+    <nav class="nav-links">
+      <a href="/ui/identity">Identities</a>
+      <a href="/ui/registry">Registries</a>
+      <a href="/ui/schemas">Schemas</a>
+      <a href="/ui/credentials">Credentials</a>
+      <a href="/ui/dossier">Dossiers</a>
+      <a href="/ui/admin" class="active">Admin</a>
+    </nav>
+  </header>
+
+  <main>
+    <h1>Admin Dashboard</h1>
+    <p class="lead">Service configuration and runtime controls for VVP Issuer operators.</p>
+
+    <!-- Service Status -->
+    <section id="service-status">
+      <h2>Service Status</h2>
+      <div class="admin-grid">
+        <div class="status-card">
+          <span class="status-label">Health</span>
+          <span id="health-status" class="status-value">
+            <span class="status-dot loading"></span> Loading...
+          </span>
+        </div>
+        <div class="status-card">
+          <span class="status-label">Version</span>
+          <span id="version-value" class="status-value">Loading...</span>
+        </div>
+        <div class="status-card">
+          <span class="status-label">Log Level</span>
+          <div class="admin-controls">
+            <select id="log-level-select">
+              <option value="DEBUG">DEBUG</option>
+              <option value="INFO">INFO</option>
+              <option value="WARNING">WARNING</option>
+              <option value="ERROR">ERROR</option>
+              <option value="CRITICAL">CRITICAL</option>
+            </select>
+            <button onclick="setLogLevel()">Apply</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Service Statistics -->
+    <details class="config-section" open>
+      <summary>
+        <span class="section-title">Service Statistics</span>
+        <span class="badge badge-info" id="total-count">Loading...</span>
+      </summary>
+      <div class="stats-grid" id="stats-grid">
+        <div class="stat-item">
+          <div class="stat-value" id="stat-identities">-</div>
+          <div class="stat-label">Identities</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value" id="stat-registries">-</div>
+          <div class="stat-label">Registries</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value" id="stat-credentials">-</div>
+          <div class="stat-label">Credentials</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value" id="stat-schemas">-</div>
+          <div class="stat-label">Schemas</div>
+        </div>
+      </div>
+    </details>
+
+    <!-- Authentication Status -->
+    <details class="config-section" open>
+      <summary>
+        <span class="section-title">Authentication</span>
+        <span class="badge" id="auth-badge">Loading...</span>
+      </summary>
+      <div class="auth-info">
+        <div class="auth-item">
+          <div class="auth-value" id="auth-enabled">-</div>
+          <div class="auth-label">Auth Status</div>
+        </div>
+        <div class="auth-item">
+          <div class="auth-value" id="auth-key-count">-</div>
+          <div class="auth-label">API Keys</div>
+        </div>
+        <div class="auth-item">
+          <div class="auth-value" id="auth-version">-</div>
+          <div class="auth-label">Version</div>
+        </div>
+        <div class="auth-item">
+          <div class="auth-value" id="auth-reload-interval">-</div>
+          <div class="auth-label">Reload Interval</div>
+        </div>
+      </div>
+      <div style="padding: 0 1rem 1rem;">
+        <button onclick="reloadAuth()">Reload API Keys</button>
+      </div>
+    </details>
+
+    <!-- Witness Configuration -->
+    <details class="config-section">
+      <summary>
+        <span class="section-title">Witness Configuration</span>
+        <span class="badge badge-info" id="witness-count">Loading...</span>
+      </summary>
+      <div class="config-grid">
+        <div class="config-item">
+          <span class="config-key">Config Path</span>
+          <span class="config-value path" id="witness-config-path">Loading...</span>
+        </div>
+        <div class="config-item">
+          <span class="config-key">Timeout</span>
+          <span class="config-value" id="witness-timeout">Loading...</span>
+        </div>
+        <div class="config-item">
+          <span class="config-key">Receipt Threshold</span>
+          <span class="config-value" id="witness-threshold">Loading...</span>
+        </div>
+      </div>
+      <div style="padding: 0 1rem;">
+        <details>
+          <summary>Witness URLs</summary>
+          <ul class="witness-list" id="witness-urls">
+            <li>Loading...</li>
+          </ul>
+        </details>
+      </div>
+      <div style="padding: 1rem;">
+        <button onclick="reloadWitnesses()">Reload Witness Config</button>
+      </div>
+    </details>
+
+    <!-- Persistence Configuration -->
+    <details class="config-section">
+      <summary>
+        <span class="section-title">Persistence</span>
+        <span class="badge badge-muted">Read-only</span>
+      </summary>
+      <div class="config-grid">
+        <div class="config-item">
+          <span class="config-key">Data Directory</span>
+          <span class="config-value path" id="data-dir">Loading...</span>
+        </div>
+        <div class="config-item">
+          <span class="config-key">Keystore Directory</span>
+          <span class="config-value path" id="keystore-dir">Loading...</span>
+        </div>
+        <div class="config-item">
+          <span class="config-key">Database Directory</span>
+          <span class="config-value path" id="database-dir">Loading...</span>
+        </div>
+      </div>
+    </details>
+
+    <!-- Identity Defaults -->
+    <details class="config-section">
+      <summary>
+        <span class="section-title">Identity Defaults</span>
+        <span class="badge badge-muted">Read-only</span>
+      </summary>
+      <div class="config-grid">
+        <div class="config-item">
+          <span class="config-key">Default Key Count</span>
+          <span class="config-value" id="default-key-count">Loading...</span>
+        </div>
+        <div class="config-item">
+          <span class="config-key">Default Key Threshold</span>
+          <span class="config-value" id="default-key-threshold">Loading...</span>
+        </div>
+        <div class="config-item">
+          <span class="config-key">Default Next Key Count</span>
+          <span class="config-value" id="default-next-key-count">Loading...</span>
+        </div>
+        <div class="config-item">
+          <span class="config-key">Default Next Threshold</span>
+          <span class="config-value" id="default-next-threshold">Loading...</span>
+        </div>
+      </div>
+    </details>
+  </main>
+
+  <!-- Toast container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <script src="/static/shared.js"></script>
+  <script>
+    // Load admin data on page load
+    async function loadAdminData() {
+      try {
+        // Fetch health
+        const healthResp = await fetch('/healthz');
+        const health = await healthResp.json();
+        const healthEl = document.getElementById('health-status');
+        if (health.status === 'healthy') {
+          healthEl.innerHTML = '<span class="status-dot healthy"></span> Healthy';
+        } else {
+          healthEl.innerHTML = '<span class="status-dot error"></span> Unhealthy';
+        }
+
+        // Fetch version
+        const versionResp = await fetch('/version');
+        const version = await versionResp.json();
+        document.getElementById('version-value').textContent = version.git_sha || 'unknown';
+
+        // Fetch admin config (may require auth)
+        const configResp = await fetch('/admin/config');
+        if (!configResp.ok) {
+          if (configResp.status === 401) {
+            showToast('Admin access requires authentication', 'warning');
+            return;
+          }
+          throw new Error('Failed to fetch config');
+        }
+        const config = await configResp.json();
+
+        // Persistence
+        document.getElementById('data-dir').textContent = config.persistence.data_dir;
+        document.getElementById('keystore-dir').textContent = config.persistence.keystore_dir;
+        document.getElementById('database-dir').textContent = config.persistence.database_dir;
+
+        // Witnesses
+        document.getElementById('witness-config-path').textContent = config.witnesses.config_path;
+        document.getElementById('witness-timeout').textContent = config.witnesses.timeout_seconds + 's';
+        document.getElementById('witness-threshold').textContent = config.witnesses.receipt_threshold;
+        document.getElementById('witness-count').textContent = config.witnesses.iurls.length + ' witnesses';
+
+        const urlList = document.getElementById('witness-urls');
+        if (config.witnesses.iurls.length > 0) {
+          urlList.innerHTML = config.witnesses.iurls.map(url => `<li>${url}</li>`).join('');
+        } else {
+          urlList.innerHTML = '<li>No witnesses configured</li>';
+        }
+
+        // Identity defaults
+        document.getElementById('default-key-count').textContent = config.identity_defaults.key_count;
+        document.getElementById('default-key-threshold').textContent = config.identity_defaults.key_threshold;
+        document.getElementById('default-next-key-count').textContent = config.identity_defaults.next_key_count;
+        document.getElementById('default-next-threshold').textContent = config.identity_defaults.next_threshold;
+
+        // Auth
+        const authBadge = document.getElementById('auth-badge');
+        if (config.auth.enabled) {
+          authBadge.textContent = 'Enabled';
+          authBadge.className = 'badge badge-success';
+          document.getElementById('auth-enabled').textContent = 'ON';
+        } else {
+          authBadge.textContent = 'Disabled';
+          authBadge.className = 'badge badge-warning';
+          document.getElementById('auth-enabled').textContent = 'OFF';
+        }
+        document.getElementById('auth-key-count').textContent = config.auth.key_count;
+        document.getElementById('auth-version').textContent = 'v' + config.auth.version;
+        document.getElementById('auth-reload-interval').textContent = config.auth.reload_interval + 's';
+
+        // Log level
+        const logSelect = document.getElementById('log-level-select');
+        logSelect.value = config.environment.log_level_name;
+
+        // Fetch stats
+        const statsResp = await fetch('/admin/stats');
+        if (statsResp.ok) {
+          const stats = await statsResp.json();
+          document.getElementById('stat-identities').textContent = stats.identities;
+          document.getElementById('stat-registries').textContent = stats.registries;
+          document.getElementById('stat-credentials').textContent = stats.credentials;
+          document.getElementById('stat-schemas').textContent = stats.schemas;
+
+          const total = stats.identities + stats.registries + stats.credentials;
+          document.getElementById('total-count').textContent = total + ' total items';
+        }
+
+      } catch (err) {
+        console.error('Failed to load admin data:', err);
+        showToast('Failed to load admin data: ' + err.message, 'error');
+      }
+    }
+
+    async function setLogLevel() {
+      const level = document.getElementById('log-level-select').value;
+      try {
+        const resp = await fetch('/admin/log-level', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ level: level })
+        });
+        const result = await resp.json();
+        if (result.success) {
+          showToast('Log level set to ' + result.log_level, 'success');
+        } else {
+          showToast('Failed to set log level: ' + result.message, 'error');
+        }
+      } catch (err) {
+        showToast('Failed to set log level: ' + err.message, 'error');
+      }
+    }
+
+    async function reloadAuth() {
+      try {
+        const resp = await fetch('/admin/auth/reload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        const result = await resp.json();
+        if (result.success) {
+          showToast('Reloaded ' + result.key_count + ' API keys', 'success');
+          loadAdminData(); // Refresh
+        } else {
+          showToast('Failed to reload: ' + result.message, 'error');
+        }
+      } catch (err) {
+        showToast('Failed to reload API keys: ' + err.message, 'error');
+      }
+    }
+
+    async function reloadWitnesses() {
+      try {
+        const resp = await fetch('/admin/witnesses/reload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        const result = await resp.json();
+        if (result.success) {
+          showToast('Reloaded ' + result.witness_count + ' witnesses', 'success');
+          loadAdminData(); // Refresh
+        } else {
+          showToast('Failed to reload: ' + result.message, 'error');
+        }
+      } catch (err) {
+        showToast('Failed to reload witnesses: ' + err.message, 'error');
+      }
+    }
+
+    // Load data on page load
+    document.addEventListener('DOMContentLoaded', loadAdminData);
+  </script>
+</body>
+</html>

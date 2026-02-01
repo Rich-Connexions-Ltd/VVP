@@ -140,5 +140,13 @@ def get_auth_exempt_paths() -> set[str]:
         exempt.add("/schemas/ui")
         exempt.add("/credentials/ui")
         exempt.add("/dossier/ui")
+        # New /ui/* routes
+        exempt.add("/ui/")
+        exempt.add("/ui/identity")
+        exempt.add("/ui/registry")
+        exempt.add("/ui/schemas")
+        exempt.add("/ui/credentials")
+        exempt.add("/ui/dossier")
+        exempt.add("/ui/admin")
 
     return exempt

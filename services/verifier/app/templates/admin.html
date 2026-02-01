@@ -1,0 +1,360 @@
+{% extends "base.html" %}
+
+{% block title %}Admin Dashboard - VVP Verifier{% endblock %}
+{% block header %}Admin Dashboard{% endblock %}
+
+{% block content %}
+<section>
+    <p class="lead">
+        Service configuration and runtime controls for VVP Verifier operators.
+    </p>
+</section>
+
+<!-- Service Status -->
+<section id="service-status">
+    <h2>Service Status</h2>
+    <div class="admin-grid">
+        <div class="status-card">
+            <span class="status-label">Health</span>
+            <span id="health-status" class="status-value">
+                <span class="status-dot loading"></span> Loading...
+            </span>
+        </div>
+        <div class="status-card">
+            <span class="status-label">Version</span>
+            <span id="version-value" class="status-value">Loading...</span>
+        </div>
+        <div class="status-card">
+            <span class="status-label">Log Level</span>
+            <div class="admin-controls">
+                <select id="log-level-select">
+                    <option value="DEBUG">DEBUG</option>
+                    <option value="INFO">INFO</option>
+                    <option value="WARNING">WARNING</option>
+                    <option value="ERROR">ERROR</option>
+                    <option value="CRITICAL">CRITICAL</option>
+                </select>
+                <button onclick="setLogLevel()" class="small">Apply</button>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Normative Configuration (Fixed by spec) -->
+<details class="config-section" open>
+    <summary>
+        <span class="section-title">Normative Configuration</span>
+        <span class="badge badge-root">Fixed by Spec</span>
+    </summary>
+    <div id="normative-config" class="config-grid">
+        <div class="config-item">
+            <span class="config-key" title="§5.2A: iat drift MUST be ≤ 5 seconds">Max IAT Drift</span>
+            <span class="config-value normative" id="max-iat-drift">Loading...</span>
+        </div>
+        <div class="config-item">
+            <span class="config-key" title="§5.0, §5.1: VVP mandates EdDSA only">Allowed Algorithms</span>
+            <span class="config-value normative" id="allowed-algorithms">Loading...</span>
+        </div>
+    </div>
+</details>
+
+<!-- Configurable Settings -->
+<details class="config-section" open>
+    <summary>
+        <span class="section-title">Configurable Settings</span>
+        <span class="badge badge-info">Env Var Controlled</span>
+    </summary>
+    <div id="configurable-config" class="config-grid">
+        <div class="config-item">
+            <span class="config-key" title="VVP_CLOCK_SKEW - §4.1A default: 300s">Clock Skew</span>
+            <span class="config-value configurable" id="clock-skew">Loading...</span>
+        </div>
+        <div class="config-item">
+            <span class="config-key" title="VVP_MAX_TOKEN_AGE - §5.2B default: 300s">Max Token Age</span>
+            <span class="config-value configurable" id="max-token-age">Loading...</span>
+        </div>
+        <div class="config-item">
+            <span class="config-key" title="VVP_MAX_PASSPORT_VALIDITY - §5.2B default: 300s">Max PASSporT Validity</span>
+            <span class="config-value configurable" id="max-passport-validity">Loading...</span>
+        </div>
+        <div class="config-item">
+            <span class="config-key" title="VVP_ALLOW_EXP_OMISSION - §5.2A default: false">Allow PASSporT exp Omission</span>
+            <span class="config-value configurable" id="allow-exp-omission">Loading...</span>
+        </div>
+    </div>
+</details>
+
+<!-- Policy Settings -->
+<details class="config-section">
+    <summary>
+        <span class="section-title">Policy Settings</span>
+        <span class="badge badge-muted">Implementation Choices</span>
+    </summary>
+    <div id="policy-config" class="config-grid">
+        <div class="config-item">
+            <span class="config-key">Dossier Fetch Timeout</span>
+            <span class="config-value policy" id="dossier-timeout">Loading...</span>
+        </div>
+        <div class="config-item">
+            <span class="config-key">Dossier Max Size</span>
+            <span class="config-value policy" id="dossier-max-size">Loading...</span>
+        </div>
+        <div class="config-item">
+            <span class="config-key">Dossier Max Redirects</span>
+            <span class="config-value policy" id="dossier-max-redirects">Loading...</span>
+        </div>
+    </div>
+</details>
+
+<!-- Feature Flags -->
+<details class="config-section">
+    <summary>
+        <span class="section-title">Feature Flags</span>
+        <span class="badge badge-success">Enabled</span>
+    </summary>
+    <div id="features-config" class="config-grid">
+        <div class="config-item">
+            <span class="config-key" title="TIER2_KEL_RESOLUTION_ENABLED">Tier 2 KEL Resolution</span>
+            <span class="config-value" id="tier2-enabled">Loading...</span>
+        </div>
+        <div class="config-item">
+            <span class="config-key" title="ADMIN_ENDPOINT_ENABLED">Admin Endpoint</span>
+            <span class="config-value" id="admin-enabled">Loading...</span>
+        </div>
+    </div>
+</details>
+
+<!-- Cache Configuration & Metrics -->
+<details class="config-section">
+    <summary>
+        <span class="section-title">Cache Metrics</span>
+        <span class="badge badge-info" id="cache-hit-rate">Loading...</span>
+    </summary>
+    <div id="cache-metrics">
+        <h4>Dossier Cache</h4>
+        <div class="config-grid">
+            <div class="config-item">
+                <span class="config-key">TTL</span>
+                <span class="config-value" id="dossier-cache-ttl">Loading...</span>
+            </div>
+            <div class="config-item">
+                <span class="config-key">Max Entries</span>
+                <span class="config-value" id="dossier-cache-max">Loading...</span>
+            </div>
+            <div class="config-item">
+                <span class="config-key">Hits / Misses</span>
+                <span class="config-value" id="dossier-cache-stats">Loading...</span>
+            </div>
+            <div class="config-item">
+                <span class="config-key">Hit Rate</span>
+                <span class="config-value" id="dossier-cache-rate">Loading...</span>
+            </div>
+        </div>
+        <div class="admin-controls" style="margin-top: 1rem;">
+            <button onclick="clearCache('dossier')" class="secondary small">Clear Dossier Cache</button>
+        </div>
+    </div>
+</details>
+
+<!-- Witness Pool Status -->
+<details class="config-section" open>
+    <summary>
+        <span class="section-title">Witness Pool</span>
+        <span class="badge badge-info" id="witness-count">Loading...</span>
+    </summary>
+    <div id="witness-pool">
+        <div class="config-grid">
+            <div class="config-item">
+                <span class="config-key">Configured</span>
+                <span class="config-value" id="witness-configured">Loading...</span>
+            </div>
+            <div class="config-item">
+                <span class="config-key">GLEIF Discovered</span>
+                <span class="config-value" id="witness-gleif">Loading...</span>
+            </div>
+            <div class="config-item">
+                <span class="config-key">OOBI</span>
+                <span class="config-value" id="witness-oobi">Loading...</span>
+            </div>
+            <div class="config-item">
+                <span class="config-key">KEL</span>
+                <span class="config-value" id="witness-kel">Loading...</span>
+            </div>
+        </div>
+        <div class="admin-controls" style="margin-top: 1rem;">
+            <button onclick="discoverWitnesses()" class="small">Trigger GLEIF Discovery</button>
+        </div>
+        <details style="margin-top: 1rem;">
+            <summary>Witness URLs</summary>
+            <ul class="witness-list" id="witness-urls">
+                <li>Loading...</li>
+            </ul>
+        </details>
+    </div>
+</details>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Load admin data on page load
+async function loadAdminData() {
+    try {
+        // Fetch health
+        const healthResp = await fetch('/healthz');
+        const health = await healthResp.json();
+        const healthEl = document.getElementById('health-status');
+        if (health.ok) {
+            healthEl.innerHTML = '<span class="status-dot healthy"></span> Healthy';
+        } else {
+            healthEl.innerHTML = '<span class="status-dot error"></span> Unhealthy';
+        }
+
+        // Fetch version
+        const versionResp = await fetch('/version');
+        const version = await versionResp.json();
+        document.getElementById('version-value').textContent = version.git_sha || 'unknown';
+
+        // Fetch admin config
+        const adminResp = await fetch('/admin');
+        if (!adminResp.ok) {
+            showToast('Admin endpoint disabled', 'error');
+            return;
+        }
+        const admin = await adminResp.json();
+
+        // Normative
+        document.getElementById('max-iat-drift').textContent = admin.normative.max_iat_drift_seconds + ' seconds';
+        document.getElementById('allowed-algorithms').textContent = admin.normative.allowed_algorithms.join(', ');
+
+        // Configurable
+        document.getElementById('clock-skew').textContent = admin.configurable.clock_skew_seconds + ' seconds';
+        document.getElementById('max-token-age').textContent = admin.configurable.max_token_age_seconds + ' seconds';
+        document.getElementById('max-passport-validity').textContent = admin.configurable.max_passport_validity_seconds + ' seconds';
+        document.getElementById('allow-exp-omission').textContent = admin.configurable.allow_passport_exp_omission ? 'Yes' : 'No';
+
+        // Policy
+        document.getElementById('dossier-timeout').textContent = admin.policy.dossier_fetch_timeout_seconds + ' seconds';
+        document.getElementById('dossier-max-size').textContent = formatBytes(admin.policy.dossier_max_size_bytes);
+        document.getElementById('dossier-max-redirects').textContent = admin.policy.dossier_max_redirects;
+
+        // Features
+        document.getElementById('tier2-enabled').innerHTML = admin.features.tier2_kel_resolution_enabled
+            ? '<span class="badge badge-success">Enabled</span>'
+            : '<span class="badge badge-muted">Disabled</span>';
+        document.getElementById('admin-enabled').innerHTML = admin.features.admin_endpoint_enabled
+            ? '<span class="badge badge-success">Enabled</span>'
+            : '<span class="badge badge-muted">Disabled</span>';
+
+        // Log level
+        const logSelect = document.getElementById('log-level-select');
+        logSelect.value = admin.environment.log_level_name;
+
+        // Cache metrics
+        document.getElementById('dossier-cache-ttl').textContent = admin.cache_config.dossier_cache_ttl_seconds + ' seconds';
+        document.getElementById('dossier-cache-max').textContent = admin.cache_config.dossier_cache_max_entries;
+
+        const dossierCache = admin.cache_metrics.dossier;
+        document.getElementById('dossier-cache-stats').textContent = `${dossierCache.hits} / ${dossierCache.misses}`;
+        const hitRate = dossierCache.hits + dossierCache.misses > 0
+            ? ((dossierCache.hits / (dossierCache.hits + dossierCache.misses)) * 100).toFixed(1)
+            : 0;
+        document.getElementById('dossier-cache-rate').textContent = hitRate + '%';
+        document.getElementById('cache-hit-rate').textContent = hitRate + '% hit rate';
+
+        // Witness pool
+        const pool = admin.witnesses.witness_pool;
+        document.getElementById('witness-configured').textContent = pool.configured_witnesses;
+        document.getElementById('witness-gleif').textContent = pool.gleif_discovery.discovered_count || 0;
+        document.getElementById('witness-oobi').textContent = pool.oobi_count || 0;
+        document.getElementById('witness-kel').textContent = pool.kel_count || 0;
+
+        const totalWitnesses = (pool.configured_witnesses || 0) +
+            (pool.gleif_discovery.discovered_count || 0) +
+            (pool.oobi_count || 0);
+        document.getElementById('witness-count').textContent = totalWitnesses + ' witnesses';
+
+        // Witness URLs
+        const witnessUrls = pool.witness_urls || [];
+        const urlList = document.getElementById('witness-urls');
+        if (witnessUrls.length > 0) {
+            urlList.innerHTML = witnessUrls.map(url => `<li>${url}</li>`).join('');
+        } else {
+            urlList.innerHTML = '<li>No witnesses configured</li>';
+        }
+
+    } catch (err) {
+        console.error('Failed to load admin data:', err);
+        showToast('Failed to load admin data: ' + err.message, 'error');
+    }
+}
+
+async function setLogLevel() {
+    const level = document.getElementById('log-level-select').value;
+    try {
+        const resp = await fetch('/admin/log-level', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ level: level })
+        });
+        const result = await resp.json();
+        if (result.success) {
+            showToast('Log level set to ' + result.log_level, 'success');
+        } else {
+            showToast('Failed to set log level: ' + result.detail, 'error');
+        }
+    } catch (err) {
+        showToast('Failed to set log level: ' + err.message, 'error');
+    }
+}
+
+async function clearCache(cacheType) {
+    if (!confirm(`Clear ${cacheType} cache? This will force fresh fetches.`)) return;
+    try {
+        const resp = await fetch('/admin/cache/clear', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cache_type: cacheType })
+        });
+        const result = await resp.json();
+        if (result.success) {
+            showToast(`${cacheType} cache cleared`, 'success');
+            loadAdminData(); // Refresh metrics
+        } else {
+            showToast('Failed to clear cache: ' + (result.detail || result.error), 'error');
+        }
+    } catch (err) {
+        showToast('Failed to clear cache: ' + err.message, 'error');
+    }
+}
+
+async function discoverWitnesses() {
+    try {
+        const resp = await fetch('/admin/witnesses/discover', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        const result = await resp.json();
+        if (result.success) {
+            showToast('Discovered ' + result.count + ' witnesses', 'success');
+            loadAdminData(); // Refresh
+        } else {
+            showToast('Discovery failed: ' + (result.detail || result.error), 'error');
+        }
+    } catch (err) {
+        showToast('Discovery failed: ' + err.message, 'error');
+    }
+}
+
+function formatBytes(bytes) {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+// Load data on page load
+document.addEventListener('DOMContentLoaded', loadAdminData);
+</script>
+{% endblock %}

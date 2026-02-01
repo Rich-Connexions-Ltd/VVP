@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VVP Issuer</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    .hero {
+      text-align: center;
+      padding: 2rem 0;
+      margin-bottom: 2rem;
+    }
+    .hero h1 {
+      font-size: 2.5rem;
+      margin-bottom: 0.5rem;
+    }
+    .hero .tagline {
+      font-size: 1.2rem;
+      color: var(--vvp-text-muted);
+    }
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1.5rem;
+      margin-top: 2rem;
+    }
+    .feature-card {
+      background: white;
+      border-radius: 8px;
+      padding: 1.5rem;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      text-decoration: none;
+      color: inherit;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .feature-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    }
+    .feature-card h3 {
+      color: var(--vvp-primary);
+      margin-top: 0;
+      margin-bottom: 0.5rem;
+    }
+    .feature-card p {
+      color: var(--vvp-text-muted);
+      margin: 0;
+      font-size: 0.95rem;
+    }
+    .feature-icon {
+      font-size: 2rem;
+      margin-bottom: 0.5rem;
+    }
+    .status-section {
+      margin-top: 3rem;
+      padding: 1rem;
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .status-grid {
+      display: flex;
+      gap: 2rem;
+      flex-wrap: wrap;
+    }
+    .status-item {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--vvp-muted);
+    }
+    .status-dot.healthy {
+      background: var(--vvp-success);
+    }
+    .status-dot.error {
+      background: var(--vvp-danger);
+    }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/ui/" class="logo">VVP Issuer</a>
+    <nav class="nav-links">
+      <a href="/ui/identity">Identities</a>
+      <a href="/ui/registry">Registries</a>
+      <a href="/ui/schemas">Schemas</a>
+      <a href="/ui/credentials">Credentials</a>
+      <a href="/ui/dossier">Dossiers</a>
+      <a href="/ui/admin">Admin</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <h1>VVP Issuer</h1>
+      <p class="tagline">Issue and manage verifiable credentials using KERI identities</p>
+    </section>
+
+    <section>
+      <h2>Get Started</h2>
+      <div class="features-grid">
+        <a href="/ui/identity" class="feature-card">
+          <div class="feature-icon">&#128100;</div>
+          <h3>Identities</h3>
+          <p>Create and manage KERI identities (AIDs) for credential issuance. Identities are the foundation of trust.</p>
+        </a>
+
+        <a href="/ui/registry" class="feature-card">
+          <div class="feature-icon">&#128218;</div>
+          <h3>Registries</h3>
+          <p>Set up credential registries (TELs) to track issued credentials and manage their lifecycle.</p>
+        </a>
+
+        <a href="/ui/schemas" class="feature-card">
+          <div class="feature-icon">&#128196;</div>
+          <h3>Schemas</h3>
+          <p>Browse, import, and create credential schemas. Schemas define the structure of your credentials.</p>
+        </a>
+
+        <a href="/ui/credentials" class="feature-card">
+          <div class="feature-icon">&#127919;</div>
+          <h3>Credentials</h3>
+          <p>Issue ACDC credentials to recipients. View and revoke existing credentials.</p>
+        </a>
+
+        <a href="/ui/dossier" class="feature-card">
+          <div class="feature-icon">&#128230;</div>
+          <h3>Dossiers</h3>
+          <p>Assemble credentials into dossiers for presentation. Export in CESR or JSON format.</p>
+        </a>
+      </div>
+    </section>
+
+    <section class="status-section">
+      <h3 style="margin-top: 0;">Service Status</h3>
+      <div class="status-grid">
+        <div class="status-item">
+          <span class="status-dot" id="healthDot"></span>
+          <span id="healthStatus">Checking...</span>
+        </div>
+        <div class="status-item">
+          <strong>Version:</strong>
+          <span id="versionInfo">Loading...</span>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/shared.js"></script>
+  <script>
+    // Check service health
+    async function checkHealth() {
+      const dot = document.getElementById('healthDot');
+      const status = document.getElementById('healthStatus');
+
+      try {
+        const res = await fetch('/healthz');
+        const data = await res.json();
+
+        if (res.ok && data.status === 'healthy') {
+          dot.classList.add('healthy');
+          status.textContent = 'Healthy';
+        } else {
+          dot.classList.add('error');
+          status.textContent = 'Unhealthy';
+        }
+      } catch (err) {
+        dot.classList.add('error');
+        status.textContent = 'Unavailable';
+      }
+    }
+
+    // Get version info
+    async function getVersion() {
+      const versionEl = document.getElementById('versionInfo');
+
+      try {
+        const res = await fetch('/version');
+        const data = await res.json();
+        versionEl.textContent = data.git_sha ? data.git_sha.substring(0, 7) : 'Unknown';
+      } catch (err) {
+        versionEl.textContent = 'Unknown';
+      }
+    }
+
+    // Initialize
+    document.addEventListener('DOMContentLoaded', () => {
+      checkHealth();
+      getVersion();
+    });
+  </script>
+</body>
+</html>
