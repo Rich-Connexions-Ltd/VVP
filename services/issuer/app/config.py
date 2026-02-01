@@ -166,6 +166,67 @@ USERS_FILE: str = _get_users_file()
 USERS_JSON: str | None = os.getenv("VVP_USERS")  # Inline JSON override
 
 
+# =============================================================================
+# OAUTH M365 CONFIGURATION
+# =============================================================================
+
+# Enable Microsoft OAuth login (default: disabled)
+OAUTH_M365_ENABLED: bool = os.getenv("VVP_OAUTH_M365_ENABLED", "false").lower() == "true"
+
+# Microsoft Entra (Azure AD) application registration
+OAUTH_M365_TENANT_ID: str | None = os.getenv("VVP_OAUTH_M365_TENANT_ID")
+OAUTH_M365_CLIENT_ID: str | None = os.getenv("VVP_OAUTH_M365_CLIENT_ID")
+OAUTH_M365_CLIENT_SECRET: str | None = os.getenv("VVP_OAUTH_M365_CLIENT_SECRET")
+OAUTH_M365_REDIRECT_URI: str | None = os.getenv("VVP_OAUTH_M365_REDIRECT_URI")
+
+# Auto-provision users on first OAuth login (default: disabled)
+OAUTH_M365_AUTO_PROVISION: bool = os.getenv("VVP_OAUTH_M365_AUTO_PROVISION", "false").lower() == "true"
+
+# Allowed email domains (comma-separated, empty = all domains allowed)
+# Example: "example.com,company.org"
+OAUTH_M365_ALLOWED_DOMAINS: list[str] = [
+    d.strip().lower()
+    for d in os.getenv("VVP_OAUTH_M365_ALLOWED_DOMAINS", "").split(",")
+    if d.strip()
+]
+
+# Default roles for auto-provisioned OAuth users
+OAUTH_M365_DEFAULT_ROLES: list[str] = [
+    r.strip()
+    for r in os.getenv("VVP_OAUTH_M365_DEFAULT_ROLES", "issuer:readonly").split(",")
+    if r.strip()
+]
+
+# OAuth state TTL (seconds) - how long OAuth state is valid
+OAUTH_STATE_TTL_SECONDS: int = int(os.getenv("VVP_OAUTH_STATE_TTL", "600"))  # 10 minutes
+
+
+def validate_oauth_m365_config() -> tuple[bool, str | None]:
+    """Validate OAuth M365 configuration.
+
+    Returns:
+        Tuple of (is_valid, error_message). If is_valid is False,
+        error_message contains the reason.
+    """
+    if not OAUTH_M365_ENABLED:
+        return True, None
+
+    missing = []
+    if not OAUTH_M365_TENANT_ID:
+        missing.append("VVP_OAUTH_M365_TENANT_ID")
+    if not OAUTH_M365_CLIENT_ID:
+        missing.append("VVP_OAUTH_M365_CLIENT_ID")
+    if not OAUTH_M365_CLIENT_SECRET:
+        missing.append("VVP_OAUTH_M365_CLIENT_SECRET")
+    if not OAUTH_M365_REDIRECT_URI:
+        missing.append("VVP_OAUTH_M365_REDIRECT_URI")
+
+    if missing:
+        return False, f"OAuth M365 enabled but missing config: {', '.join(missing)}"
+
+    return True, None
+
+
 def get_auth_exempt_paths() -> set[str]:
     """Get the full set of auth-exempt paths based on configuration."""
     exempt = set(AUTH_EXEMPT_PATHS)
@@ -174,6 +235,11 @@ def get_auth_exempt_paths() -> set[str]:
     exempt.add("/auth/login")
     exempt.add("/auth/logout")
     exempt.add("/auth/status")
+
+    # OAuth endpoints must be exempt (user not yet authenticated)
+    exempt.add("/auth/oauth/m365/start")
+    exempt.add("/auth/oauth/m365/callback")
+    exempt.add("/auth/oauth/status")
 
     if DOCS_AUTH_EXEMPT:
         exempt.add("/docs")

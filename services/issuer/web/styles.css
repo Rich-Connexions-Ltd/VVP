@@ -904,6 +904,63 @@ tr.selected {
   background: var(--vvp-primary-hover);
 }
 
+/* OAuth Buttons */
+.oauth-buttons {
+  margin-bottom: 1rem;
+}
+
+.oauth-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: #fff;
+  color: #333;
+  font-size: 0.95rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.oauth-btn:hover {
+  background: #f8f9fa;
+  border-color: #ccc;
+}
+
+.oauth-btn:active {
+  background: #e9ecef;
+}
+
+.oauth-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.oauth-divider {
+  display: flex;
+  align-items: center;
+  margin: 1rem 0;
+}
+
+.oauth-divider::before,
+.oauth-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: #ddd;
+}
+
+.oauth-divider span {
+  padding: 0 1rem;
+  color: var(--vvp-text-muted);
+  font-size: 0.875rem;
+}
+
 /* Toast animations */
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(-10px); }

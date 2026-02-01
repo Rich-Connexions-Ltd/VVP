@@ -229,9 +229,52 @@ async function checkAuthStatus() {
 }
 
 /**
+ * Check OAuth provider status from server.
+ * @returns {Promise<Object|null>} OAuth status or null on error
+ */
+async function checkOAuthStatus() {
+  try {
+    const response = await fetch('/auth/oauth/status');
+    if (response.ok) {
+      return await response.json();
+    }
+  } catch (err) {
+    console.error('Failed to check OAuth status:', err);
+  }
+  return null;
+}
+
+/**
+ * Handle OAuth error from URL query parameters.
+ * Called on page load to show error toast if OAuth failed.
+ */
+function handleOAuthError() {
+  const params = new URLSearchParams(window.location.search);
+  const error = params.get('error');
+  const message = params.get('message');
+
+  if (error === 'oauth_failed') {
+    showToast(message || 'OAuth authentication failed', 'error');
+    // Clean up URL
+    const url = new URL(window.location);
+    url.searchParams.delete('error');
+    url.searchParams.delete('message');
+    window.history.replaceState({}, '', url);
+  }
+}
+
+/**
+ * Redirect to Microsoft OAuth login.
+ */
+function startMicrosoftLogin() {
+  const currentPath = window.location.pathname;
+  window.location.href = `/auth/oauth/m365/start?redirect_after=${encodeURIComponent(currentPath)}`;
+}
+
+/**
  * Show login modal and return promise that resolves when logged in.
  * Uses single-flight pattern to prevent multiple concurrent modals.
- * Supports both email/password and API key authentication.
+ * Supports email/password, API key, and Microsoft OAuth authentication.
  * @returns {Promise<boolean>} True if login successful, false if cancelled
  */
 function showLoginModal() {
@@ -243,6 +286,20 @@ function showLoginModal() {
   loginModalPromise = new Promise((resolve) => {
     const html = `
       <div class="login-form">
+        <!-- Microsoft Sign-In Button (shown only if OAuth enabled) -->
+        <div class="oauth-buttons" id="oauth-buttons" style="display: none;">
+          <button class="oauth-btn oauth-microsoft" id="oauth-microsoft-btn" type="button">
+            <svg class="oauth-icon" viewBox="0 0 21 21" xmlns="http://www.w3.org/2000/svg">
+              <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
+              <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
+              <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
+              <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
+            </svg>
+            Sign in with Microsoft
+          </button>
+          <div class="oauth-divider"><span>or</span></div>
+        </div>
+
         <div class="login-tabs">
           <button class="login-tab active" data-tab="user">Email/Password</button>
           <button class="login-tab" data-tab="apikey">API Key</button>
@@ -283,6 +340,22 @@ function showLoginModal() {
     modalHtml += '</div>';
 
     overlay.innerHTML = modalHtml;
+
+    // Check OAuth status and show Microsoft button if enabled
+    checkOAuthStatus().then(oauthStatus => {
+      if (oauthStatus?.m365?.enabled) {
+        const oauthButtons = overlay.querySelector('#oauth-buttons');
+        if (oauthButtons) {
+          oauthButtons.style.display = 'block';
+        }
+        const msBtn = overlay.querySelector('#oauth-microsoft-btn');
+        if (msBtn) {
+          msBtn.onclick = () => {
+            startMicrosoftLogin();
+          };
+        }
+      }
+    });
 
     // Store resolve function for handlers
     overlay._loginResolve = resolve;
@@ -842,6 +915,9 @@ function showToast(message, type = 'info') {
 
 document.addEventListener('DOMContentLoaded', async () => {
   initNavigation();
+
+  // Handle OAuth errors from URL parameters (e.g., after failed OAuth callback)
+  handleOAuthError();
 
   // Add help button to header nav if it doesn't exist
   const nav = document.querySelector('.nav-links');

@@ -23,13 +23,23 @@ BCRYPT_COST_FACTOR = 12
 
 @dataclass
 class UserConfig:
-    """Configuration for a single user."""
+    """Configuration for a single user.
+
+    Attributes:
+        email: User's email address (normalized to lowercase)
+        name: Human-readable display name
+        password_hash: bcrypt-hashed password (empty string for OAuth users)
+        roles: Set of role strings (e.g., "issuer:admin")
+        enabled: Whether the user can log in
+        is_oauth_user: Whether this user was provisioned via OAuth (cannot use password auth)
+    """
 
     email: str
     name: str
     password_hash: str
     roles: set[str]
     enabled: bool = True
+    is_oauth_user: bool = False
 
 
 class UserStore:
@@ -89,14 +99,17 @@ class UserStore:
                 user_config = UserConfig(
                     email=user_data["email"].lower(),  # Normalize to lowercase
                     name=user_data["name"],
-                    password_hash=user_data["password_hash"],
+                    password_hash=user_data.get("password_hash", ""),
                     roles=set(user_data.get("roles", ["issuer:readonly"])),
                     enabled=user_data.get("enabled", True),
+                    is_oauth_user=user_data.get("is_oauth_user", False),
                 )
                 self._users[user_config.email] = user_config
 
                 if not user_config.enabled:
                     log.info(f"Loaded disabled user: {user_config.email}")
+                elif user_config.is_oauth_user:
+                    log.debug(f"Loaded OAuth user: {user_config.email} with roles {user_config.roles}")
                 else:
                     log.debug(f"Loaded user: {user_config.email} with roles {user_config.roles}")
 
@@ -162,6 +175,7 @@ class UserStore:
             Tuple of (Principal if valid, error_reason if invalid)
             - (Principal, None) for valid credentials
             - (None, "disabled") for disabled user
+            - (None, "oauth_user") for OAuth user (must use OAuth flow)
             - (None, "invalid") for invalid email/password
         """
         email = email.lower()
@@ -170,12 +184,21 @@ class UserStore:
         if user is None:
             return None, "invalid"
 
+        # OAuth users cannot login with password - they must use OAuth flow
+        if user.is_oauth_user:
+            log.warning(f"OAuth user attempted password login: {email}")
+            return None, "oauth_user"
+
+        if not user.enabled:
+            log.warning(f"Disabled user attempted login: {email}")
+            return None, "disabled"
+
+        # Skip bcrypt verification if password_hash is empty
+        if not user.password_hash:
+            return None, "invalid"
+
         try:
             if bcrypt_lib.checkpw(password.encode(), user.password_hash.encode()):
-                if not user.enabled:
-                    log.warning(f"Disabled user attempted login: {email}")
-                    return None, "disabled"
-
                 return Principal(
                     key_id=f"user:{email}",  # Prefix with 'user:' to distinguish from API keys
                     name=user.name,
@@ -210,9 +233,90 @@ class UserStore:
                 "name": u.name,
                 "roles": list(u.roles),
                 "enabled": u.enabled,
+                "is_oauth_user": u.is_oauth_user,
             }
             for u in self._users.values()
         ]
+
+    def create_user(
+        self,
+        email: str,
+        name: str,
+        password_hash: str,
+        roles: set[str],
+        enabled: bool = True,
+        is_oauth_user: bool = False,
+    ) -> UserConfig:
+        """Create a new user (in-memory and persisted to config file).
+
+        Note: This method is intended for OAuth auto-provisioning.
+
+        Args:
+            email: User's email address
+            name: Display name
+            password_hash: bcrypt hash (empty string for OAuth users)
+            roles: Set of role strings
+            enabled: Whether user is enabled
+            is_oauth_user: Whether this is an OAuth-provisioned user
+
+        Returns:
+            The created UserConfig
+
+        Raises:
+            ValueError: If user already exists
+        """
+        email = email.lower()
+
+        if email in self._users:
+            raise ValueError(f"User already exists: {email}")
+
+        user = UserConfig(
+            email=email,
+            name=name,
+            password_hash=password_hash,
+            roles=roles,
+            enabled=enabled,
+            is_oauth_user=is_oauth_user,
+        )
+
+        self._users[email] = user
+        log.info(f"Created user: {email} with roles {roles} (oauth={is_oauth_user})")
+
+        # Persist to config file if we have a config path
+        self._persist_users()
+
+        return user
+
+    def _persist_users(self) -> None:
+        """Persist users to config file."""
+        if not self._config_path:
+            log.debug("No config path, skipping persist")
+            return
+
+        try:
+            path = Path(self._config_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+
+            users_data = {
+                "users": [
+                    {
+                        "email": u.email,
+                        "name": u.name,
+                        "password_hash": u.password_hash,
+                        "roles": list(u.roles),
+                        "enabled": u.enabled,
+                        "is_oauth_user": u.is_oauth_user,
+                    }
+                    for u in self._users.values()
+                ]
+            }
+
+            path.write_text(json.dumps(users_data, indent=2))
+            self._last_mtime = path.stat().st_mtime
+            log.debug(f"Persisted {len(self._users)} users to {self._config_path}")
+
+        except Exception as e:
+            log.error(f"Failed to persist users to {self._config_path}: {e}")
 
     def set_check_interval(self, seconds: float) -> None:
         """Set the interval for file mtime checking."""

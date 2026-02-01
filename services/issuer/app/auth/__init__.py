@@ -12,6 +12,22 @@ from app.auth.session import (
     reset_session_store,
     reset_rate_limiter,
 )
+from app.auth.oauth import (
+    OAuthState,
+    OAuthStateStore,
+    OAuthTokenResponse,
+    OAuthUserInfo,
+    OAuthError,
+    get_oauth_state_store,
+    reset_oauth_state_store,
+    generate_pkce_pair,
+    generate_state,
+    generate_nonce,
+    build_authorization_url,
+    exchange_code_for_tokens,
+    validate_id_token,
+    is_email_domain_allowed,
+)
 
 __all__ = [
     # API key auth
@@ -34,4 +50,19 @@ __all__ = [
     "get_rate_limiter",
     "reset_session_store",
     "reset_rate_limiter",
+    # OAuth
+    "OAuthState",
+    "OAuthStateStore",
+    "OAuthTokenResponse",
+    "OAuthUserInfo",
+    "OAuthError",
+    "get_oauth_state_store",
+    "reset_oauth_state_store",
+    "generate_pkce_pair",
+    "generate_state",
+    "generate_nonce",
+    "build_authorization_url",
+    "exchange_code_for_tokens",
+    "validate_id_token",
+    "is_email_domain_allowed",
 ]

@@ -1,9 +1,9 @@
-## Code Review: Username/Password Auth - Fixes
+## Code Review: Sprint 38 - Type Hint Fix
 
 **Verdict:** APPROVED
 
-### Fix Assessment
-Both requested changes are in place. The default admin user is now disabled by default with an explicit comment in `services/issuer/config/users.json`, reducing the production footgun. Session revocation checks now refresh user and API key state via `reload_if_stale()` before evaluating enablement/revocation, which addresses the stale-state risk in `services/issuer/app/auth/session.py`.
+### Assessment
+The type hint update to `url: str | None` matches test usage and the implementation already returns `False` for `None` via the existing guard. This resolves the previous mismatch cleanly.
 
 ### Findings
 - No remaining issues.

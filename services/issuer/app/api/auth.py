@@ -3,26 +3,53 @@
 Provides login/logout endpoints for session-based authentication.
 Sessions are stored server-side; clients receive an HttpOnly cookie.
 
-Supports two authentication methods:
+Supports three authentication methods:
 1. API key - for programmatic access
 2. Email/password - for user authentication
+3. Microsoft OAuth - for SSO via Microsoft Entra ID
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import quote
 
-from fastapi import APIRouter, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Query, Request, Response
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
-from app.auth.api_key import get_api_key_store
+from app.auth.api_key import Principal, get_api_key_store
+from app.auth.oauth import (
+    OAuthError,
+    OAuthState,
+    build_authorization_url,
+    exchange_code_for_tokens,
+    generate_nonce,
+    generate_pkce_pair,
+    generate_state,
+    get_oauth_state_store,
+    is_email_domain_allowed,
+    validate_id_token,
+)
 from app.auth.session import (
     get_rate_limiter,
     get_session_store,
 )
 from app.auth.users import get_user_store
 from app.audit.logger import get_audit_logger
-from app.config import SESSION_COOKIE_SECURE, SESSION_TTL_SECONDS
+from app.config import (
+    OAUTH_M365_ALLOWED_DOMAINS,
+    OAUTH_M365_AUTO_PROVISION,
+    OAUTH_M365_CLIENT_ID,
+    OAUTH_M365_CLIENT_SECRET,
+    OAUTH_M365_DEFAULT_ROLES,
+    OAUTH_M365_ENABLED,
+    OAUTH_M365_REDIRECT_URI,
+    OAUTH_M365_TENANT_ID,
+    OAUTH_STATE_TTL_SECONDS,
+    SESSION_COOKIE_SECURE,
+    SESSION_TTL_SECONDS,
+)
 
 log = logging.getLogger(__name__)
 
@@ -30,6 +57,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 # Cookie configuration
 SESSION_COOKIE_NAME = "vvp_session"
+OAUTH_STATE_COOKIE_NAME = "vvp_oauth_state_id"
 
 
 # =============================================================================
@@ -92,6 +120,42 @@ class RateLimitResponse(BaseModel):
 # =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
+
+
+def _is_safe_redirect_url(url: str | None) -> bool:
+    """Check if a redirect URL is safe (same-origin relative path).
+
+    Prevents open redirect vulnerabilities by only allowing relative paths
+    that start with '/' and don't contain protocol or host components.
+
+    Args:
+        url: The URL to validate (None returns False)
+
+    Returns:
+        True if the URL is a safe relative path, False otherwise
+    """
+    if not url:
+        return False
+
+    # Must start with single forward slash (relative path)
+    if not url.startswith("/"):
+        return False
+
+    # Reject protocol-relative URLs (//evil.com)
+    if url.startswith("//"):
+        return False
+
+    # Reject URLs with protocol (http://, https://, javascript:, etc.)
+    if "://" in url or url.lower().startswith("javascript:"):
+        return False
+
+    # Reject URLs with encoded characters that could bypass checks
+    # (e.g., %2f%2f for //)
+    url_lower = url.lower()
+    if "%2f%2f" in url_lower or "%252f" in url_lower:
+        return False
+
+    return True
 
 
 def _get_client_ip(request: Request) -> str:
@@ -333,3 +397,373 @@ async def auth_status(request: Request) -> AuthStatusResponse:
         roles=[],
         expires_at=None,
     )
+
+
+# =============================================================================
+# OAUTH M365 ENDPOINTS
+# =============================================================================
+
+
+class OAuthStatusResponse(BaseModel):
+    """OAuth configuration status response."""
+
+    class M365Status(BaseModel):
+        """Microsoft M365 OAuth status."""
+
+        enabled: bool = Field(..., description="Whether M365 OAuth is enabled")
+        tenant_id: Optional[str] = Field(None, description="Tenant ID (truncated)")
+        client_id: Optional[str] = Field(None, description="Client ID (truncated)")
+        redirect_uri: Optional[str] = Field(None, description="Redirect URI")
+        auto_provision: bool = Field(..., description="Whether auto-provisioning is enabled")
+        allowed_domains: list[str] = Field(..., description="Allowed email domains")
+
+    m365: M365Status = Field(..., description="Microsoft M365 OAuth status")
+
+
+@router.get("/oauth/status", response_model=OAuthStatusResponse)
+async def oauth_status() -> OAuthStatusResponse:
+    """Get OAuth configuration status.
+
+    Returns information about enabled OAuth providers (without secrets).
+    """
+    return OAuthStatusResponse(
+        m365=OAuthStatusResponse.M365Status(
+            enabled=OAUTH_M365_ENABLED,
+            tenant_id=f"{OAUTH_M365_TENANT_ID[:8]}..." if OAUTH_M365_TENANT_ID else None,
+            client_id=f"{OAUTH_M365_CLIENT_ID[:8]}..." if OAUTH_M365_CLIENT_ID else None,
+            redirect_uri=OAUTH_M365_REDIRECT_URI,
+            auto_provision=OAUTH_M365_AUTO_PROVISION,
+            allowed_domains=OAUTH_M365_ALLOWED_DOMAINS or ["*"],
+        )
+    )
+
+
+@router.get("/oauth/m365/start", response_model=None)
+async def oauth_m365_start(
+    request: Request,
+    redirect_after: str = Query(default="/ui/", description="URL to redirect to after login"),
+) -> RedirectResponse | JSONResponse:
+    """Initiate Microsoft OAuth login flow.
+
+    Generates PKCE challenge, state, and nonce, stores them server-side,
+    then redirects to Microsoft authorization endpoint.
+
+    Query Parameters:
+        redirect_after: Where to redirect after successful login (default: /ui/)
+
+    Returns:
+        302 redirect to Microsoft login page
+    """
+    audit = get_audit_logger()
+
+    if not OAUTH_M365_ENABLED:
+        audit.log_access(
+            action="oauth.m365.start",
+            principal_id="anonymous",
+            status="denied",
+            details={"reason": "oauth_disabled"},
+            request=request,
+        )
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Microsoft OAuth is not enabled"},
+        )
+
+    # Verify configuration
+    if not all([OAUTH_M365_TENANT_ID, OAUTH_M365_CLIENT_ID, OAUTH_M365_REDIRECT_URI]):
+        log.error("OAuth M365 enabled but missing configuration")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "OAuth configuration incomplete"},
+        )
+
+    # Validate redirect_after to prevent open redirects
+    if not _is_safe_redirect_url(redirect_after):
+        audit.log_access(
+            action="oauth.m365.start",
+            principal_id="anonymous",
+            status="denied",
+            details={"reason": "invalid_redirect", "redirect_after": redirect_after},
+            request=request,
+        )
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Invalid redirect URL"},
+        )
+
+    # Generate PKCE, state, nonce
+    code_verifier, code_challenge = generate_pkce_pair()
+    state = generate_state()
+    nonce = generate_nonce()
+
+    # Build OAuth state to store server-side
+    oauth_state = OAuthState(
+        state=state,
+        nonce=nonce,
+        code_verifier=code_verifier,
+        created_at=datetime.now(timezone.utc),
+        redirect_after=redirect_after,
+    )
+
+    # Store state server-side and get state_id for cookie
+    oauth_state_store = get_oauth_state_store()
+    state_id = await oauth_state_store.create(oauth_state)
+
+    # Build authorization URL
+    auth_url = build_authorization_url(
+        tenant_id=OAUTH_M365_TENANT_ID,
+        client_id=OAUTH_M365_CLIENT_ID,
+        redirect_uri=OAUTH_M365_REDIRECT_URI,
+        state=state,
+        nonce=nonce,
+        code_challenge=code_challenge,
+    )
+
+    # Create response with state_id cookie
+    response = RedirectResponse(url=auth_url, status_code=302)
+
+    response.set_cookie(
+        key=OAUTH_STATE_COOKIE_NAME,
+        value=state_id,
+        httponly=True,
+        samesite="lax",
+        secure=SESSION_COOKIE_SECURE,
+        path="/",
+        max_age=OAUTH_STATE_TTL_SECONDS,
+    )
+
+    audit.log_access(
+        action="oauth.m365.start",
+        principal_id="anonymous",
+        status="initiated",
+        details={"redirect_after": redirect_after},
+        request=request,
+    )
+
+    return response
+
+
+@router.get("/oauth/m365/callback", response_model=None)
+async def oauth_m365_callback(
+    request: Request,
+    code: Optional[str] = Query(None, description="Authorization code from Microsoft"),
+    state: Optional[str] = Query(None, description="State parameter"),
+    error: Optional[str] = Query(None, description="Error from Microsoft"),
+    error_description: Optional[str] = Query(None, description="Error description"),
+) -> RedirectResponse | JSONResponse:
+    """Handle Microsoft OAuth callback.
+
+    Validates state, exchanges code for tokens, validates ID token,
+    maps email to VVP user, creates session, and redirects to UI.
+
+    Query Parameters:
+        code: Authorization code from Microsoft
+        state: State parameter (must match server-side state)
+        error: Error code if authentication failed
+        error_description: Human-readable error description
+
+    Returns:
+        302 redirect to UI on success, redirect with error on failure
+    """
+    audit = get_audit_logger()
+
+    if not OAUTH_M365_ENABLED:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Microsoft OAuth is not enabled"},
+        )
+
+    # Helper to redirect with error
+    def error_redirect(message: str, redirect_to: str = "/ui/") -> RedirectResponse:
+        encoded_message = quote(message)
+        response = RedirectResponse(
+            url=f"{redirect_to}?error=oauth_failed&message={encoded_message}",
+            status_code=302,
+        )
+        # Clear OAuth state cookie
+        response.delete_cookie(key=OAUTH_STATE_COOKIE_NAME, path="/")
+        return response
+
+    # Check for error from Microsoft
+    if error:
+        audit.log_access(
+            action="oauth.m365.callback",
+            principal_id="anonymous",
+            status="denied",
+            details={"error": error, "description": error_description},
+            request=request,
+        )
+        return error_redirect(error_description or error)
+
+    # Get state_id from cookie
+    state_id = request.cookies.get(OAUTH_STATE_COOKIE_NAME)
+    if not state_id:
+        audit.log_access(
+            action="oauth.m365.callback",
+            principal_id="anonymous",
+            status="denied",
+            details={"reason": "missing_state_cookie"},
+            request=request,
+        )
+        return error_redirect("Session expired")
+
+    # Retrieve and delete state from server-side store (one-time use)
+    oauth_state_store = get_oauth_state_store()
+    oauth_state = await oauth_state_store.get_and_delete(state_id)
+
+    if oauth_state is None:
+        audit.log_access(
+            action="oauth.m365.callback",
+            principal_id="anonymous",
+            status="denied",
+            details={"reason": "state_not_found"},
+            request=request,
+        )
+        return error_redirect("Session expired")
+
+    # Validate state parameter (CSRF protection)
+    if state != oauth_state.state:
+        audit.log_access(
+            action="oauth.m365.callback",
+            principal_id="anonymous",
+            status="denied",
+            details={"reason": "state_mismatch"},
+            request=request,
+        )
+        return error_redirect("Invalid session", oauth_state.redirect_after)
+
+    # Check if code is present
+    if not code:
+        audit.log_access(
+            action="oauth.m365.callback",
+            principal_id="anonymous",
+            status="denied",
+            details={"reason": "missing_code"},
+            request=request,
+        )
+        return error_redirect("Authorization code missing", oauth_state.redirect_after)
+
+    try:
+        # Exchange code for tokens
+        tokens = await exchange_code_for_tokens(
+            tenant_id=OAUTH_M365_TENANT_ID,
+            client_id=OAUTH_M365_CLIENT_ID,
+            client_secret=OAUTH_M365_CLIENT_SECRET,
+            redirect_uri=OAUTH_M365_REDIRECT_URI,
+            code=code,
+            code_verifier=oauth_state.code_verifier,
+        )
+
+        # Validate ID token and extract user info
+        user_info = await validate_id_token(
+            id_token=tokens.id_token,
+            tenant_id=OAUTH_M365_TENANT_ID,
+            client_id=OAUTH_M365_CLIENT_ID,
+            nonce=oauth_state.nonce,
+        )
+
+        # Check domain restriction
+        if not is_email_domain_allowed(user_info.email, OAUTH_M365_ALLOWED_DOMAINS):
+            audit.log_access(
+                action="oauth.m365.callback",
+                principal_id=f"oauth:{user_info.email}",
+                status="denied",
+                details={"reason": "domain_not_allowed"},
+                request=request,
+            )
+            return error_redirect("Email domain not allowed", oauth_state.redirect_after)
+
+        # Map email to VVP user
+        user_store = get_user_store()
+        user = user_store.get_user(user_info.email)
+
+        if user is None:
+            if OAUTH_M365_AUTO_PROVISION:
+                # Auto-provision new user
+                user = user_store.create_user(
+                    email=user_info.email,
+                    name=user_info.name,
+                    password_hash="",  # OAuth users don't have passwords
+                    roles=set(OAUTH_M365_DEFAULT_ROLES),
+                    enabled=True,
+                    is_oauth_user=True,
+                )
+                log.info(f"Auto-provisioned OAuth user: {user_info.email}")
+            else:
+                audit.log_access(
+                    action="oauth.m365.callback",
+                    principal_id=f"oauth:{user_info.email}",
+                    status="denied",
+                    details={"reason": "user_not_found"},
+                    request=request,
+                )
+                return error_redirect("User not registered", oauth_state.redirect_after)
+
+        if not user.enabled:
+            audit.log_access(
+                action="oauth.m365.callback",
+                principal_id=f"user:{user_info.email}",
+                status="denied",
+                details={"reason": "user_disabled"},
+                request=request,
+            )
+            return error_redirect("Account disabled", oauth_state.redirect_after)
+
+        # Create principal and session
+        principal = Principal(
+            key_id=f"user:{user.email}",
+            name=user.name,
+            roles=user.roles,
+        )
+
+        session_store = get_session_store()
+        session = await session_store.create(principal, SESSION_TTL_SECONDS)
+
+        # Build redirect response with session cookie
+        redirect_url = oauth_state.redirect_after
+        redirect_response = RedirectResponse(url=redirect_url, status_code=302)
+
+        # Set session cookie
+        redirect_response.set_cookie(
+            key=SESSION_COOKIE_NAME,
+            value=session.session_id,
+            httponly=True,
+            samesite="lax",
+            secure=SESSION_COOKIE_SECURE,
+            path="/",
+            max_age=SESSION_TTL_SECONDS,
+        )
+
+        # Clear OAuth state cookie
+        redirect_response.delete_cookie(key=OAUTH_STATE_COOKIE_NAME, path="/")
+
+        audit.log_access(
+            action="oauth.m365.callback",
+            principal_id=principal.key_id,
+            status="success",
+            details={"method": "oauth_m365", "session_ttl": SESSION_TTL_SECONDS},
+            request=request,
+        )
+
+        log.info(f"OAuth login successful for {user_info.email}")
+        return redirect_response
+
+    except OAuthError as e:
+        audit.log_access(
+            action="oauth.m365.callback",
+            principal_id="anonymous",
+            status="denied",
+            details={"reason": "oauth_error", "error": str(e)},
+            request=request,
+        )
+        return error_redirect("Authentication failed", oauth_state.redirect_after)
+    except Exception as e:
+        log.error(f"OAuth callback error: {e}")
+        audit.log_access(
+            action="oauth.m365.callback",
+            principal_id="anonymous",
+            status="error",
+            details={"error": str(e)},
+            request=request,
+        )
+        return error_redirect("Authentication failed", oauth_state.redirect_after)

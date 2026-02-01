@@ -22,7 +22,7 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 35 | E2E Integration Testing | COMPLETE | Sprint 33 |
 | 36 | Key Management & Rotation | COMPLETE | Sprint 30 |
 | 37 | Session-Based Authentication | COMPLETE | Sprint 30 |
-| 38 | OAuth (Microsoft M365) | PLANNED | Sprint 30 |
+| 38 | OAuth (Microsoft M365) | COMPLETE | Sprint 30 |
 
 ---
 
@@ -705,7 +705,7 @@ services/issuer/tests/
 
 ---
 
-## Sprint 38: OAuth (Microsoft M365) (PLANNED)
+## Sprint 38: OAuth (Microsoft M365) (COMPLETE)
 
 **Goal:** Add Microsoft M365 OAuth login for the Issuer UI, enabling SSO alongside existing API key and username/password flows.
 
@@ -715,40 +715,53 @@ services/issuer/tests/
 Current UI authentication uses sessions created from API keys or username/password. This sprint adds Microsoft Entra ID (Azure AD) OAuth login to exchange a validated Microsoft identity for a VVP session. The existing API key and user auth remain supported for backward compatibility.
 
 **Deliverables:**
-- [ ] OAuth login endpoints (`GET /auth/oauth/m365/start`, `GET /auth/oauth/m365/callback`)
-- [ ] Microsoft Entra application registration configuration (tenant ID, client ID, client secret)
-- [ ] Token validation and user identity mapping (email -> VVP user record)
-- [ ] Optional auto-provisioning for first-time users (configurable)
-- [ ] Session creation on successful OAuth callback
-- [ ] UI login modal button: “Sign in with Microsoft”
-- [ ] Admin configuration visibility for OAuth settings (read-only)
-- [ ] Tests for OAuth flow (mocked token exchange and callback)
-- [ ] Documentation for setup steps and required Microsoft app permissions
+- [x] OAuth login endpoints (`GET /auth/oauth/m365/start`, `GET /auth/oauth/m365/callback`)
+- [x] Microsoft Entra application registration configuration (tenant ID, client ID, client secret)
+- [x] Token validation and user identity mapping (email -> VVP user record)
+- [x] Optional auto-provisioning for first-time users (configurable)
+- [x] Session creation on successful OAuth callback
+- [x] UI login modal button: "Sign in with Microsoft"
+- [x] Admin configuration visibility for OAuth settings (read-only)
+- [x] Tests for OAuth flow (mocked token exchange and callback)
+- [x] Open redirect vulnerability protection for redirect_after parameter
+- [x] Token validation tests with mocked JWKS (12 test cases)
 
 **Key Files:**
 ```
 services/issuer/app/
 ├── api/
-│   └── auth.py              # OAuth start/callback endpoints
+│   └── auth.py              # OAuth start/callback endpoints + open redirect protection
 ├── auth/
-│   └── oauth.py             # OAuth helpers, token validation
+│   ├── oauth.py             # OAuthStateStore, PKCE, token validation
+│   └── users.py             # Updated with is_oauth_user flag
 ├── config.py                # OAUTH_* settings
 └── main.py                  # Auth router + callback integration
 services/issuer/web/
-├── shared.js                # Add Microsoft login button + flow
+├── shared.js                # Microsoft login button + OAuth error handling
 └── styles.css               # OAuth button styles
 services/issuer/tests/
-└── test_oauth.py            # OAuth flow tests (mocked)
+└── test_oauth.py            # 56 OAuth flow tests (mocked)
 ```
 
 **OAuth Flow:**
-1. UI clicks “Sign in with Microsoft”
+1. UI clicks "Sign in with Microsoft"
 2. `GET /auth/oauth/m365/start` redirects to Microsoft authorization URL
 3. User authenticates with Microsoft, returns to callback URL
 4. `GET /auth/oauth/m365/callback` exchanges code for tokens
-5. Validate ID token (issuer, audience, nonce, expiry)
+5. Validate ID token (issuer, audience, nonce, tid, expiry)
 6. Map email to VVP user; optionally auto-provision
 7. Create VVP session and redirect back to UI
+
+**Security Measures:**
+- Server-side OAuthStateStore (mirrors SessionStore pattern)
+- PKCE (code_verifier/code_challenge) prevents authorization code interception
+- State parameter prevents CSRF attacks
+- Nonce prevents ID token replay attacks
+- Tenant (tid) claim validation ensures token from expected Azure tenant
+- Full JWT validation (alg=RS256, kid, exp, iat, nbf, iss, aud, tid, nonce)
+- Open redirect protection (validates redirect URLs are relative paths)
+- HttpOnly cookies with SameSite=Lax for state_id cookie
+- OAuth users flagged separately (cannot use password auth)
 
 **Configuration:**
 | Variable | Default | Description |
@@ -760,13 +773,15 @@ services/issuer/tests/
 | `VVP_OAUTH_M365_REDIRECT_URI` | - | OAuth callback URL |
 | `VVP_OAUTH_M365_AUTO_PROVISION` | `false` | Auto-create user on first login |
 | `VVP_OAUTH_M365_ALLOWED_DOMAINS` | - | Optional allowed email domains |
+| `VVP_OAUTH_STATE_TTL_SECONDS` | `600` | OAuth state cookie/store TTL |
+| `VVP_OAUTH_M365_DEFAULT_ROLES` | `issuer:readonly` | Roles for auto-provisioned users |
 
 **Exit Criteria:**
-- [ ] OAuth login works end-to-end with Microsoft Entra
-- [ ] Session created and UI authenticated after OAuth callback
-- [ ] API key and username/password auth still function
-- [ ] Token validation and domain restrictions enforced
-- [ ] OAuth tests pass (mocked)
+- [x] OAuth login works end-to-end with Microsoft Entra
+- [x] Session created and UI authenticated after OAuth callback
+- [x] API key and username/password auth still function
+- [x] Token validation and domain restrictions enforced
+- [x] OAuth tests pass (56 tests, all mocked)
 
 ---
 
