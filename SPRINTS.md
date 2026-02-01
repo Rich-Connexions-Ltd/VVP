@@ -17,7 +17,7 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 30 | Security Model | COMPLETE | Sprint 29 |
 | 31 | ACDC Issuance | COMPLETE | Sprint 30 |
 | 32 | Dossier Assembly | COMPLETE | Sprint 31 |
-| 33 | Azure Deployment | IN PROGRESS | Sprint 32 |
+| 33 | Azure Deployment | COMPLETE | Sprint 32 |
 | 34 | Schema Management | COMPLETE | Sprint 29 |
 | 35 | E2E Integration Testing | COMPLETE | Sprint 33 |
 | 36 | Key Management & Rotation | COMPLETE | Sprint 30 |
@@ -378,38 +378,42 @@ services/issuer/app/
 
 ---
 
-## Sprint 33: Azure Deployment (IN PROGRESS)
+## Sprint 33: Azure Deployment (COMPLETE)
 
-**Goal:** Deploy issuer to Azure alongside verifier.
+**Goal:** Deploy issuer and VVP-owned witnesses to Azure with custom domains.
 
-**Status:** CI/CD and documentation complete. Azure resource provisioning pending.
-
-**Note:** vvp-env does NOT have VNet integration, so using Azure Files SMB (not NFS) with single-replica mitigation.
+**Commits:** `bfc61eb`, `e858a58`, `f2a4b2a`
 
 **Deliverables:**
-- [ ] Azure Container App configuration (internal ingress)
-- [ ] Azure Files for Keeper persistence (SMB fallback)
-- [ ] Key Vault integration for API keys
-- [x] CI/CD pipeline updates (`.github/workflows/deploy.yml`)
-- [x] Backup/restore procedures (`Documentation/AZURE_RESTORE.md`)
-- [x] Deployment documentation (`Documentation/AZURE_DEPLOYMENT.md`)
-- [x] Verification scripts (`services/issuer/scripts/verify-azure-deployment.sh`)
+- [x] VVP-owned KERI witnesses deployed (3x Container Apps with deterministic AIDs)
+- [x] Custom witness Docker image (`services/witness/Dockerfile`)
+- [x] Issuer Container App with external ingress
+- [x] Custom domains on rcnx.io (verifier, issuer, 3 witnesses)
+- [x] HTTPS certificates (Azure managed) for all services
+- [x] CI/CD pipeline with witness build and deployment
+- [x] keripy submodule fixed for Python 3.12 compatibility
 
 **Infrastructure:**
-| Component | Azure Service | Status |
-|-----------|---------------|--------|
-| Issuer Service | Container App (internal) | Pending |
-| Keeper Storage | Azure Files (SMB) | Pending |
-| Secrets | Key Vault | Pending |
-| Logging | Log Analytics | Auto |
-| Backup | Recovery Services | Pending |
+| Component | Azure Service | URL |
+|-----------|---------------|-----|
+| Verifier | Container App | https://vvp-verifier.rcnx.io |
+| Issuer | Container App | https://vvp-issuer.rcnx.io |
+| Witness 1 (wan) | Container App | https://vvp-witness1.rcnx.io |
+| Witness 2 (wil) | Container App | https://vvp-witness2.rcnx.io |
+| Witness 3 (wes) | Container App | https://vvp-witness3.rcnx.io |
 
-**Network Configuration:**
+**Witness AIDs (deterministic):**
+- wan: `BBilc4-L3tFUnfM_wJr4S4OJanAv_VmF_dJNN6vkf2Ha`
+- wil: `BLskRTInXnMxWaGqcpSyMgo0nYbalW99cGZESrz3zapM`
+- wes: `BIKKuvBwpmDVA4Ds-EpL5bt9OqPzWPja2LigFYZN2YfX`
+
+**Key Files:**
 ```
-Azure Container Apps Environment (vvp-env)
-├── vvp-verifier (external ingress) ─── Public Internet
-└── vvp-issuer (internal ingress) ─── Internal Only
-    └── Azure Files SMB (/data/vvp-issuer)
+services/witness/
+├── Dockerfile           # Custom witness image based on gleif/keri:1.2.10
+└── start-witness.py     # Deterministic salt startup script
+.github/workflows/deploy.yml  # CI/CD with witness build/deploy jobs
+.gitmodules              # keripy submodule configuration
 ```
 
 **CI/CD Updates:**
