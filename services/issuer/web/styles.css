@@ -4,8 +4,9 @@
    CSS Custom Properties
    ========================================================================== */
 :root {
-  --vvp-primary: #3498db;
-  --vvp-primary-hover: #2980b9;
+  /* Issuer uses teal/green theme to distinguish from Verifier (blue) */
+  --vvp-primary: #2a9d8f;
+  --vvp-primary-hover: #238b80;
   --vvp-secondary: #95a5a6;
   --vvp-secondary-hover: #7f8c8d;
   --vvp-success: #28a745;
@@ -13,12 +14,14 @@
   --vvp-warning: #ffc107;
   --vvp-info: #17a2b8;
   --vvp-muted: #6c757d;
-  --vvp-dark: #2c3e50;
-  --vvp-dark-secondary: #34495e;
-  --vvp-light: #f8f9fa;
-  --vvp-border: #dee2e6;
+  --vvp-dark: #264653;
+  --vvp-dark-secondary: #2d5a4e;
+  --vvp-light: #f8faf9;
+  --vvp-border: #d4e6e1;
   --vvp-text: #495057;
   --vvp-text-muted: #666;
+  /* Color for links to Verifier service */
+  --vvp-verifier-color: #0066cc;
 }
 
 /* ==========================================================================
@@ -93,6 +96,40 @@ h2 {
 .nav-links a.active {
   background: var(--vvp-primary);
   color: white;
+}
+
+/* Header branding with OVC logo */
+.header-brand {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.header-brand .ovc-logo {
+  height: 40px;
+  width: auto;
+}
+
+.header-brand .logo {
+  display: flex;
+  flex-direction: column;
+}
+
+.header-brand .service-label {
+  font-size: 0.75rem;
+  color: var(--vvp-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Cross-service link (styled with Verifier's blue) */
+.nav-links a.verifier-link {
+  background: var(--vvp-verifier-color);
+  color: white;
+}
+
+.nav-links a.verifier-link:hover {
+  background: #0055aa;
 }
 
 /* ==========================================================================

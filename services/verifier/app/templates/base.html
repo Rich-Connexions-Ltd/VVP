@@ -19,6 +19,8 @@
             --vvp-warning: #ffc107;
             --vvp-info: #0066cc;
             --vvp-muted: #6c757d;
+            /* Color for links to Issuer service (teal) */
+            --vvp-issuer-color: #2a9d8f;
         }
 
         /* Site header navigation */
@@ -30,11 +32,30 @@
             margin-bottom: 1rem;
             border-bottom: 1px solid var(--vvp-muted);
         }
+        .header-brand {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+        .header-brand .ovc-logo {
+            height: 36px;
+            width: auto;
+        }
         .site-header .logo {
             font-weight: bold;
             font-size: 1.2rem;
             text-decoration: none;
             color: inherit;
+            display: flex;
+            flex-direction: column;
+            line-height: 1.1;
+        }
+        .site-header .logo .service-label {
+            font-size: 0.65rem;
+            color: var(--vvp-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-weight: normal;
         }
         .site-header .logo:hover {
             color: var(--vvp-info);
@@ -55,6 +76,14 @@
         .site-header .nav-links a.active {
             background: var(--vvp-info);
             color: white;
+        }
+        /* Cross-service link (styled with Issuer's teal) */
+        .site-header .nav-links a.issuer-link {
+            background: var(--vvp-issuer-color);
+            color: white;
+        }
+        .site-header .nav-links a.issuer-link:hover {
+            background: #238b80;
         }
 
         /* Help button and modal */
@@ -660,13 +689,20 @@
     <main class="container">
         <header>
             <div class="site-header">
-                <a href="/" class="logo">VVP Verifier</a>
+                <div class="header-brand">
+                    <img src="/static/ovc-logo.png" alt="OVC" class="ovc-logo">
+                    <a href="/" class="logo">
+                        <span class="service-label">VVP</span>
+                        Verifier
+                    </a>
+                </div>
                 <nav class="nav-links">
                     <a href="/">Home</a>
                     <a href="/verify">Verify</a>
                     <a href="/verify/simple">Quick Verify</a>
                     <a href="/verify/full">Explorer</a>
                     <a href="/ui/admin">Admin</a>
+                    <a href="https://vvp-issuer.rcnx.io" class="issuer-link" target="_blank">Issuer ↗</a>
                     <button class="help-btn" onclick="showVerifierHelp()">? Help</button>
                 </nav>
             </div>
