@@ -635,6 +635,8 @@ Currently, API endpoints require API keys via the `X-API-Key` header. GET endpoi
 - [x] **Bonus:** User management UI in admin panel
 - [x] Session invalidation when user disabled or API key revoked (with `reload_if_stale()` checks)
 
+**Commits:** `0e3795f`
+
 **Key Files:**
 ```
 services/issuer/app/
