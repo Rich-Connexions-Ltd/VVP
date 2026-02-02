@@ -91,6 +91,7 @@ class TestBuildIssuerIdentityMap:
         said: str,
         issuer_aid: str,
         attributes: dict = None,
+        edges: dict = None,
     ) -> ACDC:
         """Helper to create test ACDC."""
         return ACDC(
@@ -99,7 +100,7 @@ class TestBuildIssuerIdentityMap:
             issuer_aid=issuer_aid,
             schema_said="ESchemaTest1234567890123456789012345678",
             attributes=attributes or {},
-            edges=None,
+            edges=edges,
             rules=None,
             raw={},
         )
@@ -397,6 +398,49 @@ class TestBuildIssuerIdentityMap:
 
         # Issuer not in well-known, no identity info → empty
         assert len(result) == 0
+
+    def test_edge_target_wellknown_aid_resolved(self):
+        """Edge target pointing to well-known AID is resolved."""
+        # Provenant Global is a well-known AID
+        provenant_aid = "ELW1FqnJZgOBR43UqAXCCFF6Zyz_EXaunivemMEkhRLy"
+        acdc = self._make_acdc(
+            said="ESAID1234567890123456789012345678901234567",
+            issuer_aid="EUnknownIssuer12345678901234567890123",
+            attributes={
+                "someField": "someValue",
+            },
+            edges={
+                "issuer": provenant_aid,  # Edge points to Provenant Global AID
+            },
+        )
+        result = build_issuer_identity_map([acdc])
+
+        # Provenant Global should be identified via well-known from edge target
+        assert provenant_aid in result
+        identity = result[provenant_aid]
+        assert identity.legal_name == "Provenant Global"
+        assert identity.role == "wellknown"
+
+    def test_edge_dict_target_wellknown_aid_resolved(self):
+        """Edge target in dict format pointing to well-known AID is resolved."""
+        gleif_aid = "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao"
+        acdc = self._make_acdc(
+            said="ESAID1234567890123456789012345678901234567",
+            issuer_aid="EUnknownIssuer12345678901234567890123",
+            attributes={
+                "someField": "someValue",
+            },
+            edges={
+                "auth": {"n": gleif_aid},  # Dict format edge
+            },
+        )
+        result = build_issuer_identity_map([acdc])
+
+        # GLEIF should be identified via well-known from edge target
+        assert gleif_aid in result
+        identity = result[gleif_aid]
+        assert identity.legal_name == "GLEIF"
+        assert identity.role == "wellknown"
 
 
 class TestLoadWellknownAids:

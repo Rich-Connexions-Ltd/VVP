@@ -263,4 +263,24 @@ def build_issuer_identity_map(
                 identity_map[aid] = wk
                 log.debug(f"Identity from well-known: {aid[:16]}... = {wk.legal_name}")
 
+    # Also check edge targets for well-known AIDs
+    # Edges may point to AIDs (not credential SAIDs) that should be resolved
+    for acdc in acdcs:
+        if not isinstance(acdc.edges, dict):
+            continue
+        for edge_key, edge_value in acdc.edges.items():
+            if edge_key in ("d", "n"):
+                continue
+            # Extract edge target (could be string AID, dict with 'n', etc.)
+            target = None
+            if isinstance(edge_value, str):
+                target = edge_value
+            elif isinstance(edge_value, dict):
+                target = edge_value.get("n") or edge_value.get("d")
+            if target and target not in identity_map:
+                wk = get_wellknown_identity(target)
+                if wk:
+                    identity_map[target] = wk
+                    log.debug(f"Identity from well-known (edge): {target[:16]}... = {wk.legal_name}")
+
     return identity_map
