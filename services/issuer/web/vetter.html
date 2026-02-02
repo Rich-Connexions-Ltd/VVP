@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vetter Certification - VVP Issuer</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    .country-selector {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 0.5rem;
+      max-height: 300px;
+      overflow-y: auto;
+      border: 1px solid #ddd;
+      padding: 1rem;
+      border-radius: 4px;
+      background: #fafafa;
+    }
+    .country-item {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.25rem;
+    }
+    .country-item label {
+      font-size: 0.9rem;
+      cursor: pointer;
+    }
+    .country-item input {
+      margin: 0;
+    }
+    .selection-controls {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 0.5rem;
+    }
+    .selection-controls button {
+      padding: 0.3rem 0.6rem;
+      font-size: 0.8rem;
+      background: #6c757d;
+    }
+    .selection-controls button:hover {
+      background: #5a6268;
+    }
+    .selected-count {
+      font-size: 0.85rem;
+      color: #666;
+      margin-left: auto;
+    }
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0.5rem;
+    }
+    .info-box {
+      background: #e3f2fd;
+      border-left: 4px solid #2196f3;
+      padding: 1rem;
+      border-radius: 0 4px 4px 0;
+      margin: 1rem 0;
+    }
+    .warning-box {
+      background: #fff3e0;
+      border-left: 4px solid #ff9800;
+      padding: 1rem;
+      border-radius: 0 4px 4px 0;
+      margin: 1rem 0;
+    }
+    .cert-list {
+      margin-top: 1rem;
+    }
+    .cert-item {
+      background: #f8f9fa;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      padding: 1rem;
+      margin-bottom: 0.5rem;
+    }
+    .cert-item h4 {
+      margin: 0 0 0.5rem 0;
+      color: var(--vvp-primary);
+    }
+    .cert-meta {
+      display: flex;
+      gap: 1.5rem;
+      font-size: 0.9rem;
+      color: #666;
+    }
+    .cert-targets {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      margin-top: 0.5rem;
+    }
+    .target-badge {
+      display: inline-block;
+      padding: 0.2rem 0.5rem;
+      background: #e9ecef;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      font-family: monospace;
+    }
+    .target-badge.ecc { background: #d1ecf1; color: #0c5460; }
+    .target-badge.jurisdiction { background: #d4edda; color: #155724; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-brand">
+      <img src="/static/ovc-logo.png" alt="OVC" class="ovc-logo">
+      <a href="/ui/" class="logo">
+        <span class="service-label">VVP</span>
+        Issuer
+      </a>
+    </div>
+    <nav class="nav-links">
+      <a href="/ui/identity">Identities</a>
+      <a href="/ui/registry">Registries</a>
+      <a href="/ui/schemas">Schemas</a>
+      <a href="/ui/credentials">Credentials</a>
+      <a href="/ui/dossier">Dossiers</a>
+      <a href="/ui/help">Help</a>
+      <a href="/ui/admin">Admin</a>
+      <a href="https://vvp-verifier.rcnx.io" class="verifier-link" target="_blank">Verifier &#8599;</a>
+    </nav>
+  </header>
+
+  <main>
+    <h1>Vetter Certification</h1>
+    <p class="subtitle">Issue credentials that authorize vetters for specific geographic regions</p>
+
+    <div class="info-box">
+      <strong>About Vetter Certification</strong>
+      <p>A Vetter Certification credential authorizes an organization to issue VVP credentials for specific geographic regions. It defines:</p>
+      <ul>
+        <li><strong>ECC Targets</strong>: E.164 country codes for telephone number attestation</li>
+        <li><strong>Jurisdiction Targets</strong>: ISO 3166-1 alpha-3 codes for incorporation and brand credentials</li>
+      </ul>
+    </div>
+
+    <!-- Issue Vetter Certification Form -->
+    <div class="card">
+      <h2>Issue Vetter Certification</h2>
+
+      <div class="warning-box">
+        <strong>Note:</strong> In production, Vetter Certifications are typically issued by a governance authority (e.g., GSMA).
+        This form is for testing and development purposes.
+      </div>
+
+      <form id="issueForm">
+        <div class="form-group">
+          <label for="registry">Registry</label>
+          <select id="registry" required>
+            <option value="">Loading registries...</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="vetterAid">Vetter AID (recipient)</label>
+          <input type="text" id="vetterAid" placeholder="AID of the organization being certified" required/>
+          <p class="hint">The AID of the vetter organization that will be authorized to issue credentials</p>
+        </div>
+
+        <div class="form-group">
+          <label for="vetterName">Vetter Organization Name</label>
+          <input type="text" id="vetterName" placeholder="e.g., Acme Vetting Services Ltd"/>
+        </div>
+
+        <!-- ECC Targets -->
+        <div class="form-group">
+          <label>ECC Targets (E.164 Country Codes)</label>
+          <p class="hint">Select the country codes for which this vetter can authorize telephone numbers</p>
+          <div class="selection-controls">
+            <button type="button" onclick="selectAllEcc()">Select All</button>
+            <button type="button" onclick="clearAllEcc()">Clear All</button>
+            <span class="selected-count" id="eccCount">0 selected</span>
+          </div>
+          <div class="country-selector" id="eccSelector"></div>
+        </div>
+
+        <!-- Jurisdiction Targets -->
+        <div class="form-group">
+          <label>Jurisdiction Targets (ISO 3166-1 Alpha-3)</label>
+          <p class="hint">Select the countries for which this vetter can issue Legal Entity and Brand credentials</p>
+          <div class="selection-controls">
+            <button type="button" onclick="selectAllJurisdiction()">Select All</button>
+            <button type="button" onclick="clearAllJurisdiction()">Clear All</button>
+            <span class="selected-count" id="jurisdictionCount">0 selected</span>
+          </div>
+          <div class="country-selector" id="jurisdictionSelector"></div>
+        </div>
+
+        <div class="form-group">
+          <label for="expiry">Certification Expiry (optional)</label>
+          <input type="datetime-local" id="expiry"/>
+        </div>
+
+        <div class="checkbox-row">
+          <input type="checkbox" id="publishWitnesses" checked/>
+          <label for="publishWitnesses">Publish to witnesses</label>
+        </div>
+
+        <button type="submit" id="issueBtn">Issue Vetter Certification</button>
+      </form>
+
+      <div id="issueResult"></div>
+    </div>
+
+    <!-- Existing Vetter Certifications -->
+    <div class="card">
+      <h2>Existing Vetter Certifications</h2>
+      <div id="certList">
+        <p class="loading">Loading certifications...</p>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    // E.164 country codes with names
+    const E164_CODES = [
+      { code: "1", name: "USA/Canada" },
+      { code: "7", name: "Russia/Kazakhstan" },
+      { code: "20", name: "Egypt" },
+      { code: "27", name: "South Africa" },
+      { code: "30", name: "Greece" },
+      { code: "31", name: "Netherlands" },
+      { code: "32", name: "Belgium" },
+      { code: "33", name: "France" },
+      { code: "34", name: "Spain" },
+      { code: "36", name: "Hungary" },
+      { code: "39", name: "Italy" },
+      { code: "40", name: "Romania" },
+      { code: "41", name: "Switzerland" },
+      { code: "43", name: "Austria" },
+      { code: "44", name: "United Kingdom" },
+      { code: "45", name: "Denmark" },
+      { code: "46", name: "Sweden" },
+      { code: "47", name: "Norway" },
+      { code: "48", name: "Poland" },
+      { code: "49", name: "Germany" },
+      { code: "51", name: "Peru" },
+      { code: "52", name: "Mexico" },
+      { code: "53", name: "Cuba" },
+      { code: "54", name: "Argentina" },
+      { code: "55", name: "Brazil" },
+      { code: "56", name: "Chile" },
+      { code: "57", name: "Colombia" },
+      { code: "58", name: "Venezuela" },
+      { code: "60", name: "Malaysia" },
+      { code: "61", name: "Australia" },
+      { code: "62", name: "Indonesia" },
+      { code: "63", name: "Philippines" },
+      { code: "64", name: "New Zealand" },
+      { code: "65", name: "Singapore" },
+      { code: "66", name: "Thailand" },
+      { code: "81", name: "Japan" },
+      { code: "82", name: "South Korea" },
+      { code: "84", name: "Vietnam" },
+      { code: "86", name: "China" },
+      { code: "90", name: "Turkey" },
+      { code: "91", name: "India" },
+      { code: "92", name: "Pakistan" },
+      { code: "93", name: "Afghanistan" },
+      { code: "94", name: "Sri Lanka" },
+      { code: "95", name: "Myanmar" },
+      { code: "98", name: "Iran" },
+      { code: "212", name: "Morocco" },
+      { code: "213", name: "Algeria" },
+      { code: "216", name: "Tunisia" },
+      { code: "218", name: "Libya" },
+      { code: "234", name: "Nigeria" },
+      { code: "254", name: "Kenya" },
+      { code: "351", name: "Portugal" },
+      { code: "352", name: "Luxembourg" },
+      { code: "353", name: "Ireland" },
+      { code: "354", name: "Iceland" },
+      { code: "358", name: "Finland" },
+      { code: "370", name: "Lithuania" },
+      { code: "371", name: "Latvia" },
+      { code: "372", name: "Estonia" },
+      { code: "380", name: "Ukraine" },
+      { code: "420", name: "Czech Republic" },
+      { code: "421", name: "Slovakia" },
+      { code: "852", name: "Hong Kong" },
+      { code: "853", name: "Macau" },
+      { code: "886", name: "Taiwan" },
+      { code: "971", name: "UAE" },
+      { code: "972", name: "Israel" },
+      { code: "974", name: "Qatar" },
+      { code: "966", name: "Saudi Arabia" },
+    ];
+
+    // ISO 3166-1 alpha-3 codes with names
+    const ISO_CODES = [
+      { code: "AFG", name: "Afghanistan" },
+      { code: "ALB", name: "Albania" },
+      { code: "DZA", name: "Algeria" },
+      { code: "ARG", name: "Argentina" },
+      { code: "AUS", name: "Australia" },
+      { code: "AUT", name: "Austria" },
+      { code: "BEL", name: "Belgium" },
+      { code: "BRA", name: "Brazil" },
+      { code: "CAN", name: "Canada" },
+      { code: "CHL", name: "Chile" },
+      { code: "CHN", name: "China" },
+      { code: "COL", name: "Colombia" },
+      { code: "CUB", name: "Cuba" },
+      { code: "CZE", name: "Czech Republic" },
+      { code: "DEU", name: "Germany" },
+      { code: "DNK", name: "Denmark" },
+      { code: "EGY", name: "Egypt" },
+      { code: "ESP", name: "Spain" },
+      { code: "EST", name: "Estonia" },
+      { code: "FIN", name: "Finland" },
+      { code: "FRA", name: "France" },
+      { code: "GBR", name: "United Kingdom" },
+      { code: "GRC", name: "Greece" },
+      { code: "HKG", name: "Hong Kong" },
+      { code: "HUN", name: "Hungary" },
+      { code: "IDN", name: "Indonesia" },
+      { code: "IND", name: "India" },
+      { code: "IRL", name: "Ireland" },
+      { code: "IRN", name: "Iran" },
+      { code: "ISL", name: "Iceland" },
+      { code: "ISR", name: "Israel" },
+      { code: "ITA", name: "Italy" },
+      { code: "JPN", name: "Japan" },
+      { code: "KAZ", name: "Kazakhstan" },
+      { code: "KEN", name: "Kenya" },
+      { code: "KOR", name: "South Korea" },
+      { code: "LBY", name: "Libya" },
+      { code: "LTU", name: "Lithuania" },
+      { code: "LUX", name: "Luxembourg" },
+      { code: "LVA", name: "Latvia" },
+      { code: "MAC", name: "Macau" },
+      { code: "MAR", name: "Morocco" },
+      { code: "MEX", name: "Mexico" },
+      { code: "MMR", name: "Myanmar" },
+      { code: "MYS", name: "Malaysia" },
+      { code: "NGA", name: "Nigeria" },
+      { code: "NLD", name: "Netherlands" },
+      { code: "NOR", name: "Norway" },
+      { code: "NZL", name: "New Zealand" },
+      { code: "PAK", name: "Pakistan" },
+      { code: "PER", name: "Peru" },
+      { code: "PHL", name: "Philippines" },
+      { code: "POL", name: "Poland" },
+      { code: "PRT", name: "Portugal" },
+      { code: "QAT", name: "Qatar" },
+      { code: "ROU", name: "Romania" },
+      { code: "RUS", name: "Russia" },
+      { code: "SAU", name: "Saudi Arabia" },
+      { code: "SGP", name: "Singapore" },
+      { code: "SVK", name: "Slovakia" },
+      { code: "SWE", name: "Sweden" },
+      { code: "CHE", name: "Switzerland" },
+      { code: "THA", name: "Thailand" },
+      { code: "TUN", name: "Tunisia" },
+      { code: "TUR", name: "Turkey" },
+      { code: "TWN", name: "Taiwan" },
+      { code: "UKR", name: "Ukraine" },
+      { code: "ARE", name: "UAE" },
+      { code: "USA", name: "United States" },
+      { code: "VEN", name: "Venezuela" },
+      { code: "VNM", name: "Vietnam" },
+      { code: "ZAF", name: "South Africa" },
+    ];
+
+    // Vetter Certification schema SAID
+    const VETTER_SCHEMA_SAID = "EOefmhWU2qTpMiEQhXohE6z3xRXkpLloZdhTYIenlD4H";
+
+    // Build selector UI
+    function buildSelector(container, codes, type) {
+      container.innerHTML = codes.map(c => `
+        <div class="country-item">
+          <input type="checkbox" id="${type}_${c.code}" value="${c.code}" onchange="updateCount('${type}')">
+          <label for="${type}_${c.code}">+${c.code} ${c.name}</label>
+        </div>
+      `).join('');
+    }
+
+    function updateCount(type) {
+      const selector = document.getElementById(type === 'ecc' ? 'eccSelector' : 'jurisdictionSelector');
+      const count = selector.querySelectorAll('input:checked').length;
+      document.getElementById(type === 'ecc' ? 'eccCount' : 'jurisdictionCount').textContent = `${count} selected`;
+    }
+
+    function selectAllEcc() {
+      document.querySelectorAll('#eccSelector input').forEach(cb => cb.checked = true);
+      updateCount('ecc');
+    }
+
+    function clearAllEcc() {
+      document.querySelectorAll('#eccSelector input').forEach(cb => cb.checked = false);
+      updateCount('ecc');
+    }
+
+    function selectAllJurisdiction() {
+      document.querySelectorAll('#jurisdictionSelector input').forEach(cb => cb.checked = true);
+      updateCount('jurisdiction');
+    }
+
+    function clearAllJurisdiction() {
+      document.querySelectorAll('#jurisdictionSelector input').forEach(cb => cb.checked = false);
+      updateCount('jurisdiction');
+    }
+
+    function getSelectedCodes(selectorId) {
+      const selector = document.getElementById(selectorId);
+      return Array.from(selector.querySelectorAll('input:checked')).map(cb => cb.value);
+    }
+
+    // Load registries
+    async function loadRegistries() {
+      const select = document.getElementById('registry');
+      try {
+        const res = await fetch('/registry');
+        if (!res.ok) throw new Error('Failed to load');
+        const data = await res.json();
+
+        select.innerHTML = '<option value="">Select a registry...</option>';
+        for (const reg of data.registries) {
+          const option = document.createElement('option');
+          option.value = reg.name;
+          option.textContent = `${reg.name} (${reg.registry_key.substring(0, 12)}...)`;
+          select.appendChild(option);
+        }
+      } catch (e) {
+        select.innerHTML = '<option value="">Unable to load registries</option>';
+      }
+    }
+
+    // Load existing certifications
+    async function loadCertifications() {
+      const container = document.getElementById('certList');
+      try {
+        const res = await fetch('/credential');
+        if (!res.ok) throw new Error('Failed to load');
+        const data = await res.json();
+
+        // Filter for vetter certifications
+        const certs = data.credentials.filter(c => c.schema_said === VETTER_SCHEMA_SAID);
+
+        if (certs.length === 0) {
+          container.innerHTML = '<p class="hint">No vetter certifications issued yet.</p>';
+          return;
+        }
+
+        let html = '';
+        for (const cert of certs) {
+          // Fetch full details to get attributes
+          try {
+            const detailRes = await fetch(`/credential/${cert.said}`);
+            if (detailRes.ok) {
+              const detail = await detailRes.json();
+              const attrs = detail.attributes || {};
+
+              html += `
+                <div class="cert-item">
+                  <h4>${attrs.name || 'Vetter Certification'}</h4>
+                  <div class="cert-meta">
+                    <span><strong>SAID:</strong> ${cert.said.substring(0, 16)}...</span>
+                    <span><strong>Status:</strong> ${cert.status}</span>
+                    <span><strong>Issued:</strong> ${new Date(cert.issuance_dt).toLocaleDateString()}</span>
+                  </div>
+                  <div class="cert-targets">
+                    ${(attrs.ecc_targets || []).map(t => `<span class="target-badge ecc">+${t}</span>`).join('')}
+                    ${(attrs.jurisdiction_targets || []).map(t => `<span class="target-badge jurisdiction">${t}</span>`).join('')}
+                  </div>
+                </div>
+              `;
+            }
+          } catch (e) {
+            console.error('Failed to load cert details:', e);
+          }
+        }
+
+        container.innerHTML = html || '<p class="hint">No vetter certifications found.</p>';
+      } catch (e) {
+        container.innerHTML = '<p class="hint">Unable to load certifications.</p>';
+        console.error(e);
+      }
+    }
+
+    // Issue form submission
+    document.getElementById('issueForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = document.getElementById('issueBtn');
+      const result = document.getElementById('issueResult');
+
+      btn.disabled = true;
+      btn.textContent = 'Issuing...';
+      result.innerHTML = '';
+
+      try {
+        const eccTargets = getSelectedCodes('eccSelector');
+        const jurisdictionTargets = getSelectedCodes('jurisdictionSelector');
+
+        if (eccTargets.length === 0) {
+          throw new Error('Please select at least one ECC target country code');
+        }
+        if (jurisdictionTargets.length === 0) {
+          throw new Error('Please select at least one jurisdiction target');
+        }
+
+        const attributes = {
+          ecc_targets: eccTargets,
+          jurisdiction_targets: jurisdictionTargets,
+        };
+
+        const vetterName = document.getElementById('vetterName').value.trim();
+        if (vetterName) {
+          attributes.name = vetterName;
+        }
+
+        const expiry = document.getElementById('expiry').value;
+        if (expiry) {
+          attributes.certificationExpiry = new Date(expiry).toISOString();
+        }
+
+        const payload = {
+          registry_name: document.getElementById('registry').value,
+          schema_said: VETTER_SCHEMA_SAID,
+          attributes: attributes,
+          recipient_aid: document.getElementById('vetterAid').value.trim(),
+          publish_to_witnesses: document.getElementById('publishWitnesses').checked,
+        };
+
+        const res = await fetch('/credential/issue', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
+          },
+          body: JSON.stringify(payload),
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          throw new Error(data.detail || 'Failed to issue credential');
+        }
+
+        result.innerHTML = `
+          <div class="success">
+            <strong>Vetter Certification Issued Successfully!</strong>
+            <div class="result-field">
+              <strong>Credential SAID:</strong>
+              <code>${data.credential.said}</code>
+            </div>
+            <p>This certification can now be used as a backlink edge in TN Allocation and Legal Entity credentials.</p>
+          </div>
+        `;
+
+        // Refresh the list
+        loadCertifications();
+
+      } catch (err) {
+        result.innerHTML = `<div class="error"><strong>Error:</strong> ${err.message}</div>`;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Issue Vetter Certification';
+      }
+    });
+
+    // Initialize
+    buildSelector(document.getElementById('eccSelector'), E164_CODES, 'ecc');
+    buildSelector(document.getElementById('jurisdictionSelector'), ISO_CODES, 'jurisdiction');
+    loadRegistries();
+    loadCertifications();
+  </script>
+  <script src="/static/shared.js"></script>
+</body>
+</html>

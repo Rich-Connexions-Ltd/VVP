@@ -195,6 +195,12 @@ def ui_help():
     return FileResponse(WEB_DIR / "help.html", media_type="text/html")
 
 
+@app.get("/ui/vetter", response_class=FileResponse)
+def ui_vetter():
+    """Serve the vetter certification web UI."""
+    return FileResponse(WEB_DIR / "vetter.html", media_type="text/html")
+
+
 @app.get("/ui/benchmarks", response_class=FileResponse)
 def ui_benchmarks():
     """Serve the integration test benchmarks web UI."""
