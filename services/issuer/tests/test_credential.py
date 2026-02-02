@@ -701,3 +701,64 @@ async def test_credential_witness_publishing_integration():
             f"Expected all 3 witnesses to succeed, got {success_count}. "
             f"Results: {publish_results}"
         )
+
+
+# =============================================================================
+# Delete Credential Tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_delete_credential_success(client: AsyncClient):
+    """Test successful credential deletion."""
+    identity, registry = await setup_identity_and_registry(client)
+
+    # Issue a credential first
+    issue_response = await client.post(
+        "/credential/issue",
+        json={
+            "registry_name": registry["name"],
+            "schema_said": TN_ALLOCATION_SCHEMA,
+            "attributes": {
+                "numbers": {"tn": ["+12025551234"]},
+                "channel": "voice",
+                "doNotOriginate": False,
+            },
+            "publish_to_witnesses": False,
+        },
+    )
+    assert issue_response.status_code == 200
+    cred_said = issue_response.json()["credential"]["said"]
+
+    # Delete the credential
+    delete_response = await client.delete(f"/credential/{cred_said}")
+    assert delete_response.status_code == 200
+    data = delete_response.json()
+
+    assert data["deleted"] is True
+    assert data["resource_type"] == "credential"
+    assert data["resource_id"] == cred_said
+    assert "message" in data
+
+    # Verify credential is no longer found
+    get_response = await client.get(f"/credential/{cred_said}")
+    assert get_response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_credential_not_found(client: AsyncClient):
+    """Test 404 when deleting non-existent credential."""
+    response = await client.delete("/credential/Enonexistent12345678901234567890123456789012")
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_credential_requires_admin(
+    client_with_auth: AsyncClient, operator_headers: dict
+):
+    """Test that credential deletion requires admin role."""
+    response = await client_with_auth.delete(
+        "/credential/Etest12345678901234567890123456789012345",
+        headers=operator_headers,
+    )
+    assert response.status_code == 403

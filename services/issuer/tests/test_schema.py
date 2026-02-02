@@ -260,3 +260,189 @@ class TestSchemaStoreMetadata:
             # Clean up
             remove_schema(said)
             reload_all_schemas()
+
+
+# =============================================================================
+# Schema Create Tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_create_schema_success(client: AsyncClient):
+    """Test creating a custom schema with auto-generated SAID."""
+    from app.schema.store import remove_schema, reload_all_schemas
+
+    response = await client.post(
+        "/schema/create",
+        json={
+            "title": "Test Custom Schema",
+            "description": "A test schema for coverage",
+            "credential_type": "TestCred",
+            "properties": {
+                "testField": {"type": "string", "description": "A test field"},
+            },
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    assert "said" in data
+    assert data["said"].startswith("E")
+    assert data["title"] == "Test Custom Schema"
+    assert "schema_document" in data
+    assert data["schema_document"]["$id"] == data["said"]
+
+    # Clean up
+    try:
+        remove_schema(data["said"])
+        reload_all_schemas()
+    except Exception:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_create_schema_minimal(client: AsyncClient):
+    """Test creating a schema with minimal fields."""
+    from app.schema.store import remove_schema, reload_all_schemas
+
+    response = await client.post(
+        "/schema/create",
+        json={
+            "title": "Minimal Schema",
+            "credential_type": "MinCred",
+            "properties": {},
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["title"] == "Minimal Schema"
+
+    # Clean up
+    try:
+        remove_schema(data["said"])
+        reload_all_schemas()
+    except Exception:
+        pass
+
+
+# =============================================================================
+# Schema Delete Tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_delete_schema_custom_success(client: AsyncClient):
+    """Test deleting a custom (user-created) schema."""
+    from app.schema.store import reload_all_schemas
+
+    # First create a schema
+    create_response = await client.post(
+        "/schema/create",
+        json={
+            "title": "Schema To Delete",
+            "credential_type": "DeleteTest",
+            "properties": {},
+        },
+    )
+    assert create_response.status_code == 200
+    said = create_response.json()["said"]
+
+    # Delete it
+    delete_response = await client.delete(f"/schema/{said}")
+    assert delete_response.status_code == 200
+    data = delete_response.json()
+
+    assert data["deleted"] == said
+
+    # Verify it's gone
+    get_response = await client.get(f"/schema/{said}")
+    assert get_response.status_code == 404
+
+    reload_all_schemas()
+
+
+@pytest.mark.asyncio
+async def test_delete_schema_not_found(client: AsyncClient):
+    """Test 404 when deleting non-existent schema."""
+    response = await client.delete("/schema/Enonexistent12345678901234567890123456789012")
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_embedded_schema_rejected(client: AsyncClient):
+    """Test that embedded schemas cannot be deleted."""
+    # Try to delete a known embedded schema
+    response = await client.delete(f"/schema/{KNOWN_EMBEDDED_SAID}")
+    assert response.status_code == 400
+    assert "embedded" in response.json()["detail"].lower()
+
+
+# =============================================================================
+# Schema Import Tests (mocked)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_import_schema_weboftrust_missing_id(client: AsyncClient):
+    """Test import fails without schema_id for weboftrust source."""
+    response = await client.post(
+        "/schema/import",
+        json={
+            "source": "weboftrust",
+            # Missing schema_id
+        },
+    )
+    assert response.status_code == 400
+    assert "schema_id required" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_import_schema_url_missing_url(client: AsyncClient):
+    """Test import fails without url for URL source."""
+    response = await client.post(
+        "/schema/import",
+        json={
+            "source": "url",
+            # Missing url
+        },
+    )
+    assert response.status_code == 400
+    assert "url required" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_import_schema_unknown_source(client: AsyncClient):
+    """Test import fails with unknown source."""
+    response = await client.post(
+        "/schema/import",
+        json={
+            "source": "unknown",
+        },
+    )
+    assert response.status_code == 400
+    assert "unknown import source" in response.json()["detail"].lower()
+
+
+# =============================================================================
+# WebOfTrust Registry Tests (mocked)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_list_weboftrust_schemas_error(client: AsyncClient, monkeypatch):
+    """Test weboftrust registry endpoint handles errors."""
+    from unittest.mock import AsyncMock, patch
+    from app.schema import importer
+    from app.api import schema as schema_api
+
+    mock_importer = AsyncMock()
+    mock_importer.list_available_schemas.side_effect = importer.SchemaImportError("Network error")
+    mock_importer.ref = "main"
+
+    # Patch at the API module level where it's used
+    with patch.object(schema_api, "get_schema_importer", return_value=mock_importer):
+        response = await client.get("/schema/weboftrust/registry")
+
+    assert response.status_code == 502
+    assert "failed to fetch" in response.json()["detail"].lower()

@@ -193,6 +193,259 @@ class TestGlobalImporter:
         assert imp1 is not imp2
 
 
+class TestSchemaImporterClientLifecycle:
+    """Tests for HTTP client lifecycle."""
+
+    @pytest.mark.asyncio
+    async def test_close_client(self):
+        """close() should close the HTTP client."""
+        importer = SchemaImporter()
+
+        # Force client creation
+        client = await importer._get_client()
+        assert importer._client is not None
+
+        # Close it
+        await importer.close()
+        assert importer._client is None
+
+    @pytest.mark.asyncio
+    async def test_get_client_reuses_instance(self):
+        """_get_client should return same instance."""
+        importer = SchemaImporter()
+
+        client1 = await importer._get_client()
+        client2 = await importer._get_client()
+
+        assert client1 is client2
+
+        await importer.close()
+
+
+class TestSchemaImporterErrorHandling:
+    """Tests for error handling paths."""
+
+    @pytest.mark.asyncio
+    async def test_fetch_registry_request_error(self):
+        """fetch_registry should handle network errors."""
+        importer = SchemaImporter()
+
+        mock_client = AsyncMock()
+        mock_client.get.side_effect = httpx.RequestError("Connection failed")
+
+        with patch.object(importer, "_get_client", return_value=mock_client):
+            with pytest.raises(SchemaImportError, match="Network error"):
+                await importer.fetch_registry()
+
+    @pytest.mark.asyncio
+    async def test_fetch_registry_json_decode_error(self):
+        """fetch_registry should handle invalid JSON."""
+        from unittest.mock import MagicMock
+        importer = SchemaImporter()
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.side_effect = json.JSONDecodeError("Invalid", "", 0)
+
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_response
+
+        with patch.object(importer, "_get_client", return_value=mock_client):
+            with pytest.raises(SchemaImportError, match="Invalid JSON"):
+                await importer.fetch_registry()
+
+    @pytest.mark.asyncio
+    async def test_fetch_schema_by_path_request_error(self):
+        """fetch_schema_by_path should handle network errors."""
+        importer = SchemaImporter()
+
+        mock_client = AsyncMock()
+        mock_client.get.side_effect = httpx.RequestError("Connection failed")
+
+        with patch.object(importer, "_get_client", return_value=mock_client):
+            with pytest.raises(SchemaImportError, match="Network error"):
+                await importer.fetch_schema_by_path("test.json")
+
+    @pytest.mark.asyncio
+    async def test_fetch_schema_by_path_json_error(self):
+        """fetch_schema_by_path should handle invalid JSON."""
+        from unittest.mock import MagicMock
+        importer = SchemaImporter()
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.side_effect = json.JSONDecodeError("Invalid", "", 0)
+
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_response
+
+        with patch.object(importer, "_get_client", return_value=mock_client):
+            with pytest.raises(SchemaImportError, match="Invalid JSON"):
+                await importer.fetch_schema_by_path("test.json")
+
+
+class TestImportSchemaFilePath:
+    """Tests for import_schema file path handling."""
+
+    @pytest.mark.asyncio
+    async def test_import_schema_no_file_path(self):
+        """import_schema should raise when schema has no file path."""
+        importer = SchemaImporter()
+
+        # Registry with schema missing file path
+        registry = {"schemas": [{"id": "E123", "title": "No File"}]}
+        importer._registry_cache = registry
+
+        with pytest.raises(SchemaImportError, match="no file path"):
+            await importer.import_schema("E123")
+
+
+class TestImportAll:
+    """Tests for import_all method."""
+
+    @pytest.mark.asyncio
+    async def test_import_all_success(self):
+        """import_all should import all schemas from registry."""
+        from unittest.mock import MagicMock
+        importer = SchemaImporter()
+
+        # Set up registry with two schemas
+        registry = {"schemas": [
+            {"id": "E1", "title": "Schema 1", "file": "schema1.json"},
+            {"id": "E2", "title": "Schema 2", "file": "schema2.json"},
+        ]}
+        importer._registry_cache = registry
+
+        schema1 = {"$id": "E1", "title": "Schema 1"}
+        schema2 = {"$id": "E2", "title": "Schema 2"}
+
+        mock_response1 = MagicMock()
+        mock_response1.json.return_value = schema1
+        mock_response1.raise_for_status.return_value = None
+
+        mock_response2 = MagicMock()
+        mock_response2.json.return_value = schema2
+        mock_response2.raise_for_status.return_value = None
+
+        mock_client = AsyncMock()
+        mock_client.get.side_effect = [mock_response1, mock_response2]
+
+        with patch.object(importer, "_get_client", return_value=mock_client):
+            result = await importer.import_all(verify_said=False)
+
+        assert len(result) == 2
+
+    @pytest.mark.asyncio
+    async def test_import_all_partial_failure(self):
+        """import_all should continue after individual failures."""
+        from unittest.mock import MagicMock
+        importer = SchemaImporter()
+
+        # Set up registry with two schemas
+        registry = {"schemas": [
+            {"id": "E1", "title": "Schema 1", "file": "schema1.json"},
+            {"id": "E2", "title": "Schema 2", "file": "schema2.json"},
+        ]}
+        importer._registry_cache = registry
+
+        schema2 = {"$id": "E2", "title": "Schema 2"}
+
+        # First request fails, second succeeds
+        mock_response_fail = MagicMock()
+        mock_response_fail.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "Not found",
+            request=httpx.Request("GET", "https://example.com"),
+            response=httpx.Response(404),
+        )
+
+        mock_response_ok = MagicMock()
+        mock_response_ok.json.return_value = schema2
+        mock_response_ok.raise_for_status.return_value = None
+
+        mock_client = AsyncMock()
+        mock_client.get.side_effect = [mock_response_fail, mock_response_ok]
+
+        with patch.object(importer, "_get_client", return_value=mock_client):
+            result = await importer.import_all(verify_said=False)
+
+        # Should have 1 success despite 1 failure
+        assert len(result) == 1
+        assert result[0]["$id"] == "E2"
+
+
+class TestFetchSchemaFromUrl:
+    """Tests for fetch_schema_from_url method."""
+
+    @pytest.mark.asyncio
+    async def test_fetch_schema_from_url_success(self):
+        """fetch_schema_from_url should fetch and return schema."""
+        from unittest.mock import MagicMock
+        importer = SchemaImporter()
+
+        schema = {"$id": "ETestFromUrl123456789012345678901234567890", "title": "URL Schema"}
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = schema
+        mock_response.raise_for_status.return_value = None
+
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_response
+
+        with patch.object(importer, "_get_client", return_value=mock_client):
+            result = await importer.fetch_schema_from_url(
+                "https://example.com/schema.json",
+                verify_said=False
+            )
+
+        assert result["$id"] == schema["$id"]
+
+    @pytest.mark.asyncio
+    async def test_fetch_schema_from_url_http_error(self):
+        """fetch_schema_from_url should handle HTTP errors."""
+        importer = SchemaImporter()
+
+        mock_request = httpx.Request("GET", "https://example.com")
+        mock_response = httpx.Response(404, request=mock_request)
+
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_response
+
+        with patch.object(importer, "_get_client", return_value=mock_client):
+            with pytest.raises(SchemaImportError, match="HTTP 404"):
+                await importer.fetch_schema_from_url("https://example.com/schema.json")
+
+    @pytest.mark.asyncio
+    async def test_fetch_schema_from_url_missing_id(self):
+        """fetch_schema_from_url should raise for missing $id."""
+        from unittest.mock import MagicMock
+        importer = SchemaImporter()
+
+        schema = {"title": "No ID"}
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = schema
+        mock_response.raise_for_status.return_value = None
+
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_response
+
+        with patch.object(importer, "_get_client", return_value=mock_client):
+            with pytest.raises(SchemaImportError, match="missing required"):
+                await importer.fetch_schema_from_url("https://example.com/schema.json")
+
+    @pytest.mark.asyncio
+    async def test_fetch_schema_from_url_request_error(self):
+        """fetch_schema_from_url should handle network errors."""
+        importer = SchemaImporter()
+
+        mock_client = AsyncMock()
+        mock_client.get.side_effect = httpx.RequestError("Connection failed")
+
+        with patch.object(importer, "_get_client", return_value=mock_client):
+            with pytest.raises(SchemaImportError, match="Network error"):
+                await importer.fetch_schema_from_url("https://example.com/schema.json")
+
+
 class TestSchemaImporterIntegration:
     """Integration tests that may hit real endpoints."""
 
