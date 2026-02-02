@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Help - VVP Issuer</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    .help-layout {
+      display: grid;
+      grid-template-columns: 250px 1fr;
+      gap: 2rem;
+      margin-top: 1rem;
+    }
+    .help-sidebar {
+      background: white;
+      border-radius: 8px;
+      padding: 1rem;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      position: sticky;
+      top: 1rem;
+      height: fit-content;
+    }
+    .help-sidebar h3 {
+      margin-top: 0;
+      margin-bottom: 1rem;
+      font-size: 0.9rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--vvp-text-muted);
+    }
+    .help-sidebar ul {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    .help-sidebar li {
+      margin-bottom: 0.25rem;
+    }
+    .help-sidebar a {
+      display: block;
+      padding: 0.5rem 0.75rem;
+      color: var(--vvp-text);
+      text-decoration: none;
+      border-radius: 4px;
+      transition: background 0.2s;
+    }
+    .help-sidebar a:hover {
+      background: var(--vvp-bg-alt);
+    }
+    .help-sidebar a.active {
+      background: var(--vvp-primary);
+      color: white;
+    }
+    .help-sidebar .submenu {
+      margin-left: 1rem;
+      font-size: 0.9rem;
+    }
+    .help-sidebar .section-header {
+      font-weight: 600;
+      padding: 0.5rem 0.75rem;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .help-sidebar .section-header::after {
+      content: '\25BC';
+      font-size: 0.7rem;
+      transition: transform 0.2s;
+    }
+    .help-sidebar .section-header.collapsed::after {
+      transform: rotate(-90deg);
+    }
+    .help-content {
+      background: white;
+      border-radius: 8px;
+      padding: 2rem;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .recipe-section {
+      display: none;
+    }
+    .recipe-section.active {
+      display: block;
+    }
+    .step-list {
+      counter-reset: step-counter;
+      list-style: none;
+      padding: 0;
+    }
+    .step-list li {
+      counter-increment: step-counter;
+      padding: 1rem;
+      margin-bottom: 1rem;
+      background: var(--vvp-bg-alt);
+      border-radius: 8px;
+      position: relative;
+      padding-left: 4rem;
+    }
+    .step-list li::before {
+      content: counter(step-counter);
+      position: absolute;
+      left: 1rem;
+      top: 1rem;
+      width: 2rem;
+      height: 2rem;
+      background: var(--vvp-primary);
+      color: white;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+    }
+    .step-list h4 {
+      margin-top: 0;
+      margin-bottom: 0.5rem;
+    }
+    .step-list p {
+      margin: 0;
+      color: var(--vvp-text-muted);
+    }
+    .step-list .action-link {
+      display: inline-block;
+      margin-top: 0.5rem;
+      color: var(--vvp-primary);
+      text-decoration: none;
+      font-weight: 500;
+    }
+    .step-list .action-link:hover {
+      text-decoration: underline;
+    }
+    .info-box {
+      background: #e3f2fd;
+      border-left: 4px solid #2196f3;
+      padding: 1rem;
+      border-radius: 0 4px 4px 0;
+      margin: 1rem 0;
+    }
+    .warning-box {
+      background: #fff3e0;
+      border-left: 4px solid #ff9800;
+      padding: 1rem;
+      border-radius: 0 4px 4px 0;
+      margin: 1rem 0;
+    }
+    .credential-type {
+      display: inline-block;
+      padding: 0.2rem 0.5rem;
+      background: var(--vvp-primary);
+      color: white;
+      border-radius: 4px;
+      font-size: 0.85rem;
+      font-family: monospace;
+    }
+    .edge-diagram {
+      font-family: monospace;
+      background: #f5f5f5;
+      padding: 1rem;
+      border-radius: 4px;
+      margin: 1rem 0;
+      overflow-x: auto;
+    }
+    @media (max-width: 768px) {
+      .help-layout {
+        grid-template-columns: 1fr;
+      }
+      .help-sidebar {
+        position: static;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-brand">
+      <img src="/static/ovc-logo.png" alt="OVC" class="ovc-logo">
+      <a href="/ui/" class="logo">
+        <span class="service-label">VVP</span>
+        Issuer
+      </a>
+    </div>
+    <nav class="nav-links">
+      <a href="/ui/identity">Identities</a>
+      <a href="/ui/registry">Registries</a>
+      <a href="/ui/schemas">Schemas</a>
+      <a href="/ui/credentials">Credentials</a>
+      <a href="/ui/dossier">Dossiers</a>
+      <a href="/ui/help" class="active">Help</a>
+      <a href="/ui/admin">Admin</a>
+      <a href="https://vvp-verifier.rcnx.io" class="verifier-link" target="_blank">Verifier &#8599;</a>
+    </nav>
+  </header>
+
+  <main>
+    <h1>Help &amp; Recipes</h1>
+
+    <div class="help-layout">
+      <aside class="help-sidebar">
+        <h3>Contents</h3>
+        <ul>
+          <li><a href="#overview" class="active" data-section="overview">Overview</a></li>
+          <li>
+            <div class="section-header" data-toggle="recipes-menu">Recipes</div>
+            <ul class="submenu" id="recipes-menu">
+              <li><a href="#vvp-dossier" data-section="vvp-dossier">VVP Dossier</a></li>
+              <li><a href="#vetting-dossier" data-section="vetting-dossier">Vetting Dossier</a></li>
+            </ul>
+          </li>
+          <li>
+            <div class="section-header" data-toggle="credentials-menu">Credential Types</div>
+            <ul class="submenu" id="credentials-menu">
+              <li><a href="#cred-le" data-section="cred-le">Legal Entity</a></li>
+              <li><a href="#cred-tn" data-section="cred-tn">TN Allocation</a></li>
+              <li><a href="#cred-ape" data-section="cred-ape">APE</a></li>
+              <li><a href="#cred-de" data-section="cred-de">Delegation</a></li>
+              <li><a href="#cred-vetter" data-section="cred-vetter">Vetter Certification</a></li>
+            </ul>
+          </li>
+          <li><a href="#edges" data-section="edges">Understanding Edges</a></li>
+        </ul>
+      </aside>
+
+      <div class="help-content">
+        <!-- Overview Section -->
+        <section id="overview" class="recipe-section active">
+          <h2>Welcome to VVP Issuer</h2>
+          <p>This help guide provides step-by-step recipes for creating verifiable credentials and assembling them into dossiers that can be validated by the VVP Verifier.</p>
+
+          <div class="info-box">
+            <strong>What is a Dossier?</strong>
+            <p>A dossier is a collection of credentials that together prove a party's authorization to make calls on behalf of a legal entity. The credentials are linked through cryptographic edges to form a verifiable chain of trust.</p>
+          </div>
+
+          <h3>Quick Start</h3>
+          <p>Choose a recipe based on your use case:</p>
+          <ul>
+            <li><strong><a href="#vvp-dossier" data-section="vvp-dossier">VVP Dossier</a></strong> - Standard dossier for proving call authorization</li>
+            <li><strong><a href="#vetting-dossier" data-section="vetting-dossier">Vetting Dossier</a></strong> - Dossier with vetter certification for geographic constraints</li>
+          </ul>
+        </section>
+
+        <!-- VVP Dossier Recipe -->
+        <section id="vvp-dossier" class="recipe-section">
+          <h2>Recipe: VVP Dossier</h2>
+          <p>A VVP dossier proves that a calling party is authorized to make calls on behalf of a legal entity and has rights to use specific telephone numbers.</p>
+
+          <div class="edge-diagram">
+Credential Chain Structure:
+
+    [Legal Entity (LE)]
+          |
+          v (vetting edge)
+    [APE Credential] -----> [TN Allocation]
+          |                       |
+          v (delegation edge)     | (jl edge to LE)
+    [DE Credential] (optional)    v
+          |                  [Legal Entity]
+          v
+    [Calling Party AID]
+          </div>
+
+          <h3>Prerequisites</h3>
+          <ul>
+            <li>At least one KERI identity created in the <a href="/ui/identity">Identities</a> page</li>
+            <li>A credential registry created in the <a href="/ui/registry">Registries</a> page</li>
+          </ul>
+
+          <h3>Steps</h3>
+          <ol class="step-list">
+            <li>
+              <h4>Create a Legal Entity Credential</h4>
+              <p>The Legal Entity (LE) credential establishes the identity of the organization making calls. It contains the company name, LEI code, and other identifying information.</p>
+              <a href="/ui/credentials?schema=legal-entity" class="action-link">Create Legal Entity Credential &rarr;</a>
+            </li>
+
+            <li>
+              <h4>Create an APE Credential</h4>
+              <p>The Accountable Party Establishment (APE) credential establishes who is accountable for calls made on behalf of the legal entity. It links to the Legal Entity credential via a <code>vetting</code> edge.</p>
+              <div class="info-box">
+                <strong>Edge Configuration:</strong> Set the <code>vetting</code> edge to point to the Legal Entity credential's SAID from Step 1.
+              </div>
+              <a href="/ui/credentials?schema=ape" class="action-link">Create APE Credential &rarr;</a>
+            </li>
+
+            <li>
+              <h4>Create a TN Allocation Credential</h4>
+              <p>The TN Allocation credential grants rights to use specific telephone numbers. It links to the Legal Entity via a <code>jl</code> (jurisdictional link) edge.</p>
+              <div class="info-box">
+                <strong>Edge Configuration:</strong> Set the <code>jl</code> edge to point to the Legal Entity credential's SAID from Step 1.
+              </div>
+              <a href="/ui/credentials?schema=tn-allocation" class="action-link">Create TN Allocation Credential &rarr;</a>
+            </li>
+
+            <li>
+              <h4>(Optional) Create a Delegation Credential</h4>
+              <p>If delegating call-making authority to another party, create a Delegation Establishment (DE) credential. It links to the APE credential via a <code>delegation</code> edge.</p>
+              <div class="warning-box">
+                <strong>Delegation Chain:</strong> DE credentials can chain - a DE can delegate to another DE, which can delegate to another DE, etc. The final DE's issuee becomes the calling party.
+              </div>
+              <a href="/ui/credentials?schema=delegation" class="action-link">Create DE Credential &rarr;</a>
+            </li>
+
+            <li>
+              <h4>Assemble the Dossier</h4>
+              <p>Go to the Dossiers page and select all the credentials you created. The dossier builder will automatically detect the credential chain.</p>
+              <a href="/ui/dossier" class="action-link">Create Dossier &rarr;</a>
+            </li>
+
+            <li>
+              <h4>Test with the Verifier</h4>
+              <p>Export your dossier and test it with the VVP Verifier to ensure all credentials validate correctly.</p>
+              <a href="https://vvp-verifier.rcnx.io" class="action-link" target="_blank">Open Verifier &rarr;</a>
+            </li>
+          </ol>
+        </section>
+
+        <!-- Vetting Dossier Recipe -->
+        <section id="vetting-dossier" class="recipe-section">
+          <h2>Recipe: Vetting Dossier</h2>
+          <p>A vetting dossier includes Vetter Certification credentials that constrain where the vetter (credential issuer) is authorized to operate. This adds geographic and jurisdictional verification.</p>
+
+          <div class="edge-diagram">
+Credential Chain with Vetter Constraints:
+
+    [Vetter Certification]
+          |
+          | certification edge (backlink)
+          v
+    [Legal Entity] ----> [TN Allocation (Extended)]
+          |                     |
+          | vetting edge        | certification edge (backlink)
+          v                     v
+    [APE Credential]      [Vetter Certification]
+          </div>
+
+          <h3>Prerequisites</h3>
+          <ul>
+            <li>All prerequisites from the VVP Dossier recipe</li>
+            <li>A Vetter Certification credential for your organization (issued by a governance authority)</li>
+          </ul>
+
+          <h3>Understanding Vetter Constraints</h3>
+          <div class="info-box">
+            <strong>ECC Targets:</strong> E.164 country codes (e.g., "44" for UK, "1" for US) that define which telephone numbers the vetter can authorize.
+            <br><br>
+            <strong>Jurisdiction Targets:</strong> ISO 3166-1 alpha-3 codes (e.g., "GBR", "USA") that define in which countries the vetter can issue Legal Entity and Brand credentials.
+          </div>
+
+          <h3>Steps</h3>
+          <ol class="step-list">
+            <li>
+              <h4>Obtain a Vetter Certification</h4>
+              <p>The Vetter Certification credential is typically issued by a governance authority (like GSMA) to your organization. It specifies your <code>ecc_targets</code> (country codes you can authorize) and <code>jurisdiction_targets</code> (countries where you can issue identity credentials).</p>
+              <div class="warning-box">
+                <strong>Note:</strong> You cannot self-issue a Vetter Certification for production use. Contact your governance authority to obtain one.
+              </div>
+              <a href="/ui/credentials?schema=vetter-certification" class="action-link">View Vetter Certification Schema &rarr;</a>
+            </li>
+
+            <li>
+              <h4>Create an Extended Legal Entity Credential</h4>
+              <p>Use the extended Legal Entity schema that includes a <code>country</code> field and a <code>certification</code> edge. The <code>certification</code> edge links back to your Vetter Certification.</p>
+              <div class="info-box">
+                <strong>Required Fields:</strong>
+                <ul>
+                  <li><code>country</code>: ISO 3166-1 alpha-3 code (must be in your <code>jurisdiction_targets</code>)</li>
+                  <li><code>certification</code> edge: SAID of your Vetter Certification</li>
+                </ul>
+              </div>
+              <a href="/ui/credentials?schema=extended-legal-entity" class="action-link">Create Extended Legal Entity &rarr;</a>
+            </li>
+
+            <li>
+              <h4>Create an Extended TN Allocation Credential</h4>
+              <p>Use the extended TN Allocation schema that includes a <code>certification</code> edge. The TN's country code must be in your Vetter Certification's <code>ecc_targets</code>.</p>
+              <div class="info-box">
+                <strong>Validation:</strong> If you allocate +44 numbers (UK), your <code>ecc_targets</code> must include "44".
+              </div>
+              <a href="/ui/credentials?schema=extended-tn-allocation" class="action-link">Create Extended TN Allocation &rarr;</a>
+            </li>
+
+            <li>
+              <h4>Create APE and DE Credentials (Same as VVP)</h4>
+              <p>Follow steps 2-4 from the VVP Dossier recipe to create APE and optional DE credentials.</p>
+            </li>
+
+            <li>
+              <h4>Assemble the Vetting Dossier</h4>
+              <p>Include your Vetter Certification credential along with all other credentials in the dossier. The verifier will check that:</p>
+              <ul>
+                <li>TN country codes are in your <code>ecc_targets</code></li>
+                <li>Legal Entity country is in your <code>jurisdiction_targets</code></li>
+              </ul>
+              <a href="/ui/dossier" class="action-link">Create Dossier &rarr;</a>
+            </li>
+
+            <li>
+              <h4>Verify with Vetter Constraints</h4>
+              <p>When verifying, the verifier will return <code>vetter_constraints_valid</code> status bits. These indicate whether geographic constraints are satisfied.</p>
+              <a href="https://vvp-verifier.rcnx.io" class="action-link" target="_blank">Open Verifier &rarr;</a>
+            </li>
+          </ol>
+        </section>
+
+        <!-- Legal Entity Credential -->
+        <section id="cred-le" class="recipe-section">
+          <h2>Legal Entity Credential</h2>
+          <p>The Legal Entity (LE) credential establishes the identity of an organization.</p>
+
+          <h3>Required Fields</h3>
+          <table class="data-table">
+            <thead>
+              <tr><th>Field</th><th>Description</th><th>Example</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>lei</code></td><td>Legal Entity Identifier (LEI)</td><td>5493001KJTIIGC8Y1R12</td></tr>
+              <tr><td><code>n</code> (vCard)</td><td>Organization name</td><td>Acme Corporation</td></tr>
+            </tbody>
+          </table>
+
+          <h3>Extended Fields (for Vetter Constraints)</h3>
+          <table class="data-table">
+            <thead>
+              <tr><th>Field</th><th>Description</th><th>Example</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>country</code></td><td>ISO 3166-1 alpha-3 code</td><td>GBR</td></tr>
+            </tbody>
+          </table>
+
+          <h3>Edges</h3>
+          <table class="data-table">
+            <thead>
+              <tr><th>Edge</th><th>Target</th><th>Required</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>certification</code></td><td>Vetter Certification SAID</td><td>Only for extended schema</td></tr>
+            </tbody>
+          </table>
+
+          <a href="/ui/credentials?schema=legal-entity" class="action-link">Create Legal Entity Credential &rarr;</a>
+        </section>
+
+        <!-- TN Allocation Credential -->
+        <section id="cred-tn" class="recipe-section">
+          <h2>TN Allocation Credential</h2>
+          <p>The TN Allocation credential grants rights to use specific telephone numbers.</p>
+
+          <h3>Required Fields</h3>
+          <table class="data-table">
+            <thead>
+              <tr><th>Field</th><th>Description</th><th>Example</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>tn</code></td><td>Telephone number or range in E.164 format</td><td>+14155551234</td></tr>
+            </tbody>
+          </table>
+
+          <div class="info-box">
+            <strong>Wildcards:</strong> You can use wildcards for ranges:
+            <ul>
+              <li><code>+1415555*</code> - All numbers starting with +1415555</li>
+              <li><code>+14155551234-+14155551299</code> - Range of numbers</li>
+            </ul>
+          </div>
+
+          <h3>Edges</h3>
+          <table class="data-table">
+            <thead>
+              <tr><th>Edge</th><th>Target</th><th>Required</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>jl</code></td><td>Legal Entity credential SAID</td><td>Optional but recommended</td></tr>
+              <tr><td><code>certification</code></td><td>Vetter Certification SAID</td><td>Only for extended schema</td></tr>
+            </tbody>
+          </table>
+
+          <a href="/ui/credentials?schema=tn-allocation" class="action-link">Create TN Allocation Credential &rarr;</a>
+        </section>
+
+        <!-- APE Credential -->
+        <section id="cred-ape" class="recipe-section">
+          <h2>APE (Accountable Party Establishment) Credential</h2>
+          <p>The APE credential establishes who is accountable for calls made on behalf of a legal entity.</p>
+
+          <h3>Required Fields</h3>
+          <table class="data-table">
+            <thead>
+              <tr><th>Field</th><th>Description</th><th>Example</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>i</code></td><td>Issuee AID (accountable party)</td><td>EBVn17...</td></tr>
+            </tbody>
+          </table>
+
+          <h3>Edges (Required)</h3>
+          <table class="data-table">
+            <thead>
+              <tr><th>Edge</th><th>Target</th><th>Required</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>vetting</code></td><td>Legal Entity credential SAID</td><td>Yes</td></tr>
+            </tbody>
+          </table>
+
+          <div class="warning-box">
+            <strong>Important:</strong> The APE must always have a <code>vetting</code> edge pointing to a Legal Entity credential. Without this edge, verification will fail.
+          </div>
+
+          <a href="/ui/credentials?schema=ape" class="action-link">Create APE Credential &rarr;</a>
+        </section>
+
+        <!-- DE Credential -->
+        <section id="cred-de" class="recipe-section">
+          <h2>Delegation Establishment (DE) Credential</h2>
+          <p>The DE credential allows the accountable party to delegate call-making authority to another entity.</p>
+
+          <h3>Required Fields</h3>
+          <table class="data-table">
+            <thead>
+              <tr><th>Field</th><th>Description</th><th>Example</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>i</code></td><td>Issuee AID (delegate)</td><td>EBVn17...</td></tr>
+            </tbody>
+          </table>
+
+          <h3>Edges (Required)</h3>
+          <table class="data-table">
+            <thead>
+              <tr><th>Edge</th><th>Target</th><th>Required</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>delegation</code></td><td>APE or DE credential SAID</td><td>Yes</td></tr>
+            </tbody>
+          </table>
+
+          <div class="info-box">
+            <strong>Chaining:</strong> DE credentials can chain. A DE can have a <code>delegation</code> edge pointing to another DE, creating a delegation chain. The PASSporT signer must match the issuee of the final DE in the chain.
+          </div>
+
+          <a href="/ui/credentials?schema=delegation" class="action-link">Create DE Credential &rarr;</a>
+        </section>
+
+        <!-- Vetter Certification Credential -->
+        <section id="cred-vetter" class="recipe-section">
+          <h2>Vetter Certification Credential</h2>
+          <p>The Vetter Certification credential authorizes a vetter to issue credentials for specific geographic regions.</p>
+
+          <h3>Required Fields</h3>
+          <table class="data-table">
+            <thead>
+              <tr><th>Field</th><th>Description</th><th>Example</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>i</code></td><td>Issuee AID (the vetter)</td><td>EBVn17...</td></tr>
+              <tr><td><code>ecc_targets</code></td><td>Array of E.164 country codes</td><td>["44", "1", "91"]</td></tr>
+              <tr><td><code>jurisdiction_targets</code></td><td>Array of ISO 3166-1 alpha-3 codes</td><td>["GBR", "USA", "IND"]</td></tr>
+            </tbody>
+          </table>
+
+          <div class="info-box">
+            <strong>E.164 Country Codes:</strong>
+            <ul>
+              <li>"1" - USA, Canada</li>
+              <li>"44" - United Kingdom</li>
+              <li>"33" - France</li>
+              <li>"49" - Germany</li>
+              <li>"91" - India</li>
+            </ul>
+          </div>
+
+          <div class="info-box">
+            <strong>ISO 3166-1 Alpha-3 Codes:</strong>
+            <ul>
+              <li>USA - United States</li>
+              <li>GBR - United Kingdom</li>
+              <li>FRA - France</li>
+              <li>DEU - Germany</li>
+              <li>IND - India</li>
+            </ul>
+          </div>
+
+          <div class="warning-box">
+            <strong>Governance:</strong> Vetter Certifications are typically issued by a governance authority (e.g., GSMA). Self-issued certifications should only be used for testing.
+          </div>
+
+          <a href="/ui/credentials?schema=vetter-certification" class="action-link">Create Vetter Certification &rarr;</a>
+        </section>
+
+        <!-- Understanding Edges -->
+        <section id="edges" class="recipe-section">
+          <h2>Understanding Credential Edges</h2>
+          <p>Edges are cryptographic links between credentials that establish relationships and chains of trust.</p>
+
+          <h3>Edge Types</h3>
+          <table class="data-table">
+            <thead>
+              <tr><th>Edge Name</th><th>From</th><th>To</th><th>Purpose</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>vetting</code></td><td>APE</td><td>Legal Entity</td><td>Links accountable party to their organization</td></tr>
+              <tr><td><code>delegation</code></td><td>DE</td><td>APE or DE</td><td>Delegates authority from one party to another</td></tr>
+              <tr><td><code>jl</code></td><td>TN Allocation</td><td>Legal Entity</td><td>Links telephone numbers to their licensed holder</td></tr>
+              <tr><td><code>certification</code></td><td>Extended credentials</td><td>Vetter Certification</td><td>Links back to vetter's authorization</td></tr>
+            </tbody>
+          </table>
+
+          <h3>Edge Structure</h3>
+          <p>Each edge is an object with the following fields:</p>
+          <div class="edge-diagram">
+{
+  "e": {
+    "d": "EDGE_BLOCK_SAID",
+    "edgeName": {
+      "n": "TARGET_CREDENTIAL_SAID",
+      "s": "TARGET_SCHEMA_SAID"
+    }
+  }
+}
+          </div>
+
+          <h3>Finding SAIDs</h3>
+          <p>To create an edge, you need the target credential's SAID. You can find this in:</p>
+          <ul>
+            <li>The <a href="/ui/credentials">Credentials</a> page - look for the "SAID" column</li>
+            <li>The credential detail view - the SAID is shown at the top</li>
+            <li>The <code>d</code> field in the credential JSON</li>
+          </ul>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <script src="/static/shared.js"></script>
+  <script>
+    // Section navigation
+    document.querySelectorAll('[data-section]').forEach(link => {
+      link.addEventListener('click', (e) => {
+        e.preventDefault();
+        const sectionId = link.dataset.section;
+
+        // Update active link
+        document.querySelectorAll('.help-sidebar a').forEach(a => a.classList.remove('active'));
+        link.classList.add('active');
+
+        // Show section
+        document.querySelectorAll('.recipe-section').forEach(s => s.classList.remove('active'));
+        document.getElementById(sectionId).classList.add('active');
+
+        // Update URL
+        history.pushState(null, '', '#' + sectionId);
+      });
+    });
+
+    // Collapsible menus
+    document.querySelectorAll('[data-toggle]').forEach(header => {
+      header.addEventListener('click', () => {
+        const menuId = header.dataset.toggle;
+        const menu = document.getElementById(menuId);
+        header.classList.toggle('collapsed');
+        menu.style.display = header.classList.contains('collapsed') ? 'none' : 'block';
+      });
+    });
+
+    // Handle initial hash
+    if (window.location.hash) {
+      const sectionId = window.location.hash.substring(1);
+      const link = document.querySelector(`[data-section="${sectionId}"]`);
+      if (link) {
+        link.click();
+      }
+    }
+  </script>
+</body>
+</html>

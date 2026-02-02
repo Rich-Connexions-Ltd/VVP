@@ -189,6 +189,12 @@ def ui_admin():
     return FileResponse(WEB_DIR / "admin.html", media_type="text/html")
 
 
+@app.get("/ui/help", response_class=FileResponse)
+def ui_help():
+    """Serve the help and recipes web UI."""
+    return FileResponse(WEB_DIR / "help.html", media_type="text/html")
+
+
 @app.get("/ui/benchmarks", response_class=FileResponse)
 def ui_benchmarks():
     """Serve the integration test benchmarks web UI."""
