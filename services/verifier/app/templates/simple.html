@@ -37,7 +37,7 @@
     <h3>Browse Dossier by SAID</h3>
     <p>Enter a dossier SAID to browse its credentials directly (without a PASSporT).</p>
 
-    <form id="said-form" hx-post="/ui/fetch-dossier" hx-target="#result" hx-swap="innerHTML" hx-indicator="#said-loading">
+    <form id="said-form" hx-post="/ui/browse-said" hx-target="#result" hx-swap="innerHTML" hx-indicator="#said-loading">
         <label for="dossier-said">Dossier SAID</label>
         <div style="display: flex; gap: 0.5rem; align-items: flex-start;">
             <input
@@ -64,10 +64,9 @@
         </details>
 
         <input type="hidden" id="evd_url" name="evd_url" value="">
-        <input type="hidden" name="kid_url" value="">
 
         <button type="submit">
-            <span id="said-loading" class="htmx-indicator">Fetching...</span>
+            <span id="said-loading" class="htmx-indicator">Browsing...</span>
             <span>Browse Dossier</span>
         </button>
     </form>

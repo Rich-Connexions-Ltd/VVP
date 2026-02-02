@@ -1819,6 +1819,214 @@ def simple_redirect():
     return RedirectResponse(url="/verify/simple", status_code=301)
 
 
+@app.post("/ui/browse-said")
+async def ui_browse_said(
+    request: Request,
+    evd_url: str = Form(...),
+):
+    """Browse dossier by SAID - shows SVG graph like simple-verify but without JWT.
+
+    This endpoint is used when the user enters a dossier SAID directly
+    (without a PASSporT JWT). It fetches the dossier, builds the credential
+    graph, and returns the same SVG visualization as simple-verify.
+    """
+    from app.vvp.dossier.parser import parse_dossier
+    from app.vvp.acdc import (
+        parse_acdc,
+        build_credential_graph,
+        credential_graph_to_dict,
+    )
+    from app.vvp.ui.credential_viewmodel import (
+        build_credential_card_vm,
+        build_issuer_identity_map_async,
+        build_schema_info_with_fetch,
+        ValidationCheckResult,
+    )
+    from app.vvp.keri.tel_client import TELClient, CredentialStatus
+    from app.core.config import TRUSTED_ROOT_AIDS
+
+    try:
+        # Fetch dossier
+        raw_bytes = await cached_fetch_dossier(evd_url)
+        raw_text = raw_bytes.decode("utf-8")
+        nodes, signatures = parse_dossier(raw_bytes)
+
+        # Collect all SAIDs for edge availability checking
+        all_saids = {node.said for node in nodes}
+
+        # Parse TEL data from dossier for revocation status
+        tel_client = TELClient(timeout=2.0)
+        revocation_cache: dict[str, dict] = {}
+        for node in nodes:
+            try:
+                result = tel_client.parse_dossier_tel(
+                    dossier_data=raw_text,
+                    credential_said=node.said,
+                    registry_said=node.raw.get("ri") if node.raw else None,
+                )
+                if result.status != CredentialStatus.UNKNOWN:
+                    revocation_cache[node.said] = {
+                        "status": result.status.value,
+                        "checked_at": datetime.now(timezone.utc).isoformat(),
+                        "source": result.source or "dossier",
+                        "error": result.error,
+                    }
+            except Exception:
+                pass
+
+        # Parse all ACDCs
+        dossier_acdcs = {}
+        parsed_acdcs = []
+        for node in nodes:
+            acdc_dict = node.raw.copy() if node.raw else {}
+            acdc_dict["d"] = node.said
+            acdc_dict["i"] = node.issuer
+            acdc_dict["s"] = node.schema
+            if node.attributes:
+                acdc_dict["a"] = node.attributes
+            if node.edges:
+                acdc_dict["e"] = node.edges
+
+            try:
+                acdc = parse_acdc(acdc_dict)
+                dossier_acdcs[acdc.said] = acdc
+                parsed_acdcs.append((acdc, acdc_dict, node.said))
+            except Exception as e:
+                log.warning(f"Failed to parse ACDC {node.said[:16]}: {e}")
+
+        # Build credential graph
+        graph = build_credential_graph(
+            dossier_acdcs=dossier_acdcs,
+            trusted_roots=set(TRUSTED_ROOT_AIDS),
+            revocation_status=None,
+        )
+        graph_dict = credential_graph_to_dict(graph)
+
+        # Build view-models for all credentials
+        issuer_identities = await build_issuer_identity_map_async(
+            [acdc for acdc, _, _ in parsed_acdcs if acdc is not None],
+            oobi_url=evd_url,
+            discover_missing=True,
+        )
+
+        # Resolve key states for display
+        key_states: dict[str, Any] = {}
+        from app.vvp.keri import resolve_key_state, get_witness_pool
+
+        issuer_aids = {acdc.issuer_aid for acdc, _, _ in parsed_acdcs if acdc is not None}
+        log.debug(f"Resolving key states for {len(issuer_aids)} issuer AIDs...")
+
+        pool = get_witness_pool()
+        witnesses = await pool.get_all_witnesses()
+        witness_urls = [w.url for w in witnesses]
+
+        for aid in issuer_aids:
+            if aid in key_states:
+                continue
+            for witness_url in witness_urls:
+                try:
+                    oobi_url_try = f"{witness_url}/oobi/{aid}"
+                    key_state = await resolve_key_state(
+                        kid=aid,
+                        oobi_url=oobi_url_try,
+                        reference_time=None,
+                        _allow_test_mode=False,
+                    )
+                    key_states[aid] = key_state
+                    log.debug(f"Resolved key state for issuer {aid[:16]}... via {witness_url}")
+                    break
+                except Exception as e:
+                    log.debug(f"Could not resolve {aid[:16]}... via {witness_url}: {e}")
+                    continue
+
+        credential_vms: dict[str, Any] = {}
+        for acdc, acdc_dict, said in parsed_acdcs:
+            if acdc is None:
+                continue
+
+            revocation_result = revocation_cache.get(said)
+
+            try:
+                vm = build_credential_card_vm(
+                    acdc=acdc,
+                    chain_result=None,
+                    revocation_result=revocation_result,
+                    available_saids=all_saids,
+                    issuer_identities=issuer_identities,
+                    key_states=key_states,
+                )
+
+                schema_info = await build_schema_info_with_fetch(acdc)
+                vm.schema_info = schema_info
+
+                # Build per-credential validation checks
+                checks = []
+                chain_severity = ("success" if vm.chain_status == "VALID"
+                                 else "error" if vm.chain_status == "INVALID"
+                                 else "warning")
+                checks.append(ValidationCheckResult(
+                    name="Chain",
+                    status=vm.chain_status,
+                    short_reason="Credential chain",
+                    spec_ref="§5.1.1",
+                    severity=chain_severity,
+                ))
+
+                schema_severity = ("success" if schema_info.validation_status == "VALID"
+                                  else "error" if schema_info.validation_status == "INVALID"
+                                  else "warning")
+                checks.append(ValidationCheckResult(
+                    name="Schema",
+                    status=schema_info.validation_status,
+                    short_reason=schema_info.registry_source,
+                    spec_ref="§6.3",
+                    severity=schema_severity,
+                ))
+
+                rev_state = vm.revocation.state
+                rev_severity = ("success" if rev_state == "ACTIVE"
+                               else "error" if rev_state == "REVOKED"
+                               else "warning")
+                rev_status = ("VALID" if rev_state == "ACTIVE"
+                             else "INVALID" if rev_state == "REVOKED"
+                             else "INDETERMINATE")
+                checks.append(ValidationCheckResult(
+                    name="Revocation",
+                    status=rev_status,
+                    short_reason=rev_state,
+                    spec_ref="§5.1.1-2.9",
+                    severity=rev_severity,
+                ))
+
+                vm.validation_checks = checks
+                credential_vms[said] = vm
+
+            except Exception as e:
+                log.warning(f"Failed to build view-model for {said[:16]}: {e}")
+
+        return templates.TemplateResponse(
+            "partials/simple_result.html",
+            {
+                "request": request,
+                "verify_response": None,  # No JWT verification
+                "graph": graph_dict,
+                "credential_vms": credential_vms,
+            },
+        )
+
+    except httpx.TimeoutException:
+        return templates.TemplateResponse(
+            "partials/simple_result.html",
+            {"request": request, "error": f"Timeout fetching dossier from {evd_url}"},
+        )
+    except Exception as e:
+        log.error(f"Browse SAID failed: {e}")
+        return templates.TemplateResponse(
+            "partials/simple_result.html",
+            {"request": request, "error": str(e)},
+        )
+
+
 @app.post("/ui/simple-verify")
 async def ui_simple_verify(
     request: Request,
