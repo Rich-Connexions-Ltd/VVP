@@ -166,7 +166,10 @@ jobs:
             --name "${{ secrets.AZURE_CONTAINERAPP_NAME }}" \
             --image "$IMAGE" \
             --min-replicas 1 \
-            --set-env-vars "GIT_SHA=${{ github.sha }}" "GITHUB_REPOSITORY=${{ github.repository }}"
+            --set-env-vars \
+              "GIT_SHA=${{ github.sha }}" \
+              "GITHUB_REPOSITORY=${{ github.repository }}" \
+              "VVP_LOCAL_WITNESS_URLS=https://vvp-witness1.rcnx.io,https://vvp-witness2.rcnx.io,https://vvp-witness3.rcnx.io"
 
   # =========================================================================
   # DEPLOY ISSUER
