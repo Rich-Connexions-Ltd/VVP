@@ -145,6 +145,12 @@ class ErrorCode:
     DIALOG_MISMATCH = "DIALOG_MISMATCH"  # call-id/cseq don't match SIP INVITE
     ISSUER_MISMATCH = "ISSUER_MISMATCH"  # dossier issuer != passport kid
 
+    # Vetter constraint layer (Sprint 40)
+    VETTER_ECC_UNAUTHORIZED = "VETTER_ECC_UNAUTHORIZED"  # TN country code not in vetter's ECC Targets
+    VETTER_JURISDICTION_UNAUTHORIZED = "VETTER_JURISDICTION_UNAUTHORIZED"  # Country not in vetter's Jurisdiction Targets
+    VETTER_CERTIFICATION_MISSING = "VETTER_CERTIFICATION_MISSING"  # Credential lacks backlink to vetter certification
+    VETTER_CERTIFICATION_INVALID = "VETTER_CERTIFICATION_INVALID"  # Vetter certification is invalid/revoked
+
     # Verifier layer
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
@@ -176,8 +182,49 @@ ERROR_RECOVERABILITY: Dict[str, bool] = {
     ErrorCode.GOAL_REJECTED: False,          # Non-recoverable (Sprint 18)
     ErrorCode.DIALOG_MISMATCH: False,        # Non-recoverable (Sprint 19)
     ErrorCode.ISSUER_MISMATCH: False,        # Non-recoverable (Sprint 19)
+    ErrorCode.VETTER_ECC_UNAUTHORIZED: False,  # Non-recoverable (Sprint 40)
+    ErrorCode.VETTER_JURISDICTION_UNAUTHORIZED: False,  # Non-recoverable (Sprint 40)
+    ErrorCode.VETTER_CERTIFICATION_MISSING: True,  # Recoverable - may resolve externally
+    ErrorCode.VETTER_CERTIFICATION_INVALID: False,  # Non-recoverable (Sprint 40)
     ErrorCode.INTERNAL_ERROR: True,          # Recoverable
 }
+
+
+# =============================================================================
+# Sprint 40: Vetter Constraint Response Models
+# =============================================================================
+
+
+class VetterConstraintInfo(BaseModel):
+    """Vetter constraint validation result for a single credential.
+
+    Reports whether a credential's issuer (vetter) is authorized to issue
+    credentials for the relevant geographic region per their Vetter Certification.
+
+    Per the VVP Multichannel Vetters spec, results are status bits that clients
+    can interpret as errors (block call), warnings (route but suppress brand),
+    or informational.
+
+    Attributes:
+        credential_said: SAID of the credential being validated.
+        credential_type: Type of credential - "TN", "Identity", or "Brand".
+        vetter_certification_said: SAID of the vetter's certification credential,
+            or None if not found.
+        constraint_type: Type of constraint - "ecc" or "jurisdiction".
+        target_value: The value being checked (e.g., "44" for ECC, "GBR" for jurisdiction).
+        allowed_values: List of values the vetter is authorized for.
+        is_authorized: True if the target_value is in allowed_values.
+        reason: Human-readable explanation of the result.
+    """
+
+    credential_said: str
+    credential_type: str
+    vetter_certification_said: Optional[str] = None
+    constraint_type: str
+    target_value: str
+    allowed_values: List[str] = Field(default_factory=list)
+    is_authorized: bool = False
+    reason: str = ""
 
 
 # =============================================================================
@@ -289,6 +336,10 @@ class VerifyResponse(BaseModel):
         issuer_identities: Resolved identities for AIDs in the dossier and
             delegation chain. INFORMATIONAL only - may be incomplete for
             partial/compact dossiers. None when no dossier is present.
+        vetter_constraints: Vetter constraint validation results for credentials
+            in the dossier (Sprint 40). Results are status bits - whether they
+            affect overall_status depends on VVP_ENFORCE_VETTER_CONSTRAINTS config.
+            None when no dossier is present or no constraints to validate.
     """
 
     request_id: str
@@ -300,6 +351,7 @@ class VerifyResponse(BaseModel):
     signer_aid: Optional[str] = None
     toip_warnings: Optional[List[ToIPWarningDetail]] = None
     issuer_identities: Optional[Dict[str, IssuerIdentityInfo]] = None
+    vetter_constraints: Optional[Dict[str, VetterConstraintInfo]] = None
 
 
 # =============================================================================

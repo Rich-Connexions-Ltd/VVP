@@ -947,6 +947,8 @@
           'APE': '<span style="background:#17a2b8;color:white;padding:2px 6px;border-radius:4px;font-size:0.75em;">📱 Auth Phone</span>',
           'DE': '<span style="background:#fd7e14;color:white;padding:2px 6px;border-radius:4px;font-size:0.75em;">👤 Delegate</span>',
           'TNAlloc': '<span style="background:#6f42c1;color:white;padding:2px 6px;border-radius:4px;font-size:0.75em;">📞 TN Alloc</span>',
+          'VetterCert': '<span style="background:#e83e8c;color:white;padding:2px 6px;border-radius:4px;font-size:0.75em;">🌍 Vetter Cert</span>',
+          'Constrained': '<span style="background:#20c997;color:white;padding:2px 6px;border-radius:4px;font-size:0.75em;">🔒 Constrained</span>',
         };
         return badges[type] || `<span style="background:#999;color:white;padding:2px 6px;border-radius:4px;font-size:0.75em;">${type}</span>`;
       }
@@ -974,9 +976,13 @@
           // Check attributes for type hints
           if (attrs.LEI || attrs.lids) credType = 'LE';
           else if (attrs.phone || attrs.tn || attrs.numbers) credType = 'TNAlloc';
+          // Vetter Certification credentials (Sprint 40)
+          else if (attrs.ecc_targets || attrs.jurisdiction_targets) credType = 'VetterCert';
           // Check edges for type hints
           else if (edges.vetting || edges.le) credType = 'APE';
           else if (edges.delegation) credType = 'DE';
+          // Check for certification edge (indicates vetter-constrained credential)
+          else if (edges.certification || edges.vetter || edges.vetter_cert || edges.cert) credType = 'Constrained';
         }
 
         // Get key identifiers
@@ -1207,6 +1213,20 @@
         // Legal name
         if (attrs.legalName) results.push({ label: 'Legal Name', value: attrs.legalName });
         if (attrs.organizationName) results.push({ label: 'Org Name', value: attrs.organizationName });
+
+        // Country / Jurisdiction (for vetter constraints)
+        if (attrs.country) results.push({ label: 'Country', value: attrs.country });
+        if (attrs.jurisdiction) results.push({ label: 'Jurisdiction', value: attrs.jurisdiction });
+        if (attrs.incorporation_country) results.push({ label: 'Incorporation', value: attrs.incorporation_country });
+
+        // Vetter Certification fields (Sprint 40)
+        if (attrs.ecc_targets && Array.isArray(attrs.ecc_targets)) {
+          results.push({ label: 'ECC Targets', value: attrs.ecc_targets.slice(0, 5).join(', ') + (attrs.ecc_targets.length > 5 ? '...' : '') });
+        }
+        if (attrs.jurisdiction_targets && Array.isArray(attrs.jurisdiction_targets)) {
+          results.push({ label: 'Jurisdiction Targets', value: attrs.jurisdiction_targets.slice(0, 5).join(', ') + (attrs.jurisdiction_targets.length > 5 ? '...' : '') });
+        }
+        if (attrs.certificationExpiry) results.push({ label: 'Certification Expiry', value: attrs.certificationExpiry });
 
         // Subject AID (issuee)
         if (attrs.i && attrs.i !== credential.i) {

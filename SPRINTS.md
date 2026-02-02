@@ -23,6 +23,8 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 36 | Key Management & Rotation | COMPLETE | Sprint 30 |
 | 37 | Session-Based Authentication | COMPLETE | Sprint 30 |
 | 38 | OAuth (Microsoft M365) | COMPLETE | Sprint 30 |
+| 39 | Code Review Remediation | COMPLETE | Sprint 38 |
+| 40 | Vetter Certification Constraints | NOT STARTED | Sprint 31 |
 
 ---
 
@@ -785,6 +787,167 @@ services/issuer/tests/
 
 ---
 
+## Sprint 39: Code Review Remediation (COMPLETE)
+
+**Goal:** Address blocking and high-priority issues identified during comprehensive code review (Phases 1-11).
+
+**Prerequisites:** Sprint 38 (OAuth) complete, Code Review complete.
+
+**Deliverables:**
+- [x] B1: Verified OAuth redirect URL validation (already correctly implemented)
+- [x] B2: Created issuer persistence tests (19 new tests)
+- [x] H1: Fixed broken README.md documentation links (5 links corrected)
+- [x] H3: Added coverage thresholds to pyproject.toml (70% fail_under for both services)
+- [x] H8: Extracted TELClient timeout to configurable VVP_TEL_CLIENT_TIMEOUT
+- [x] H17: Fixed Python version mismatch in DEVELOPMENT.md (3.10+ → 3.12+)
+
+**Key Files:**
+```
+services/issuer/tests/test_persistence.py     # NEW: 19 persistence tests
+services/issuer/pyproject.toml                # Added coverage config
+services/verifier/pyproject.toml              # Added coverage config
+services/verifier/app/core/config.py          # Added TEL_CLIENT_TIMEOUT_SECONDS
+services/verifier/app/vvp/keri/tel_client.py  # Uses config for timeout
+README.md                                      # Fixed documentation links
+Documentation/DEVELOPMENT.md                  # Fixed Python version
+```
+
+**Test Results:**
+- Issuer: 276 passed, 2 skipped
+- Persistence tests: 19 passed
+
+**Exit Criteria:**
+- [x] All blocking issues addressed
+- [x] Top high-priority items fixed
+- [x] All tests pass
+- [x] Code review remediation backlog documented in REVIEW.md
+
+---
+
+## Sprint 40: Vetter Certification Constraints (NOT STARTED)
+
+**Goal:** Implement verification of Vetter Certification credentials to enforce geographic and jurisdictional constraints on credential issuers.
+
+**Prerequisites:** Sprint 31 (ACDC Issuance) complete.
+
+**Spec Reference:** [How To Constrain Multichannel Vetters](Documentation/Specs/How%20To%20Constrain%20Multichannel%20Vetters.pdf)
+
+**Background:**
+
+Vetters (credential issuers) receive a "Vetter Certification" credential that constrains their authority:
+- **ECC Targets**: List of E.164 country codes for which the vetter can attest TN (telephone number) right-to-use
+- **Jurisdiction Targets**: List of ISO 3166-1 country codes for which the vetter can attest legal entity incorporation and brand licensure
+
+When verifying a dossier, the verifier must check that:
+1. The TN credential's country code appears in the issuing vetter's ECC Targets
+2. The identity credential's incorporation country appears in the issuing vetter's Jurisdiction Targets
+3. The brand credential's assertion country appears in the issuing vetter's Jurisdiction Targets
+
+**Example Scenario:**
+
+Vetter B has:
+- ECC Targets: `["33", "91", "81", "66", "27", "971"]` (France, India, Japan, Thailand, South Africa, UAE)
+- Jurisdiction Targets: `["FRA", "ZAF", "THA", "IND", "PAK", "USA", "CAN"]`
+
+If Vetter B issues a TN credential for a UK number (+44), the verifier should flag this as invalid because "44" is not in Vetter B's ECC Targets.
+
+**Deliverables:**
+
+- [ ] **Vetter Certification schema** - Define ACDC schema for Vetter Certification with `ecc_targets` and `jurisdiction_targets` fields
+- [ ] **Credential edge traversal** - Follow backlinks from Identity/Brand/TN credentials to their issuing vetter's certification
+- [ ] **ECC Target validation** - Extract country code from TN and validate against vetter's ECC Targets
+- [ ] **Jurisdiction Target validation** - Validate incorporation country and brand assertion country against vetter's Jurisdiction Targets
+- [ ] **New claim types** - Add `vetter_ecc_authorized` and `vetter_jurisdiction_authorized` claims to verification response
+- [ ] **Error codes** - Add `VETTER_ECC_UNAUTHORIZED` and `VETTER_JURISDICTION_UNAUTHORIZED` error codes
+- [ ] **Configuration** - Add `VVP_ENFORCE_VETTER_CONSTRAINTS` flag (default: true) to enable/disable enforcement
+- [ ] **UI display** - Show vetter constraint validation status in verification UI
+- [ ] **Tests** - Comprehensive test coverage for constraint validation
+
+**Key Files (Expected):**
+
+```
+services/verifier/app/
+├── vvp/
+│   ├── vetter/                      # NEW: Vetter constraint validation
+│   │   ├── __init__.py
+│   │   ├── constraints.py           # ECC/Jurisdiction validation logic
+│   │   ├── certification.py         # Vetter Certification credential parsing
+│   │   └── country_codes.py         # E.164 and ISO 3166-1 utilities
+│   ├── verify.py                    # Integration with main verification flow
+│   └── api_models.py                # New claim types and error codes
+├── core/
+│   └── config.py                    # VVP_ENFORCE_VETTER_CONSTRAINTS
+services/verifier/tests/
+├── test_vetter_constraints.py       # Unit tests
+└── fixtures/vetter/                 # Test credentials with vetter certifications
+```
+
+**API Response Changes:**
+
+```python
+class VerifyResponse(BaseModel):
+    # ... existing fields ...
+    vetter_constraints: Optional[VetterConstraintStatus] = None
+
+class VetterConstraintStatus(BaseModel):
+    ecc_authorized: ClaimStatus          # TN country code in vetter's ECC Targets
+    jurisdiction_authorized: ClaimStatus  # Incorporation/brand country in Jurisdiction Targets
+    vetter_certification_said: Optional[str] = None
+    ecc_targets: Optional[List[str]] = None
+    jurisdiction_targets: Optional[List[str]] = None
+```
+
+**New Error Codes:**
+
+| Code | Description |
+|------|-------------|
+| `VETTER_ECC_UNAUTHORIZED` | TN country code not in vetter's ECC Targets |
+| `VETTER_JURISDICTION_UNAUTHORIZED` | Incorporation/brand country not in vetter's Jurisdiction Targets |
+| `VETTER_CERTIFICATION_MISSING` | Credential lacks backlink to vetter certification |
+| `VETTER_CERTIFICATION_INVALID` | Vetter certification credential is invalid/revoked |
+
+**Validation Logic:**
+
+1. For each credential in dossier (Identity, Brand, TN):
+   - Follow edge/backlink to issuing vetter's certification credential
+   - Parse `ecc_targets` and `jurisdiction_targets` from certification
+   - Validate certification is properly signed and unrevoked
+
+2. For TN credentials:
+   - Extract E.164 country code from telephone number (e.g., "44" from +44xxxxxxxxxx)
+   - Check if country code is in vetter's `ecc_targets`
+   - Set `vetter_ecc_authorized` claim accordingly
+
+3. For Identity credentials:
+   - Extract incorporation country (ISO 3166-1) from credential
+   - Check if country is in vetter's `jurisdiction_targets`
+   - Set `vetter_jurisdiction_authorized` claim accordingly
+
+4. For Brand credentials:
+   - Determine assertion country (from SIP context or call destination)
+   - Check if country is in vetter's `jurisdiction_targets`
+   - Include in `vetter_jurisdiction_authorized` claim
+
+**Technical Notes:**
+
+- Vetter Certification is fetched via edge traversal (backlink from issued credentials)
+- Country code extraction uses E.164 standard (first 1-3 digits of TN)
+- ISO 3166-1 alpha-3 codes used for jurisdiction (e.g., "GBR", "FRA", "USA")
+- Constraint violations are warnings by default (configurable to errors)
+- Multiple vetters may be involved if credentials come from different issuers
+
+**Exit Criteria:**
+
+- [ ] Vetter Certification schema registered and validated
+- [ ] ECC Target validation working for TN credentials
+- [ ] Jurisdiction Target validation working for Identity and Brand credentials
+- [ ] New claims appear in VerifyResponse
+- [ ] UI shows vetter constraint status
+- [ ] All tests passing
+- [ ] Integration test with multi-vetter dossier
+
+---
+
 ## Quick Reference
 
 To start a sprint, say:
@@ -800,6 +963,8 @@ To start a sprint, say:
 - "Sprint 36" - Key management & rotation
 - "Sprint 37" - Session-based authentication (UI login flow)
 - "Sprint 38" - OAuth (Microsoft M365) for UI SSO
+- "Sprint 39" - Code review remediation (blocking + high priority fixes)
+- "Sprint 40" - Vetter certification constraints (geographic/jurisdictional validation)
 
 Each sprint follows the pair programming workflow:
 1. Plan phase (design, review, approval)

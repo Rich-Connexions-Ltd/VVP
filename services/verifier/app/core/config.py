@@ -429,6 +429,12 @@ GLEIF_WITNESS_OOBI_URL: str = os.getenv(
 # GLEIF Root AID (for reference/logging)
 GLEIF_ROOT_AID: str = "EDP1vHcw_wc4M__Fj53-cJaBnZZASd-aMTaSyWEQ-PC2"
 
+# TEL Client timeout for revocation status queries
+# This is the HTTP timeout for individual witness queries
+TEL_CLIENT_TIMEOUT_SECONDS: float = float(
+    os.getenv("VVP_TEL_CLIENT_TIMEOUT", "10.0")
+)
+
 # Enable GLEIF witness discovery
 # When True (default): Attempt to discover GLEIF witnesses on first use
 # When False: Only use configured Provenant witnesses
@@ -441,3 +447,30 @@ GLEIF_WITNESS_DISCOVERY_ENABLED: bool = os.getenv(
 GLEIF_WITNESS_CACHE_TTL: int = int(
     os.getenv("VVP_GLEIF_WITNESS_CACHE_TTL", "300")
 )
+
+
+# =============================================================================
+# SPRINT 40: VETTER CERTIFICATION CONSTRAINTS
+# =============================================================================
+# Per VVP Multichannel Vetters spec, verify geographic/jurisdictional constraints
+# on credential issuers (vetters) via their Vetter Certification credentials.
+#
+# Results are status bits - clients decide whether to treat as errors or warnings.
+
+# Enforce vetter constraints as verification failures
+# When False (default): Violations are reported in vetter_constraints response
+#   field but do NOT affect overall verification status (soft-fail mode).
+#   Per spec: "The client of the verification API gets to decide whether it
+#   considers these bits to be errors (don't route the call), warnings
+#   (route but suppress brand), etc."
+# When True: Violations propagate to overall_status as INVALID (hard-fail mode)
+ENFORCE_VETTER_CONSTRAINTS: bool = os.getenv(
+    "VVP_ENFORCE_VETTER_CONSTRAINTS", "false"
+).lower() == "true"
+
+# Enable external resolution of vetter certifications
+# When False (default): Only look for vetter certifications in the dossier
+# When True: Attempt to fetch certifications not in dossier from witnesses
+VETTER_CERT_EXTERNAL_RESOLUTION: bool = os.getenv(
+    "VVP_VETTER_CERT_EXTERNAL_RESOLUTION", "false"
+).lower() == "true"
