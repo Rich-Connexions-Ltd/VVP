@@ -1154,11 +1154,15 @@ async def ui_check_revocation(
 ):
     """Check revocation status for credentials and return HTML fragment.
 
-    Extracts TEL events from the dossier stream (instant, no network).
-    If no inline TEL data found, returns UNKNOWN - witness TEL endpoints
-    are typically not publicly accessible.
+    First tries to parse TEL events from the dossier stream (instant, no network).
+    If no inline TEL data found, queries witnesses/registrars for live TEL state.
+
+    Per KERI spec, revocation status is tracked in the Transaction Event Log (TEL)
+    maintained by the issuer's registrars. The dossier may contain a snapshot of
+    TEL state at creation time, but live queries are needed to detect revocations
+    that occurred after the dossier was created.
     """
-    from app.vvp.keri.tel_client import TELClient, CredentialStatus
+    from app.vvp.keri.tel_client import TELClient, CredentialStatus, get_tel_client
 
     try:
         # Unescape HTML entities (form value may have &quot; etc. from template escaping)
@@ -1167,18 +1171,19 @@ async def ui_check_revocation(
         log.debug(f"check-revocation unescaped (first 200 chars): {unescaped[:200]}")
         acdc_list = json.loads(unescaped)
 
-        # Use TEL client for parsing dossier TEL data
-        client = TELClient(timeout=2.0)
+        # Use singleton TEL client for live queries (with witness pool)
+        client = get_tel_client()
         results = []
 
-        # Unescape dossier stream if provided
+        # Unescape dossier stream and kid_url if provided
         dossier_data = html.unescape(dossier_stream) if dossier_stream else ""
+        oobi_url = html.unescape(kid_url) if kid_url else None
 
         for acdc in acdc_list:
             said = acdc.get("d", "")
             registry_said = acdc.get("ri")
 
-            # Try to parse TEL from inline dossier data (instant, no network)
+            # First try dossier-embedded TEL data (instant, no network)
             if dossier_data:
                 try:
                     result = client.parse_dossier_tel(
@@ -1190,21 +1195,34 @@ async def ui_check_revocation(
                         results.append({
                             "said": said,
                             "status": result.status.value,
-                            "source": result.source,
+                            "source": f"{result.source} (dossier snapshot)",
                             "error": result.error,
                         })
                         continue  # Found status from dossier
                 except Exception as e:
                     log.debug(f"Dossier TEL parse failed for {said[:20]}: {e}")
 
-            # No inline TEL data found - return UNKNOWN
-            # (Witness TEL endpoints are typically not publicly accessible)
-            results.append({
-                "said": said,
-                "status": "UNKNOWN",
-                "source": None,
-                "error": "TEL data not in dossier (live witness query disabled)",
-            })
+            # No inline TEL data - query witnesses/registrars for live status
+            try:
+                result = await client.check_revocation(
+                    credential_said=said,
+                    registry_said=registry_said,
+                    oobi_url=oobi_url,
+                )
+                results.append({
+                    "said": said,
+                    "status": result.status.value,
+                    "source": f"{result.source} (live query)" if result.source else "live query",
+                    "error": result.error,
+                })
+            except Exception as e:
+                log.warning(f"Live TEL query failed for {said[:20]}: {e}")
+                results.append({
+                    "said": said,
+                    "status": "UNKNOWN",
+                    "source": None,
+                    "error": f"Live query failed: {e}",
+                })
 
         return templates.TemplateResponse(
             "partials/revocation.html",
