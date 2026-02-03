@@ -295,8 +295,14 @@ class TestKnownRootDisplayNames:
         root_node = next(n for n in graph.nodes.values() if n.is_root)
         assert root_node.display_name == "Provenant Global"
 
-    def test_brand_assure_issuer_name(self):
-        """Test Brand assure issuer gets proper display name from WELLKNOWN_AIDS."""
+    def test_brand_assure_qvi_name_and_gleif_root(self):
+        """Test Brand assure (a GLEIF-authorized QVI) gets proper display name and GLEIF root.
+
+        Brand assure is in GLEIF_AUTHORIZED_QVIS, so it should:
+        1. Be marked as credential_type="QVI" (not "ISSUER")
+        2. Have display_name="Brand assure" from WELLKNOWN_AIDS
+        3. Have GLEIF as root above it with authorized_by edge
+        """
         brand_assure_aid = "EKudJXsXQNzMzEhBHjs5iqZXLSF5fg1Nxs1MD-IAXqDo"
         trusted_roots = set()  # Not a trusted root
 
@@ -311,8 +317,18 @@ class TestKnownRootDisplayNames:
         dossier = {acdc.said: acdc}
         graph = build_credential_graph(dossier, trusted_roots)
 
-        issuer_node = next(n for n in graph.nodes.values() if n.credential_type == "ISSUER")
-        assert issuer_node.display_name == "Brand assure"
+        # Brand assure should be marked as QVI, not ISSUER
+        qvi_node = next(n for n in graph.nodes.values() if n.credential_type == "QVI")
+        assert qvi_node.display_name == "Brand assure"
+
+        # GLEIF should be the root above Brand assure
+        gleif_node = next(n for n in graph.nodes.values() if n.credential_type == "ROOT")
+        assert gleif_node.display_name == "GLEIF"
+
+        # There should be an authorized_by edge from QVI to GLEIF
+        auth_edge = next(e for e in graph.edges if e.edge_type == "authorized_by")
+        assert auth_edge.from_said == qvi_node.said
+        assert auth_edge.to_said == gleif_node.said
 
 
 class TestMultipleRoots:

@@ -82,6 +82,38 @@ _DEFAULT_WELLKNOWN_AIDS: Dict[str, Tuple[str, Optional[str]]] = {
 }
 
 
+# =============================================================================
+# Known GLEIF-Authorized QVIs (Qualified vLEI Issuers)
+# =============================================================================
+# These AIDs represent organizations that have been authorized by GLEIF to issue
+# vLEI credentials. When a dossier's terminal issuer is a known QVI, the graph
+# can show an implicit trust path to GLEIF even if the QVI credential is not
+# explicitly included in the dossier's chain edges.
+#
+# Source: https://www.gleif.org/en/about-lei/introducing-the-vlei
+# QVI list: https://keri.one/qvi-list (maintained by GLEIF/ToIP)
+
+GLEIF_AUTHORIZED_QVIS: set[str] = {
+    # Provenant Global - First commercial QVI
+    "ELW1FqnJZgOBR43USMu1RfVE6U1BXl6UFecIDPmJnscQ",
+    "ELW1FqnJZgOBR43UqAXCCFF6Zyz_EXaunivemMEkhRLy",
+    # Brand assure - Demo/test QVI in Provenant ecosystem
+    "EKudJXsXQNzMzEhBHjs5iqZXLSF5fg1Nxs1MD-IAXqDo",
+}
+
+
+def is_gleif_authorized_qvi(aid: str) -> bool:
+    """Check if an AID is a known GLEIF-authorized QVI.
+
+    Args:
+        aid: The AID to check.
+
+    Returns:
+        True if this AID is a known GLEIF-authorized QVI.
+    """
+    return aid in GLEIF_AUTHORIZED_QVIS
+
+
 def _load_wellknown_aids() -> Dict[str, Tuple[str, Optional[str]]]:
     """Load well-known AIDs from file or use defaults.
 

@@ -41,6 +41,20 @@ VLEI_SCHEMA_SAIDS = {
     "ECR": "EEy9PkikFcANV1l7EHukCeXqrzT1hNZjGlUk7wuMO5jw",
 }
 
+
+# =============================================================================
+# Known QVI Credential SAIDs
+# =============================================================================
+# Maps QVI issuer AID to their QVI credential SAID. Used as a fallback when
+# a dossier doesn't include e.qvi edges but uses a known QVI as issuer.
+# This enables chain resolution to GLEIF even for demo/simplified dossiers.
+
+KNOWN_QVI_CREDENTIALS: Dict[str, str] = {
+    # Brand assure's QVI credential (issued by GLEIF)
+    # AID: EKudJXsXQNzMzEhBHjs5iqZXLSF5fg1Nxs1MD-IAXqDo
+    # TODO: Obtain the actual QVI credential SAID from Brand assure/Provenant
+}
+
 # Reverse lookup: schema SAID → credential type name
 VLEI_SCHEMA_TO_TYPE = {v: k for k, v in VLEI_SCHEMA_SAIDS.items()}
 

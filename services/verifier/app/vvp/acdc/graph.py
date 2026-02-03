@@ -10,7 +10,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Set, TYPE_CHECKING
 
 from .models import ACDC
-from ..identity import WELLKNOWN_AIDS
+from ..identity import WELLKNOWN_AIDS, is_gleif_authorized_qvi
 
 if TYPE_CHECKING:
     from ..identity import IssuerIdentity
@@ -129,6 +129,57 @@ def _add_terminal_issuer(graph: CredentialGraph, aid: str) -> None:
     if aid not in graph.terminal_issuers:
         graph.terminal_issuers.append(aid)
         graph.terminal_issuers.sort()
+
+
+# Synthetic GLEIF root AID for display purposes
+# This is used when we know an issuer is a GLEIF-authorized QVI but don't have
+# the actual QVI credential to resolve. The real GLEIF GEDA would be obtained
+# from the QVI credential's issuer field if we had it.
+SYNTHETIC_GLEIF_AID = "GLEIF"
+
+
+def _add_gleif_root_for_qvi(
+    graph: CredentialGraph,
+    qvi_node_id: str,
+    issuer_identities: Optional[Dict[str, "IssuerIdentity"]] = None,
+) -> None:
+    """Add a GLEIF root node and connect it to a GLEIF-authorized QVI.
+
+    This is used when a dossier's terminal issuer is a known GLEIF-authorized QVI
+    but the dossier doesn't include the actual QVI credential with chain edges.
+    We show GLEIF as the implicit root of trust for these QVIs.
+
+    Args:
+        graph: The credential graph being built.
+        qvi_node_id: The node ID of the QVI (e.g., "qvi:EKudJXs...").
+        issuer_identities: Optional identity map for display names.
+    """
+    gleif_node_id = f"root:{SYNTHETIC_GLEIF_AID}"
+
+    # Add GLEIF root node if not already present
+    if gleif_node_id not in graph.nodes:
+        graph.nodes[gleif_node_id] = CredentialNode(
+            said=gleif_node_id,
+            issuer_aid=SYNTHETIC_GLEIF_AID,
+            credential_type="ROOT",
+            display_name="GLEIF",
+            is_root=True,
+            status=CredentialStatus.ACTIVE,
+            resolution_source=ResolutionSource.SYNTHETIC,
+        )
+        _add_root_aid(graph, SYNTHETIC_GLEIF_AID)
+        graph.trust_paths_valid[SYNTHETIC_GLEIF_AID] = True
+
+    # Connect QVI to GLEIF with "authorized_by" edge
+    graph.edges.append(CredentialEdge(
+        from_said=qvi_node_id,
+        to_said=gleif_node_id,
+        edge_type="authorized_by"
+    ))
+
+    # Update QVI node's edges_to
+    if qvi_node_id in graph.nodes:
+        graph.nodes[qvi_node_id].edges_to.append(gleif_node_id)
 
 
 def build_credential_graph(
@@ -299,26 +350,35 @@ def _add_issuer_nodes(
         # Add issuer node for credentials without parents in dossier
         if not has_parent_in_dossier:
             is_trusted = issuer_aid in trusted_roots
-            issuer_node_id = f"root:{issuer_aid}" if is_trusted else f"issuer:{issuer_aid}"
+            is_gleif_qvi = is_gleif_authorized_qvi(issuer_aid)
+            issuer_node_id = f"root:{issuer_aid}" if is_trusted else f"qvi:{issuer_aid}" if is_gleif_qvi else f"issuer:{issuer_aid}"
 
             if issuer_node_id not in graph.nodes:
-                display_name = (
-                    _get_root_display_name(issuer_aid, issuer_identities)
-                    if is_trusted
-                    else _get_issuer_display_name(issuer_aid, issuer_identities)
-                )
+                if is_trusted:
+                    display_name = _get_root_display_name(issuer_aid, issuer_identities)
+                    cred_type = "ROOT"
+                elif is_gleif_qvi:
+                    display_name = _get_issuer_display_name(issuer_aid, issuer_identities)
+                    cred_type = "QVI"
+                else:
+                    display_name = _get_issuer_display_name(issuer_aid, issuer_identities)
+                    cred_type = "ISSUER"
+
                 graph.nodes[issuer_node_id] = CredentialNode(
                     said=issuer_node_id,
                     issuer_aid=issuer_aid,
-                    credential_type="ROOT" if is_trusted else "ISSUER",
+                    credential_type=cred_type,
                     display_name=display_name,
                     is_root=is_trusted,
-                    status=CredentialStatus.ACTIVE if is_trusted else CredentialStatus.UNKNOWN,
+                    status=CredentialStatus.ACTIVE if (is_trusted or is_gleif_qvi) else CredentialStatus.UNKNOWN,
                     resolution_source=ResolutionSource.SYNTHETIC,
                 )
                 if is_trusted:
                     _add_root_aid(graph, issuer_aid)
                     graph.trust_paths_valid[issuer_aid] = True
+                elif is_gleif_qvi:
+                    # For GLEIF-authorized QVIs, add GLEIF as root and connect
+                    _add_gleif_root_for_qvi(graph, issuer_node_id, issuer_identities)
                 else:
                     _add_terminal_issuer(graph, issuer_aid)
 
