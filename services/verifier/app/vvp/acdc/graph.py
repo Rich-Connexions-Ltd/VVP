@@ -8,8 +8,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set
 
+from typing import TYPE_CHECKING
+
 from .models import ACDC
 from ..identity import WELLKNOWN_AIDS
+
+if TYPE_CHECKING:
+    from ..identity import IssuerIdentity
 
 
 class CredentialStatus(str, Enum):
@@ -123,6 +128,7 @@ def build_credential_graph(
     dossier_acdcs: Dict[str, ACDC],
     trusted_roots: Set[str],
     revocation_status: Optional[Dict[str, CredentialStatus]] = None,
+    issuer_identities: Optional[Dict[str, "IssuerIdentity"]] = None,
 ) -> CredentialGraph:
     """Build a credential graph from dossier ACDCs.
 
@@ -130,12 +136,15 @@ def build_credential_graph(
         dossier_acdcs: ACDCs from the dossier (SAID -> ACDC).
         trusted_roots: Set of trusted root AIDs.
         revocation_status: Optional revocation status for each SAID.
+        issuer_identities: Optional map of AID -> IssuerIdentity for display names.
+            Used to show resolved names (e.g., from vCard credentials) for issuers.
 
     Returns:
         CredentialGraph suitable for visualization.
     """
     graph = CredentialGraph()
     revocation_status = revocation_status or {}
+    issuer_identities = issuer_identities or {}
 
     # Build nodes from dossier ACDCs
     for said, acdc in dossier_acdcs.items():
@@ -164,7 +173,7 @@ def build_credential_graph(
                     ))
 
     # Add synthetic nodes for issuers that are trusted roots
-    _add_issuer_nodes(graph, dossier_acdcs, trusted_roots)
+    _add_issuer_nodes(graph, dossier_acdcs, trusted_roots, issuer_identities)
 
     # Compute layers for hierarchical display
     _compute_layers(graph, trusted_roots)
@@ -239,9 +248,18 @@ def _generate_display_name(cred_type: str, attrs: Dict[str, Any]) -> str:
 def _add_issuer_nodes(
     graph: CredentialGraph,
     dossier_acdcs: Dict[str, ACDC],
-    trusted_roots: Set[str]
+    trusted_roots: Set[str],
+    issuer_identities: Optional[Dict[str, "IssuerIdentity"]] = None,
 ) -> None:
-    """Add synthetic nodes for issuers (trusted roots and chain terminators)."""
+    """Add synthetic nodes for issuers (trusted roots and chain terminators).
+
+    Args:
+        graph: The credential graph being built.
+        dossier_acdcs: ACDCs from the dossier.
+        trusted_roots: Set of trusted root AIDs.
+        issuer_identities: Optional map of AID -> IssuerIdentity for display names.
+    """
+    issuer_identities = issuer_identities or {}
 
     # Find credentials that don't have parents in the dossier (terminal credentials)
     # These need issuer nodes to show the chain terminus
@@ -277,11 +295,16 @@ def _add_issuer_nodes(
             issuer_node_id = f"root:{issuer_aid}" if is_trusted else f"issuer:{issuer_aid}"
 
             if issuer_node_id not in graph.nodes:
+                display_name = (
+                    _get_root_display_name(issuer_aid, issuer_identities)
+                    if is_trusted
+                    else _get_issuer_display_name(issuer_aid, issuer_identities)
+                )
                 graph.nodes[issuer_node_id] = CredentialNode(
                     said=issuer_node_id,
                     issuer_aid=issuer_aid,
                     credential_type="ROOT" if is_trusted else "ISSUER",
-                    display_name=_get_root_display_name(issuer_aid) if is_trusted else _get_issuer_display_name(issuer_aid),
+                    display_name=display_name,
                     is_root=is_trusted,
                     status=CredentialStatus.ACTIVE if is_trusted else CredentialStatus.UNKNOWN,
                     resolution_source=ResolutionSource.SYNTHETIC,
@@ -301,25 +324,53 @@ def _add_issuer_nodes(
             graph.nodes[said].edges_to.append(issuer_node_id)
 
 
-def _get_root_display_name(aid: str) -> str:
+def _get_root_display_name(
+    aid: str,
+    issuer_identities: Optional[Dict[str, "IssuerIdentity"]] = None,
+) -> str:
     """Get display name for a trusted root AID.
 
-    Uses the centralized WELLKNOWN_AIDS registry from identity.py.
+    Priority:
+    1. IssuerIdentity from dossier (if legal_name available)
+    2. WELLKNOWN_AIDS registry
+    3. Truncated AID
     """
+    # Check identity map first (from dossier LE/vCard credentials)
+    if issuer_identities and aid in issuer_identities:
+        identity = issuer_identities[aid]
+        if identity.legal_name:
+            return identity.legal_name
+
+    # Fall back to well-known registry
     if aid in WELLKNOWN_AIDS:
         name, _ = WELLKNOWN_AIDS[aid]
         return name
+
     return f"Trusted Root: {aid[:16]}..."
 
 
-def _get_issuer_display_name(aid: str) -> str:
+def _get_issuer_display_name(
+    aid: str,
+    issuer_identities: Optional[Dict[str, "IssuerIdentity"]] = None,
+) -> str:
     """Get display name for an untrusted issuer AID.
 
-    Uses the centralized WELLKNOWN_AIDS registry from identity.py.
+    Priority:
+    1. IssuerIdentity from dossier (if legal_name available)
+    2. WELLKNOWN_AIDS registry
+    3. Truncated AID
     """
+    # Check identity map first (from dossier LE/vCard credentials)
+    if issuer_identities and aid in issuer_identities:
+        identity = issuer_identities[aid]
+        if identity.legal_name:
+            return identity.legal_name
+
+    # Fall back to well-known registry
     if aid in WELLKNOWN_AIDS:
         name, _ = WELLKNOWN_AIDS[aid]
         return name
+
     return f"Issuer: {aid[:16]}..."
 
 

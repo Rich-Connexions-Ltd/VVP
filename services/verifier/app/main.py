@@ -1894,15 +1894,22 @@ async def ui_browse_said(
             except Exception as e:
                 log.warning(f"Failed to parse ACDC {node.said[:16]}: {e}")
 
-        # Build credential graph
+        # Build identity map first (sync) - for graph display names
+        from app.vvp.identity import build_issuer_identity_map
+        sync_identities = build_issuer_identity_map(
+            [acdc for acdc, _, _ in parsed_acdcs if acdc is not None]
+        )
+
+        # Build credential graph with identity map for display names
         graph = build_credential_graph(
             dossier_acdcs=dossier_acdcs,
             trusted_roots=set(TRUSTED_ROOT_AIDS),
             revocation_status=None,
+            issuer_identities=sync_identities,
         )
         graph_dict = credential_graph_to_dict(graph)
 
-        # Build view-models for all credentials
+        # Build view-models for all credentials (async adds OOBI discovery)
         issuer_identities = await build_issuer_identity_map_async(
             [acdc for acdc, _, _ in parsed_acdcs if acdc is not None],
             oobi_url=evd_url,
@@ -2171,15 +2178,22 @@ async def ui_simple_verify(
             except Exception as e:
                 log.warning(f"Failed to parse ACDC {node.said[:16]}: {e}")
 
-        # Step 5: Build credential graph
+        # Step 5: Build identity map first (sync) - for graph display names
+        from app.vvp.identity import build_issuer_identity_map
+        sync_identities = build_issuer_identity_map(
+            [acdc for acdc, _, _ in parsed_acdcs if acdc is not None]
+        )
+
+        # Build credential graph with identity map for display names
         graph = build_credential_graph(
             dossier_acdcs=dossier_acdcs,
             trusted_roots=set(TRUSTED_ROOT_AIDS),
             revocation_status=None,
+            issuer_identities=sync_identities,
         )
         graph_dict = credential_graph_to_dict(graph)
 
-        # Step 6: Build view-models for all credentials
+        # Step 6: Build view-models for all credentials (async adds OOBI discovery)
         issuer_identities = await build_issuer_identity_map_async(
             [acdc for acdc, _, _ in parsed_acdcs if acdc is not None],
             oobi_url=evd_url,
