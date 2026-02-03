@@ -16,7 +16,7 @@ The **VVP Verifier** is a reference implementation for verifying calls under the
 - **KERI (Key Event Receipt Infrastructure)**: A decentralized key management system using Key Event Logs (KELs) for tracking identifier state without a central PKI.
 - **ACDC (Authentic Chained Data Containers)**: Structured, verifiable data objects for expressing chained claims and credentials.
 
-> For a deep dive into the protocol and architecture, see the [VVP Verifier Documentation](app/Documentation/VVP_Verifier_Documentation.md).
+> For a deep dive into the protocol and architecture, see the [VVP Verifier Documentation](Documentation/VVP_Verifier_Documentation.md).
 
 ## Getting Started
 
@@ -103,7 +103,7 @@ scripts/            # Helper scripts (e.g., test runner)
 
 ## Documentation
 
-- [VVP Verifier Documentation](app/Documentation/VVP_Verifier_Documentation.md): Comprehensive guide to objectives, background, and architecture.
-- [Specification](app/Documentation/VVP_Verifier_Specification_v1.5.md): Detailed VVP specification.
-- [Implementation Checklist](app/Documentation/VVP_Implementation_Checklist.md): Tracking implementation progress.
-- [Creating Dossiers](app/Documentation/CREATING_DOSSIERS.md): Capabilities and infrastructure needed to create ACDCs and dossiers.
+- [VVP Verifier Documentation](Documentation/VVP_Verifier_Documentation.md): Comprehensive guide to objectives, background, and architecture.
+- [Specification](Documentation/VVP_Verifier_Specification_v1.5.md): Detailed VVP specification.
+- [Implementation Checklist](Documentation/VVP_Implementation_Checklist.md): Tracking implementation progress.
+- [Creating Dossiers](Documentation/CREATING_DOSSIERS.md): Capabilities and infrastructure needed to create ACDCs and dossiers.

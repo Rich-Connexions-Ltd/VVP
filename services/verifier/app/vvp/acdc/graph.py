@@ -1,7 +1,7 @@
 """Credential graph builder for ACDC chain visualization.
 
 Builds a directed graph of credentials from dossier to trusted root,
-suitable for UI visualization.
+suitable for UI visualization. Supports multiple roots of trust per dossier.
 """
 
 from dataclasses import dataclass, field
@@ -9,6 +9,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Set
 
 from .models import ACDC
+from ..identity import WELLKNOWN_AIDS
 
 
 class CredentialStatus(str, Enum):
@@ -66,20 +67,56 @@ class CredentialEdge:
 
 @dataclass
 class CredentialGraph:
-    """Complete credential chain as a directed graph."""
+    """Complete credential chain as a directed graph.
+
+    Supports multiple roots of trust per dossier. Each terminal issuer can
+    anchor to a different root, giving the dossier multiple independent
+    trust chains.
+    """
 
     nodes: Dict[str, CredentialNode] = field(default_factory=dict)
     edges: List[CredentialEdge] = field(default_factory=list)
 
-    # Root info
-    root_aid: Optional[str] = None
-    trust_path_valid: bool = False
+    # Root info - Support multiple roots with stable (sorted) ordering
+    root_aids: List[str] = field(default_factory=list)  # Sorted list of trusted root AIDs
+    trust_paths_valid: Dict[str, bool] = field(default_factory=dict)  # root_aid -> valid
+
+    # Terminal issuers (untrusted chain termini, sorted for deterministic output)
+    terminal_issuers: List[str] = field(default_factory=list)
 
     # Layers for hierarchical visualization (root first)
     layers: List[List[str]] = field(default_factory=list)
 
     # Errors during graph building
     errors: List[str] = field(default_factory=list)
+
+    @property
+    def root_aid(self) -> Optional[str]:
+        """First root AID for backwards compatibility.
+
+        Returns the lexicographically first trusted root, or None if no roots.
+        Deterministic ordering ensures stable behavior across runs.
+        """
+        return self.root_aids[0] if self.root_aids else None
+
+    @property
+    def trust_path_valid(self) -> bool:
+        """True if any trust path is valid."""
+        return any(self.trust_paths_valid.values()) if self.trust_paths_valid else False
+
+
+def _add_root_aid(graph: CredentialGraph, aid: str) -> None:
+    """Add a root AID maintaining sorted order for deterministic output."""
+    if aid not in graph.root_aids:
+        graph.root_aids.append(aid)
+        graph.root_aids.sort()
+
+
+def _add_terminal_issuer(graph: CredentialGraph, aid: str) -> None:
+    """Add a terminal issuer maintaining sorted order for deterministic output."""
+    if aid not in graph.terminal_issuers:
+        graph.terminal_issuers.append(aid)
+        graph.terminal_issuers.sort()
 
 
 def build_credential_graph(
@@ -132,8 +169,8 @@ def build_credential_graph(
     # Compute layers for hierarchical display
     _compute_layers(graph, trusted_roots)
 
-    # Check if we have a valid path to root
-    graph.trust_path_valid = graph.root_aid is not None
+    # trust_path_valid is now a computed property based on trust_paths_valid dict
+    # No explicit assignment needed
 
     return graph
 
@@ -250,7 +287,10 @@ def _add_issuer_nodes(
                     resolution_source=ResolutionSource.SYNTHETIC,
                 )
                 if is_trusted:
-                    graph.root_aid = issuer_aid
+                    _add_root_aid(graph, issuer_aid)
+                    graph.trust_paths_valid[issuer_aid] = True
+                else:
+                    _add_terminal_issuer(graph, issuer_aid)
 
             # Add issued_by edge
             graph.edges.append(CredentialEdge(
@@ -262,22 +302,25 @@ def _add_issuer_nodes(
 
 
 def _get_root_display_name(aid: str) -> str:
-    """Get display name for a trusted root AID."""
-    # Known roots
-    known_roots = {
-        "EDP1vHcw_wc4M__Fj53-cJaBnZZASd-aMTaSyWEQ-PC2": "GLEIF Root",
-        "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao": "GLEIF External",
-    }
-    return known_roots.get(aid, f"Trusted Root: {aid[:16]}...")
+    """Get display name for a trusted root AID.
+
+    Uses the centralized WELLKNOWN_AIDS registry from identity.py.
+    """
+    if aid in WELLKNOWN_AIDS:
+        name, _ = WELLKNOWN_AIDS[aid]
+        return name
+    return f"Trusted Root: {aid[:16]}..."
 
 
 def _get_issuer_display_name(aid: str) -> str:
-    """Get display name for an untrusted issuer AID."""
-    # Known issuers (staging/demo environments)
-    known_issuers = {
-        # Add known staging QVIs here as they're discovered
-    }
-    return known_issuers.get(aid, f"Issuer: {aid[:16]}...")
+    """Get display name for an untrusted issuer AID.
+
+    Uses the centralized WELLKNOWN_AIDS registry from identity.py.
+    """
+    if aid in WELLKNOWN_AIDS:
+        name, _ = WELLKNOWN_AIDS[aid]
+        return name
+    return f"Issuer: {aid[:16]}..."
 
 
 def _compute_layers(graph: CredentialGraph, trusted_roots: Set[str]) -> None:
@@ -330,7 +373,11 @@ def _compute_layers(graph: CredentialGraph, trusted_roots: Set[str]) -> None:
 
 
 def credential_graph_to_dict(graph: CredentialGraph) -> Dict[str, Any]:
-    """Convert CredentialGraph to a JSON-serializable dict for API response."""
+    """Convert CredentialGraph to a JSON-serializable dict for API response.
+
+    Note: rootAids and terminalIssuers are sorted lists for deterministic output.
+    trustPathsValid is keyed only by trusted roots (AIDs in rootAids).
+    """
     return {
         "nodes": [
             {
@@ -361,8 +408,13 @@ def credential_graph_to_dict(graph: CredentialGraph) -> Dict[str, Any]:
             }
             for edge in graph.edges
         ],
-        "rootAid": graph.root_aid,
-        "trustPathValid": graph.trust_path_valid,
+        # Multiple roots support (sorted for deterministic output)
+        "rootAids": graph.root_aids,  # All trusted root AIDs (sorted list)
+        "rootAid": graph.root_aid,  # Backwards compat (first sorted root)
+        "trustPathValid": graph.trust_path_valid,  # True if any path valid
+        "trustPathsValid": graph.trust_paths_valid,  # Per-root status (trusted only)
+        # Terminal issuers (untrusted chain termini, sorted list)
+        "terminalIssuers": graph.terminal_issuers,
         "layers": graph.layers,
         "errors": graph.errors,
     }

@@ -63,11 +63,11 @@ class TestGetWellknownIdentity:
 
     def test_known_aid_returns_identity(self):
         """Known AID returns IssuerIdentity."""
-        # GLEIF is in the default well-known AIDs
-        identity = get_wellknown_identity("EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao")
+        # Provenant Global QVI is in the default well-known AIDs
+        identity = get_wellknown_identity("ELW1FqnJZgOBR43USMu1RfVE6U1BXl6UFecIDPmJnscQ")
         assert identity is not None
-        assert identity.legal_name == "GLEIF"
-        assert identity.lei == "5493001KJTIIGC8Y1R12"
+        assert identity.legal_name == "Provenant Global"
+        assert identity.lei is None  # Provenant doesn't have LEI in registry
         assert identity.source_said is None  # No credential source
 
     def test_unknown_aid_returns_none(self):
@@ -75,10 +75,17 @@ class TestGetWellknownIdentity:
         identity = get_wellknown_identity("EUnknownAID123456789012345678901234567")
         assert identity is None
 
+    def test_qvi_schema_said_not_in_wellknown(self):
+        """QVI schema SAID is not in well-known AIDs (it's a schema, not issuer)."""
+        # EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao is the QVI SCHEMA SAID,
+        # not an issuer AID. Schema SAIDs and issuer AIDs are different.
+        identity = get_wellknown_identity("EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao")
+        assert identity is None
+
     def test_wellknown_identity_has_role(self):
         """Well-known identity has role='wellknown'."""
-        gleif_aid = "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao"
-        identity = get_wellknown_identity(gleif_aid)
+        provenant_aid = "ELW1FqnJZgOBR43USMu1RfVE6U1BXl6UFecIDPmJnscQ"
+        identity = get_wellknown_identity(provenant_aid)
         assert identity is not None
         assert identity.role == "wellknown"
 
@@ -326,10 +333,10 @@ class TestBuildIssuerIdentityMap:
 
     def test_wellknown_fallback_has_role(self):
         """Well-known fallback identity has role='wellknown'."""
-        gleif_aid = "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao"
+        provenant_aid = "ELW1FqnJZgOBR43USMu1RfVE6U1BXl6UFecIDPmJnscQ"
         acdc = self._make_acdc(
             said="ESAID1234567890123456789012345678901234567",
-            issuer_aid=gleif_aid,
+            issuer_aid=provenant_aid,
             attributes={
                 "someField": "someValue",
                 # No identity info
@@ -337,16 +344,16 @@ class TestBuildIssuerIdentityMap:
         )
         result = build_issuer_identity_map([acdc])
 
-        identity = result[gleif_aid]
+        identity = result[provenant_aid]
         assert identity.role == "wellknown"
 
     def test_wellknown_fallback_for_issuer(self):
         """Well-known AIDs provide fallback identity for issuers."""
-        # Create ACDC issued by GLEIF (well-known AID)
-        gleif_aid = "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao"
+        # Create ACDC issued by Provenant Global (well-known AID)
+        provenant_aid = "ELW1FqnJZgOBR43USMu1RfVE6U1BXl6UFecIDPmJnscQ"
         acdc = self._make_acdc(
             said="ESAID1234567890123456789012345678901234567",
-            issuer_aid=gleif_aid,
+            issuer_aid=provenant_aid,
             attributes={
                 # No identity info in this credential
                 "someField": "someValue",
@@ -354,29 +361,29 @@ class TestBuildIssuerIdentityMap:
         )
         result = build_issuer_identity_map([acdc])
 
-        # GLEIF should be identified via well-known fallback
-        assert gleif_aid in result
-        identity = result[gleif_aid]
-        assert identity.legal_name == "GLEIF"
-        assert identity.lei == "5493001KJTIIGC8Y1R12"
+        # Provenant should be identified via well-known fallback
+        assert provenant_aid in result
+        identity = result[provenant_aid]
+        assert identity.legal_name == "Provenant Global"
+        assert identity.lei is None  # Provenant doesn't have LEI in registry
         assert identity.source_said is None  # From well-known, not credential
 
     def test_credential_identity_overrides_wellknown(self):
         """Identity from credential takes precedence over well-known."""
-        gleif_aid = "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao"
+        provenant_aid = "ELW1FqnJZgOBR43USMu1RfVE6U1BXl6UFecIDPmJnscQ"
         acdc = self._make_acdc(
             said="ESAID1234567890123456789012345678901234567",
             issuer_aid="EOtherIssuer12345678901234567890123456",
             attributes={
-                "legalName": "Override Name for GLEIF",
-                "issuee": gleif_aid,
+                "legalName": "Override Name for Provenant",
+                "issuee": provenant_aid,
             },
         )
         result = build_issuer_identity_map([acdc])
 
         # Credential identity should override well-known
-        identity = result[gleif_aid]
-        assert identity.legal_name == "Override Name for GLEIF"
+        identity = result[provenant_aid]
+        assert identity.legal_name == "Override Name for Provenant"
         assert identity.source_said == "ESAID1234567890123456789012345678901234567"
 
     def test_empty_list_returns_empty_dict(self):
@@ -423,7 +430,7 @@ class TestBuildIssuerIdentityMap:
 
     def test_edge_dict_target_wellknown_aid_resolved(self):
         """Edge target in dict format pointing to well-known AID is resolved."""
-        gleif_aid = "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao"
+        brand_assure_aid = "EKudJXsXQNzMzEhBHjs5iqZXLSF5fg1Nxs1MD-IAXqDo"
         acdc = self._make_acdc(
             said="ESAID1234567890123456789012345678901234567",
             issuer_aid="EUnknownIssuer12345678901234567890123",
@@ -431,15 +438,15 @@ class TestBuildIssuerIdentityMap:
                 "someField": "someValue",
             },
             edges={
-                "auth": {"n": gleif_aid},  # Dict format edge
+                "auth": {"n": brand_assure_aid},  # Dict format edge
             },
         )
         result = build_issuer_identity_map([acdc])
 
-        # GLEIF should be identified via well-known from edge target
-        assert gleif_aid in result
-        identity = result[gleif_aid]
-        assert identity.legal_name == "GLEIF"
+        # Brand assure should be identified via well-known from edge target
+        assert brand_assure_aid in result
+        identity = result[brand_assure_aid]
+        assert identity.legal_name == "Brand assure"
         assert identity.role == "wellknown"
 
 
@@ -528,8 +535,8 @@ class TestIdentitySourceDetermination:
 
     def test_wellknown_identity_has_no_source_said(self):
         """Identity from well-known has source_said=None."""
-        gleif_aid = "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao"
-        identity = get_wellknown_identity(gleif_aid)
+        provenant_aid = "ELW1FqnJZgOBR43USMu1RfVE6U1BXl6UFecIDPmJnscQ"
+        identity = get_wellknown_identity(provenant_aid)
 
         assert identity is not None
         assert identity.source_said is None  # Well-known source

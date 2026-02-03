@@ -56,15 +56,27 @@ class IssuerIdentity:
 # Default well-known AIDs for root of trust organizations
 # These provide fallback identity when LE credentials aren't in dossier
 # Source: vLEI Governance Framework
+#
+# IMPORTANT: This registry contains ISSUER AIDs (autonomic identifiers derived
+# from inception events), NOT schema SAIDs (content-addressed identifiers).
+# Schema SAIDs belong in common/vvp/schema/registry.py.
+#
+# The production GLEIF GEDA (GLEIF External Delegated AID) used to issue QVI
+# credentials is established through a multi-party ceremony. The GEDA is
+# delegated from the GLEIF Root AID. Contact GLEIF for the current production
+# GEDA value: https://www.gleif.org/en/about-lei/introducing-the-vlei
+#
+# Note: EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao is the QVI SCHEMA SAID,
+# not an issuer AID. It should not appear in this registry.
 _DEFAULT_WELLKNOWN_AIDS: Dict[str, Tuple[str, Optional[str]]] = {
-    # GLEIF External (production vLEI root of trust)
-    "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao": ("GLEIF", "5493001KJTIIGC8Y1R12"),
-    # Provenant Global QVI (multiple AIDs observed)
+    # Provenant Global QVI (multiple AIDs observed in production)
     "ELW1FqnJZgOBR43USMu1RfVE6U1BXl6UFecIDPmJnscQ": ("Provenant Global", None),
     "ELW1FqnJZgOBR43UqAXCCFF6Zyz_EXaunivemMEkhRLy": ("Provenant Global", None),
-    # GLEIF Internal Issuer (multiple AIDs observed)
+    # GLEIF Internal Issuer (observed in test/demo environments)
     "EPI6riUghhZcrzeRvP2w94LKmPYplMVUXgpj2m5sJOzL": ("GLEIF Internal Issuer", None),
     "EPI6riUghhZcrzeRrf4qxOSgMvqL97LKxMSaxcDUciub": ("GLEIF Internal Issuer", None),
+    # Brand assure QVI (Provenant demo ecosystem)
+    "EKudJXsXQNzMzEhBHjs5iqZXLSF5fg1Nxs1MD-IAXqDo": ("Brand assure", None),
     # Test roots (for development)
     "EDP1vHcw_wc4M__Fj53-cJaBnZZASd-aMTaSyWvOPUbo": ("Test QVI Root", None),
 }

@@ -1594,48 +1594,48 @@ class TestBuildIssuerIdentityMap:
         """Well-known AIDs provide identity fallback for issuers not in dossier."""
         from app.vvp.ui.credential_viewmodel import WELLKNOWN_AIDS, build_issuer_identity_map
 
-        # Get a well-known AID (GLEIF)
-        gleif_aid = "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao"
-        assert gleif_aid in WELLKNOWN_AIDS
+        # Get a well-known AID (Provenant Global QVI)
+        provenant_aid = "ELW1FqnJZgOBR43USMu1RfVE6U1BXl6UFecIDPmJnscQ"
+        assert provenant_aid in WELLKNOWN_AIDS
 
-        # Create a credential issued by GLEIF but no LE cred for GLEIF
+        # Create a credential issued by Provenant but no LE cred for Provenant
         acdc = ACDC(
             version="ACDC10JSON00011c_",
             said="E" + "A" * 43,
-            issuer_aid=gleif_aid,
+            issuer_aid=provenant_aid,
             schema_said="E" + "S" * 43,
             attributes={"role": "QVI"},  # Not an LE credential
         )
 
         result = build_issuer_identity_map([acdc])
-        # GLEIF should be in the map from well-known fallback
-        assert gleif_aid in result
-        assert result[gleif_aid].legal_name == "GLEIF"
+        # Provenant should be in the map from well-known fallback
+        assert provenant_aid in result
+        assert result[provenant_aid].legal_name == "Provenant Global"
 
     def test_wellknown_aids_not_used_when_dossier_has_identity(self):
         """Well-known AIDs don't override identity from dossier LE credential."""
         from app.vvp.ui.credential_viewmodel import WELLKNOWN_AIDS, build_issuer_identity_map
 
-        gleif_aid = "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao"
-        assert gleif_aid in WELLKNOWN_AIDS
+        provenant_aid = "ELW1FqnJZgOBR43USMu1RfVE6U1BXl6UFecIDPmJnscQ"
+        assert provenant_aid in WELLKNOWN_AIDS
 
-        # Create an LE credential that identifies GLEIF with different name
+        # Create an LE credential that identifies Provenant with different name
         acdc = ACDC(
             version="ACDC10JSON00011c_",
             said="E" + "A" * 43,
-            issuer_aid=gleif_aid,
+            issuer_aid=provenant_aid,
             schema_said="E" + "S" * 43,
             attributes={
-                "i": gleif_aid,  # Self-issued LE
-                "legalName": "GLEIF International",  # Different from well-known
-                "LEI": "5493001KJTIIGC8Y1R12",
+                "i": provenant_aid,  # Self-issued LE
+                "legalName": "Provenant Global Ltd",  # Different from well-known
+                "LEI": "123456789012345678AB",
             },
         )
 
         result = build_issuer_identity_map([acdc])
         # Dossier identity takes precedence
-        assert gleif_aid in result
-        assert result[gleif_aid].legal_name == "GLEIF International"
+        assert provenant_aid in result
+        assert result[provenant_aid].legal_name == "Provenant Global Ltd"
 
 
 class TestIssuerInfoWithIdentity:

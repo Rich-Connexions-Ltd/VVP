@@ -545,3 +545,101 @@ All required changes are addressed. The issuer‑AID fallback has been removed i
 
 ### Findings (if any)
 - None.
+
+## Plan Review: Fix Issuer vs Issuee Identity Confusion
+
+**Verdict:** CHANGES_REQUESTED
+
+### Spec Compliance
+The plan correctly distinguishes ACDC issuer (`i`) from issuee/subject (`a.i`/`a.issuee`) and treats attributes like `legalName`/`LEI` as describing the issuee. This aligns with ACDC/KERI semantics and the VVP verifier spec guidance about issuee binding.
+
+### Design Assessment
+Adding a role field and introducing explicit subject display on credential cards is the right direction. However, the plan defines a role value of "issuer" but never assigns it, leaving issuer provenance ambiguous. The subject lookup uses `issuer_identities`, which remains a misleading name and can still cause confusion unless a clearer alias or documentation is added.
+
+### Findings
+- [Medium]: The plan defines `role="issuer"` but never sets it; issuer identities will remain unlabeled or only show as `wellknown`. This undermines the goal of clarifying provenance.
+- [Low]: `issuer_identities` remains a confusing name once it stores both subject and well‑known identities; consider adding an alias or docstring to clarify usage.
+
+### Answers to Open Questions
+1. Should `issuer_identities` be renamed to `resolved_identities`?
+   - Yes, long‑term. For backward compatibility, keep `issuer_identities` but add an alias (e.g., `resolved_identities`) and update internal usage/documentation.
+2. Should role values use different terminology?
+   - Prefer `issuee` (spec term) over `subject`. Suggested set: `issuee`, `issuer`, `wellknown`. If you keep `subject`, document it explicitly as synonym of `issuee`.
+
+### Required Changes (if CHANGES_REQUESTED)
+1. Define and implement how `role="issuer"` is populated (e.g., when identity is derived from a credential whose `i` matches the identity AID, or when a well‑known registry record is used specifically to label the issuer).
+2. Add at least one test that asserts issuer role labeling in the API response or UI view model.
+
+### Recommendations
+- Add a short docstring or type alias clarifying that the identity map is a "resolved identities" cache keyed by AID, not strictly issuer identities.
+- Consider including both `issuer_identity` and `subject_identity` objects in the API to avoid client confusion.
+
+## Plan Review: Enhanced Chain Resolution with Multiple Roots
+
+**Verdict:** CHANGES_REQUESTED
+
+### Architecture Assessment
+Supporting multiple roots via `root_aids: Set[str]` and per‑root `trust_paths_valid` is the right direction for dossiers with independent trust hierarchies. The graph changes preserve existing node/edge modeling and keep the multi‑root data localized to the graph structure.
+
+### Backwards Compatibility
+The compatibility properties (`root_aid`, `trust_path_valid`) are reasonable, but `root_aid` derived from a set is non‑deterministic. UI consumers and tests will see unstable values across runs. A deterministic selection strategy (sorted list or priority order) is needed.
+
+### API Surface Changes
+Adding `rootAids` and `trustPathsValid` is appropriate. However, serializing a set directly into a list without ordering will produce unstable output, which is problematic for UI diffing and caching. The response should use a stable ordering.
+
+### Findings
+- [Medium]: `root_aid` and `rootAids` are derived from a `Set`; ordering is non‑deterministic. This can lead to flaky UI/JSON comparisons and inconsistent legacy behavior.
+- [Low]: `trust_paths_valid` only tracks trusted roots. Consider clarifying in API docs that untrusted issuer “roots” are not included, or include a separate list for terminal issuers to avoid confusion.
+
+### Required Changes (if CHANGES_REQUESTED)
+1. Make `root_aid` deterministic (e.g., `sorted(self.root_aids)[0]` or priority order) and ensure `rootAids` is emitted in a stable order.
+2. Add a test that asserts deterministic `root_aid`/`rootAids` ordering and covers the no‑trusted‑roots case.
+
+### Recommendations
+- Consider including `terminalIssuers` (untrusted roots) in the API response so UIs can show all chain termini.
+- Document that `trustPathsValid` is keyed only by trusted roots and how it should be interpreted by UI consumers.
+
+## Plan Re-Review: Enhanced Chain Resolution with Multiple Roots
+
+**Verdict:** APPROVED
+
+### Changes Assessment
+The deterministic ordering change (sorted `root_aids` with helper insertion), the addition of `terminal_issuers`, and the new tests directly address the prior concerns. API output is now stable, backward compatibility remains intact, and the docstrings clarify how `trustPathsValid` should be interpreted.
+
+### Findings (if any)
+- None.
+
+## Plan Review: Deep vLEI Chain Resolution
+
+**Verdict:** CHANGES_REQUESTED
+
+### Design Assessment
+The plan’s async, eager resolution approach is directionally sound given the need to fetch credentials from witnesses and to complete multi‑hop vLEI chains. Using existing resolver infrastructure is appropriate, and adding resolution metadata to the graph is a good fit. However, several spec‑alignment and implementation details are underspecified, which risks resolving or validating the wrong chain.
+
+### Findings
+- [High]: Chain validation is keyed to `credential_type == "QVI"`, but vLEI verification should be driven by schema SAIDs (QVI, LE, OOR/ECR auth, etc.) rather than inferred type strings. The vLEI spec defines concrete schemas for QVI/LE/OOR/ECR credentials, and the plan should bind validation to those normative schema identifiers. citeturn7view0
+- [Medium]: The vLEI chain structure is richer than “QVI→LE”; OOR/ECR credentials have authorization credentials (OOR/ECR Auth) in their sources/edges per the vLEI credential set. The plan’s edge list (`qvi`, `le`, `auth`) needs to be explicitly mapped to the actual vLEI schema edge names and source references. citeturn7view0
+- [Medium]: Eager resolution can become a latency spike without concurrency limits, caching policy, and a per‑request budget. The plan references TTL caching but doesn’t specify how it’s applied to this new resolution path.
+- [Low]: `chain_complete` semantics aren’t defined for partial success (some edges resolved, others missing). That makes UI/consumer interpretation ambiguous.
+
+### Required Changes (if CHANGES_REQUESTED)
+1. Replace `credential_type == "QVI"` checks with schema‑SAID‑based validation using the normative vLEI schema IDs (QVI, LE, OOR/ECR Auth, OOR/ECR). Add explicit mapping of edge names/sources expected per schema. citeturn7view0
+2. Define and implement resolution policy: concurrency limit, timeout, cache usage, and maximum total fetch budget per verification. Include how failures map to `INDETERMINATE` vs `INVALID` consistently.
+3. Specify `chain_complete` semantics and how it should behave when only some edges resolve or when untrusted roots are present.
+
+### Recommendations
+- Provide a small decision table documenting how each vLEI credential type contributes to chain completion (e.g., LE requires QVI; OOR/ECR require OOR/ECR Auth; each must chain back to GLEIF QVI root). citeturn7view0
+- Consider a lazy‑resolution fallback (resolve only when UI expands a node) if eager resolution causes unacceptable latency in practice.
+
+## Plan Re-Review: Deep vLEI Chain Resolution (v2)
+
+**Verdict:** CHANGES_REQUESTED
+
+### Changes Assessment
+The updated plan addresses the prior feedback substantially: schema‑SAID validation replaces credential_type heuristics, explicit edge mappings are documented, concurrency/budget limits are added, and chain semantics are clarified with `chain_complete` + `root_reached`. Overall direction is sound. One remaining spec‑alignment issue: the plan uses the GLEIF root AID as the QVI schema SAID in the mapping table, which appears incorrect (issuer AID ≠ schema SAID). This can misclassify QVI credentials during validation and must be corrected.
+
+### Findings (if any)
+- [High]: `VLEI_SCHEMA_SAIDS["QVI"]` is set to the GLEIF root AID (`EBfdlu8R...`), but schema SAIDs and issuer AIDs are different identifiers. The mapping should use the normative QVI schema SAID, not the root AID. This breaks schema‑SAID validation and edge resolution. citeturn7view0
+
+### Required Changes (if CHANGES_REQUESTED)
+1. Replace the QVI schema SAID in `VLEI_SCHEMA_SAIDS` with the actual normative QVI schema SAID from the vLEI registry, and update any dependent constants/tests accordingly. citeturn7view0

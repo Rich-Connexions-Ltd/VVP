@@ -11,7 +11,7 @@ class TestTrustedRootsConfig:
     """Tests for TRUSTED_ROOT_AIDS configuration."""
 
     def test_default_gleif_root(self):
-        """Test that default roots include both GLEIF Root and GLEIF External AIDs."""
+        """Test that default roots include GLEIF Root AID."""
         # Clear any env var
         os.environ.pop("VVP_TRUSTED_ROOT_AIDS", None)
 
@@ -22,9 +22,10 @@ class TestTrustedRootsConfig:
 
         # GLEIF Root (production) from https://gleif.org/.well-known/keri/oobi/...
         assert "EDP1vHcw_wc4M__Fj53-cJaBnZZASd-aMTaSyWEQ-PC2" in config.TRUSTED_ROOT_AIDS
-        # GLEIF External (legacy/keripy default)
-        assert "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao" in config.TRUSTED_ROOT_AIDS
-        assert len(config.TRUSTED_ROOT_AIDS) == 2
+        # NOTE: EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao is the QVI SCHEMA SAID,
+        # not an issuer AID, so it should NOT be in TRUSTED_ROOT_AIDS.
+        assert "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao" not in config.TRUSTED_ROOT_AIDS
+        assert len(config.TRUSTED_ROOT_AIDS) == 1
 
     def test_single_custom_root(self):
         """Test single custom root AID from env."""
@@ -92,9 +93,9 @@ class TestTrustedRootsConfig:
         from app.core import config
         importlib.reload(config)
 
-        # Should fall back to both GLEIF roots
+        # Should fall back to GLEIF root AID
         assert "EDP1vHcw_wc4M__Fj53-cJaBnZZASd-aMTaSyWEQ-PC2" in config.TRUSTED_ROOT_AIDS
-        assert "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao" in config.TRUSTED_ROOT_AIDS
+        assert len(config.TRUSTED_ROOT_AIDS) == 1
 
         # Cleanup
         os.environ.pop("VVP_TRUSTED_ROOT_AIDS", None)

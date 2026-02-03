@@ -89,6 +89,13 @@ class ACDC:
         # (attributes may be SAID reference, not expanded dict)
         if self.variant == "compact" or not isinstance(self.attributes, dict):
             if self.edges:
+                # vLEI credential chain detection (from normative vLEI schemas)
+                if "qvi" in self.edges:
+                    return "LE"  # Legal Entity (has e.qvi edge to QVI credential)
+                if "auth" in self.edges:
+                    # OOR or ECR (has e.auth edge to authorization credential)
+                    return "OOR"  # Could be ECR, but OOR is more common
+                # VVP-specific credential types
                 if "vetting" in self.edges or "le" in self.edges:
                     return "APE"  # Auth Phone Entity
                 if "delegation" in self.edges or "issuer" in self.edges:
@@ -113,6 +120,12 @@ class ACDC:
 
         # Check edges for credential type hints (fallback)
         if self.edges:
+            # vLEI credential chain detection (from normative vLEI schemas)
+            if "qvi" in self.edges:
+                return "LE"  # Legal Entity (has e.qvi edge to QVI credential)
+            if "auth" in self.edges:
+                return "OOR"  # OOR or ECR (has e.auth edge)
+            # VVP-specific credential types
             if "vetting" in self.edges or "le" in self.edges:
                 return "APE"  # Auth Phone Entity
             if "delegation" in self.edges or "issuer" in self.edges:

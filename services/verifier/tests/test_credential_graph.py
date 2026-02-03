@@ -276,15 +276,15 @@ class TestCredentialGraphToDict:
 class TestKnownRootDisplayNames:
     """Tests for known root display names."""
 
-    def test_gleif_root_name(self):
-        """Test GLEIF External root gets proper display name."""
-        gleif_aid = "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao"
-        trusted_roots = {gleif_aid}
+    def test_provenant_root_name(self):
+        """Test Provenant Global QVI gets proper display name from WELLKNOWN_AIDS."""
+        provenant_aid = "ELW1FqnJZgOBR43USMu1RfVE6U1BXl6UFecIDPmJnscQ"
+        trusted_roots = {provenant_aid}
 
         acdc = ACDC(
             version="",
             said="E" + "A" * 43,
-            issuer_aid=gleif_aid,
+            issuer_aid=provenant_aid,
             schema_said="",
             raw={}
         )
@@ -293,4 +293,187 @@ class TestKnownRootDisplayNames:
         graph = build_credential_graph(dossier, trusted_roots)
 
         root_node = next(n for n in graph.nodes.values() if n.is_root)
-        assert root_node.display_name == "GLEIF External"
+        assert root_node.display_name == "Provenant Global"
+
+    def test_brand_assure_issuer_name(self):
+        """Test Brand assure issuer gets proper display name from WELLKNOWN_AIDS."""
+        brand_assure_aid = "EKudJXsXQNzMzEhBHjs5iqZXLSF5fg1Nxs1MD-IAXqDo"
+        trusted_roots = set()  # Not a trusted root
+
+        acdc = ACDC(
+            version="",
+            said="E" + "A" * 43,
+            issuer_aid=brand_assure_aid,
+            schema_said="",
+            raw={}
+        )
+
+        dossier = {acdc.said: acdc}
+        graph = build_credential_graph(dossier, trusted_roots)
+
+        issuer_node = next(n for n in graph.nodes.values() if n.credential_type == "ISSUER")
+        assert issuer_node.display_name == "Brand assure"
+
+
+class TestMultipleRoots:
+    """Tests for multiple roots of trust support."""
+
+    def test_multiple_roots_deterministic_ordering(self):
+        """Graph returns roots in deterministic (sorted) order."""
+        # Create roots - use different prefixes to ensure sort order
+        root_z = "EZzz" + "A" * 40  # Lexicographically last
+        root_a = "EAaa" + "A" * 40  # Lexicographically first
+        trusted_roots = {root_z, root_a}
+
+        acdc1 = ACDC(
+            version="",
+            said="E" + "1" * 43,
+            issuer_aid=root_z,
+            schema_said="",
+            raw={}
+        )
+        acdc2 = ACDC(
+            version="",
+            said="E" + "2" * 43,
+            issuer_aid=root_a,
+            schema_said="",
+            raw={}
+        )
+
+        dossier = {acdc1.said: acdc1, acdc2.said: acdc2}
+        graph = build_credential_graph(dossier, trusted_roots)
+
+        # Should be sorted alphabetically
+        assert graph.root_aids == [root_a, root_z]
+        assert graph.root_aid == root_a  # First in sorted order
+
+        # Verify determinism - run multiple times
+        for _ in range(10):
+            g = build_credential_graph(dossier, trusted_roots)
+            assert g.root_aids == [root_a, root_z]
+            assert g.root_aid == root_a
+
+    def test_no_trusted_roots_tracks_terminal_issuers(self):
+        """Graph handles case with no trusted roots gracefully."""
+        untrusted_issuer = "EXyz" + "A" * 40
+        trusted_roots = set()  # Empty
+
+        acdc = ACDC(
+            version="",
+            said="E" + "A" * 43,
+            issuer_aid=untrusted_issuer,
+            schema_said="",
+            raw={}
+        )
+
+        dossier = {acdc.said: acdc}
+        graph = build_credential_graph(dossier, trusted_roots)
+
+        assert graph.root_aids == []
+        assert graph.root_aid is None
+        assert graph.trust_path_valid is False
+        assert graph.terminal_issuers == [untrusted_issuer]
+
+    def test_terminal_issuers_tracked_separately(self):
+        """Untrusted chain termini are tracked in terminal_issuers."""
+        trusted_root = "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao"
+        untrusted_issuer = "EXyz" + "A" * 40
+        trusted_roots = {trusted_root}
+
+        acdc1 = ACDC(
+            version="",
+            said="E" + "1" * 43,
+            issuer_aid=trusted_root,
+            schema_said="",
+            raw={}
+        )
+        acdc2 = ACDC(
+            version="",
+            said="E" + "2" * 43,
+            issuer_aid=untrusted_issuer,
+            schema_said="",
+            raw={}
+        )
+
+        dossier = {acdc1.said: acdc1, acdc2.said: acdc2}
+        graph = build_credential_graph(dossier, trusted_roots)
+
+        assert trusted_root in graph.root_aids
+        assert untrusted_issuer in graph.terminal_issuers
+        assert untrusted_issuer not in graph.root_aids
+        assert trusted_root not in graph.terminal_issuers
+
+    def test_trust_paths_valid_per_root(self):
+        """Each trusted root has its own validity status."""
+        root1 = "EAaa" + "A" * 40
+        root2 = "EBbb" + "B" * 40
+        trusted_roots = {root1, root2}
+
+        acdc1 = ACDC(
+            version="",
+            said="E" + "1" * 43,
+            issuer_aid=root1,
+            schema_said="",
+            raw={}
+        )
+        acdc2 = ACDC(
+            version="",
+            said="E" + "2" * 43,
+            issuer_aid=root2,
+            schema_said="",
+            raw={}
+        )
+
+        dossier = {acdc1.said: acdc1, acdc2.said: acdc2}
+        graph = build_credential_graph(dossier, trusted_roots)
+
+        # Both roots should be in trust_paths_valid
+        assert root1 in graph.trust_paths_valid
+        assert root2 in graph.trust_paths_valid
+        assert graph.trust_paths_valid[root1] is True
+        assert graph.trust_paths_valid[root2] is True
+        assert graph.trust_path_valid is True  # Any valid
+
+    def test_api_response_includes_multiple_roots_fields(self):
+        """API response includes new fields for multiple roots."""
+        root1 = "EAaa" + "A" * 40
+        root2 = "EBbb" + "B" * 40
+        untrusted = "EXyz" + "X" * 40
+        trusted_roots = {root1, root2}
+
+        acdc1 = ACDC(
+            version="",
+            said="E" + "1" * 43,
+            issuer_aid=root1,
+            schema_said="",
+            raw={}
+        )
+        acdc2 = ACDC(
+            version="",
+            said="E" + "2" * 43,
+            issuer_aid=root2,
+            schema_said="",
+            raw={}
+        )
+        acdc3 = ACDC(
+            version="",
+            said="E" + "3" * 43,
+            issuer_aid=untrusted,
+            schema_said="",
+            raw={}
+        )
+
+        dossier = {acdc1.said: acdc1, acdc2.said: acdc2, acdc3.said: acdc3}
+        graph = build_credential_graph(dossier, trusted_roots)
+        result = credential_graph_to_dict(graph)
+
+        # Check new fields exist
+        assert "rootAids" in result
+        assert "terminalIssuers" in result
+        assert "trustPathsValid" in result
+
+        # Check values are correct and sorted
+        assert result["rootAids"] == [root1, root2]  # Sorted
+        assert result["rootAid"] == root1  # First in sorted order (backwards compat)
+        assert result["terminalIssuers"] == [untrusted]
+        assert result["trustPathsValid"] == {root1: True, root2: True}

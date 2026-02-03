@@ -5,7 +5,7 @@ Welcome to the VVP Verifier project. This guide covers environment setup, projec
 ## 1. Environment Setup
 
 ### Prerequisites
-- Python 3.10+
+- Python 3.12+
 - `pip`
 - `git`
 

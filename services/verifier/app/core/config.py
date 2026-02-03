@@ -126,12 +126,20 @@ def _parse_trusted_roots() -> frozenset[str]:
     if env_value:
         # Parse comma-separated AIDs, strip whitespace, filter empty
         return frozenset(aid.strip() for aid in env_value.split(",") if aid.strip())
-    # Default: Both GLEIF Root AIDs for production vLEI ecosystem
+    # Default: GLEIF Root AID for production vLEI ecosystem
     # - EDP1vHcw_wc4M__Fj53-cJaBnZZASd-aMTaSyWEQ-PC2: GLEIF Root (from gleif.org OOBI)
-    # - EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao: GLEIF External (legacy/keripy default)
+    #
+    # NOTE: EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao is the QVI SCHEMA SAID,
+    # not an issuer AID. It was incorrectly included here in earlier versions.
+    # Schema SAIDs and issuer AIDs are different identifier types:
+    # - Schema SAIDs identify credential schemas (content-addressed)
+    # - Issuer AIDs identify entities that sign credentials (key-derived)
+    #
+    # The actual GLEIF GEDA (GLEIF External Delegated AID) used for issuing QVI
+    # credentials should be obtained from GLEIF. Use VVP_TRUSTED_ROOT_AIDS env
+    # var to configure additional trusted root AIDs.
     return frozenset({
         "EDP1vHcw_wc4M__Fj53-cJaBnZZASd-aMTaSyWEQ-PC2",  # GLEIF Root (production)
-        "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao",  # GLEIF External (legacy)
     })
 
 

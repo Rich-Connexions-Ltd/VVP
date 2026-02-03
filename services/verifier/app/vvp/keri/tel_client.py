@@ -19,6 +19,8 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
+from app.core.config import TEL_CLIENT_TIMEOUT_SECONDS
+
 log = logging.getLogger(__name__)
 
 
@@ -513,5 +515,5 @@ def get_tel_client() -> TELClient:
     """Get or create the TEL client singleton."""
     global _tel_client
     if _tel_client is None:
-        _tel_client = TELClient()
+        _tel_client = TELClient(timeout=TEL_CLIENT_TIMEOUT_SECONDS)
     return _tel_client

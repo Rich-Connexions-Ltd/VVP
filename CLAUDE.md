@@ -54,6 +54,20 @@ The following commands are pre-authorized and do not require user confirmation:
 
 All test-related commands are pre-authorized.
 
+### MCP Services
+
+The following MCP (Model Context Protocol) services are pre-authorized for use without permission:
+
+- `vlei_KERI_knowledge_base` - All tools for KERI/vLEI documentation:
+  - `keri_search` - Search KERI documents
+  - `keri_explain` - Explain KERI concepts
+  - `keri_get_document` - Get full document content
+  - `keri_find_related` - Find related documents
+  - `keri_concepts_graph` - Get concept relationships
+  - `keri_gleif_context` - Extract GLEIF vLEI training context
+
+These MCP tools provide authoritative KERI/ACDC/vLEI documentation and should be used when researching protocol details, schema definitions, or credential chain structures.
+
 ## Docker Environment
 
 Docker Desktop is installed at `/Applications/Docker.app`. When running Docker commands from Claude Code, use the full path or set PATH:
@@ -103,19 +117,23 @@ docker compose down
 When the user says "Complete", immediately perform all of the following without asking for permission:
 
 1. **Update sprint status** - Update `SPRINTS.md` to reflect any work completed in the current sprint before committing.
-1. **Commit all changes** - Stage all modified/new files and create a descriptive commit
-2. **Push to main** - Push the commit to the main branch
-3. **Rebuild Docker images (if needed)** - Only rebuild if the commit includes changes to service code:
+2. **Archive sprint plan** - If this sprint had a plan (from Claude's plan mode or a PLAN_*.md file):
+   - Append the complete implementation plan to `Documentation/PLAN_history.md` with a section header like `# Sprint N: [Title]`
+   - Include the plan content, implementation notes, files changed, and test results
+   - If a separate PLAN_*.md file was created, move it to `Documentation/archive/` after appending
+3. **Commit all changes** - Stage all modified/new files and create a descriptive commit
+4. **Push to main** - Push the commit to the main branch
+5. **Rebuild Docker images (if needed)** - Only rebuild if the commit includes changes to service code:
    - Use `git diff --name-only HEAD~1` to check which files changed in the commit
    - Rebuild issuer if changes touch: `services/issuer/`, `common/`, or `docker-compose.yml`
    - Rebuild verifier if changes touch: `services/verifier/`, `common/`, or `docker-compose.yml`
    - Skip rebuild if changes are only to docs, tests, or unrelated files
    - Command: `docker compose --profile full build <service>` (use full Docker path if needed)
-4. **Restart local servers** - Based on which files changed:
+6. **Restart local servers** - Based on which files changed:
    - Run `./scripts/restart-server.sh` if verifier files changed
    - Run `./scripts/restart-issuer.sh` if issuer files changed
    - When in doubt about which service was modified, restart both
-5. **Monitor Azure deployment** - Run `./scripts/monitor-azure-deploy.sh` to watch for successful deployment
+7. **Monitor Azure deployment** - Run `./scripts/monitor-azure-deploy.sh` to watch for successful deployment
 
 Do not ask for confirmation - execute all steps automatically.
 
@@ -445,16 +463,16 @@ RESPONSE FORMAT - Write to REVIEW.md with this structure:
 
 #### Step 3.1: Archive the Plan
 
-Move accepted plan to documentation:
-1. Copy `PLAN.md` to `Documentation/PLAN_PhaseN.md`
-2. Include implementation notes and review history
-3. Update `CHANGES.md` with phase summary
+Consolidate the plan into the plan history:
+1. Append plan content to `Documentation/PLAN_history.md` with a section header (e.g., `# Sprint N: [Title]`)
+2. Include implementation notes, files changed, and review history
+3. If a separate `PLAN_*.md` file exists, move it to `Documentation/archive/`
+4. Update `CHANGES.md` with phase summary
 
 #### Step 3.2: Clean Up
 
-1. Clear `PLAN.md` for next phase (or leave as reference)
-2. Clear `REVIEW.md` for next phase
-3. Commit all documentation updates
+1. Clear `REVIEW.md` for next phase
+2. Commit all documentation updates
 
 ---
 
