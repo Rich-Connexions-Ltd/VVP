@@ -7,14 +7,17 @@
 
 {% if error %}
 <article aria-invalid="true">
-    <header>Fetch Error</header>
+    <header>Error</header>
     <p>{{ error }}</p>
-    {% if evd_url %}
+    {% if evd_url and not acdcs %}
     <p><strong>Manual fetch:</strong></p>
     <code>curl "{{ evd_url }}"</code>
     {% endif %}
 </article>
-{% else %}
+{% endif %}
+
+{# Show credentials and revocation button even if there are errors, as long as we have credentials #}
+{% if acdcs or credential_vms %}
 {# Hidden data element for graph building #}
 {% if acdcs %}
 <span data-graph-available="true" data-acdcs="{{ acdcs | tojson | forceescape }}" style="display:none;"></span>
@@ -94,11 +97,8 @@
 </form>
 <div id="revocation-result"></div>
 
-{% else %}
-<article aria-invalid="true">
-    <p>No credentials found in dossier.</p>
-</article>
 {% endif %}
+{# End of {% if credential_vms %}...{% elif acdcs %} #}
 
 {% if raw_data %}
 <details>
@@ -106,4 +106,13 @@
     <div class="code-block">{{ raw_data }}</div>
 </details>
 {% endif %}
+
+{% else %}
+{# No credentials found - only shown when not error (error already displayed above) #}
+{% if not error %}
+<article aria-invalid="true">
+    <p>No credentials found in dossier.</p>
+</article>
 {% endif %}
+{% endif %}
+{# End of {% if acdcs or credential_vms %} #}
