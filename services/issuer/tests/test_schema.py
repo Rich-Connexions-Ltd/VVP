@@ -7,7 +7,7 @@ from httpx import AsyncClient
 KNOWN_EMBEDDED_SAID = "ENPXp1vQzRF6JwIuS-mp2U8Uf1MoADoP_GqQ62VsDZWY"  # Legal Entity vLEI
 
 # Known schema SAIDs from governance registry
-KNOWN_LE_SAID = "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao"
+KNOWN_LE_SAID = "ENPXp1vQzRF6JwIuS-mp2U8Uf1MoADoP_GqQ62VsDZWY"  # Legal Entity vLEI
 KNOWN_DE_SAID = "EL7irIKYJL9Io0hhKSGWI4OznhwC7qgJG5Qf4aEs6j0o"
 
 
