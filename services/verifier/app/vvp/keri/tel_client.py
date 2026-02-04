@@ -224,8 +224,11 @@ class TELClient:
             parsed = urlparse(oobi_url)
             base_url = f"{parsed.scheme}://{parsed.netloc}"
 
-            # Try standard KERI API endpoints
+            # Try endpoints in order of preference:
+            # 1. Provenant query endpoint (most likely to work)
+            # 2. Standard KERI TEL endpoints
             endpoints = [
+                f"/query?typ=tel&vcid={credential_said}",  # Provenant format
                 f"/tels/{registry_said or credential_said}",
                 f"/credentials/{credential_said}",
                 f"/oobi/{credential_said}/tels",
@@ -277,13 +280,35 @@ class TELClient:
         registry_said: Optional[str],
         witness_url: str
     ) -> RevocationResult:
-        """Query a specific witness for TEL events."""
+        """Query a specific witness for TEL events.
+
+        Tries multiple endpoint patterns:
+        1. Provenant query endpoint: /query?typ=tel&vcid=<credential_said>
+        2. Standard KERI TEL endpoint: /tels/<registry_said or credential_said>
+        """
         try:
             async with httpx.AsyncClient(timeout=self.timeout, verify=False) as client:
-                # Standard witness TEL endpoint
-                url = f"{witness_url}/tels/{registry_said or credential_said}"
-                log.info(f"    witness_query: {url}")
-                resp = await client.get(url)
+                # Try Provenant-specific query endpoint first
+                # Format: /query?typ=tel&vcid=<credential_said>
+                provenant_url = f"{witness_url}/query?typ=tel&vcid={credential_said}"
+                log.info(f"    witness_query (provenant): {provenant_url}")
+                try:
+                    resp = await client.get(provenant_url)
+                    log.info(f"    witness_response: status={resp.status_code} len={len(resp.text)}")
+                    if resp.status_code == 200 and resp.text.strip():
+                        result = self._parse_tel_response(
+                            credential_said, registry_said, resp.text, "witness"
+                        )
+                        log.info(f"    witness_parsed: status={result.status.value}")
+                        if result.status != CredentialStatus.UNKNOWN:
+                            return result
+                except httpx.RequestError as e:
+                    log.info(f"    provenant_endpoint_error: {type(e).__name__}: {e}")
+
+                # Fall back to standard KERI TEL endpoint
+                standard_url = f"{witness_url}/tels/{registry_said or credential_said}"
+                log.info(f"    witness_query (standard): {standard_url}")
+                resp = await client.get(standard_url)
                 log.info(f"    witness_response: status={resp.status_code} len={len(resp.text)}")
 
                 if resp.status_code == 200:
@@ -485,6 +510,62 @@ class TELClient:
             f"has_iss={result.issuance_event is not None} "
             f"has_rev={result.revocation_event is not None}"
         )
+        return result
+
+    async def check_revocation_with_fallback(
+        self,
+        credential_said: str,
+        registry_said: Optional[str] = None,
+        dossier_data: Optional[str] = None,
+        oobi_url: Optional[str] = None,
+    ) -> RevocationResult:
+        """Check revocation status with live witness query, dossier as optimization.
+
+        This method provides live revocation checking:
+        1. If dossier shows REVOKED, return immediately (revocation is permanent)
+        2. Otherwise, query witnesses for live TEL status
+        3. Dossier TEL only used to short-circuit for already-revoked credentials
+
+        Note: Dossier TEL data is a snapshot at creation time. A credential that
+        was ACTIVE when the dossier was created may have been revoked since then.
+        Therefore we always query the witness for live status unless the dossier
+        already shows revocation.
+
+        Args:
+            credential_said: SAID of the credential to check.
+            registry_said: Registry SAID (ri field from ACDC).
+            dossier_data: Raw dossier CESR content (for inline TEL parsing).
+            oobi_url: OOBI URL for witness discovery.
+
+        Returns:
+            RevocationResult with status and event details.
+        """
+        log.info(
+            f"check_revocation_with_fallback: cred={credential_said[:20]}... "
+            f"reg={registry_said[:20] if registry_said else 'None'}..."
+        )
+
+        # Step 1: Check dossier for REVOKED status only (optimization)
+        # If dossier shows REVOKED, we can return immediately - revocation is permanent
+        if dossier_data:
+            dossier_result = self.parse_dossier_tel(
+                dossier_data=dossier_data,
+                credential_said=credential_said,
+                registry_said=registry_said,
+            )
+            if dossier_result.status == CredentialStatus.REVOKED:
+                log.info(f"  dossier_shows_revoked: returning immediately")
+                return dossier_result
+            log.info(f"  dossier_status={dossier_result.status.value}: querying witness for live status")
+
+        # Step 2: Query witnesses for live TEL status
+        # This is necessary because dossier ACTIVE status may be stale
+        result = await self.check_revocation(
+            credential_said=credential_said,
+            registry_said=registry_said,
+            oobi_url=oobi_url,
+        )
+        log.info(f"  live_query_result: status={result.status.value}")
         return result
 
     def clear_cache(self):

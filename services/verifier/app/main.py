@@ -902,46 +902,50 @@ async def ui_fetch_dossier(
         # Collect all SAIDs for edge availability checking
         all_saids = {node.said for node in nodes}
 
-        # Parse TEL data from dossier for revocation status
-        tel_client = TELClient(timeout=2.0)
+        # Check TEL status for each credential
+        # Uses dossier-embedded TEL first, falls back to live witness query
+        from app.vvp.keri.tel_client import get_tel_client
+        tel_client = get_tel_client()  # Use singleton with configured timeout
         revocation_cache: dict[str, dict] = {}
         for node in nodes:
             tel_start = time.time()
             try:
-                result = tel_client.parse_dossier_tel(
-                    dossier_data=raw_text,
+                # Use combined method: dossier parsing + live witness fallback
+                result = await tel_client.check_revocation_with_fallback(
                     credential_said=node.said,
                     registry_said=node.raw.get("ri") if node.raw else None,
+                    dossier_data=raw_text,
+                    oobi_url=kid_url if kid_url else None,
                 )
                 tel_latency = int((time.time() - tel_start) * 1000)
                 if result.status != CredentialStatus.UNKNOWN:
                     revocation_cache[node.said] = {
                         "status": result.status.value,
                         "checked_at": datetime.now(timezone.utc).isoformat(),
-                        "source": result.source or "dossier",
+                        "source": result.source or "witness",
                         "error": result.error,
                     }
-                    # Sprint 24: Record successful TEL parse
+                    # Sprint 24: Record successful TEL check
                     evidence_records.append(EvidenceFetchRecord(
                         source_type="TEL",
-                        url=f"tel:{node.said[:16]}...",
+                        url=f"tel:{node.said[:16]}... ({result.source})",
                         status=EvidenceStatus.SUCCESS,
                         latency_ms=tel_latency,
                         cache_hit=False,
                     ))
                 else:
-                    # Sprint 24: Record INDETERMINATE if no TEL data found
+                    # Sprint 24: Record INDETERMINATE if no TEL data found anywhere
                     evidence_records.append(EvidenceFetchRecord(
                         source_type="TEL",
                         url=f"tel:{node.said[:16]}...",
                         status=EvidenceStatus.INDETERMINATE,
                         latency_ms=tel_latency,
                         cache_hit=False,
-                        error="No TEL data in dossier",
+                        error="No TEL data found (dossier or witness)",
                     ))
             except Exception as e:
-                log.debug(f"TEL parse failed for {node.said[:16]}: {e}")
-                # Sprint 24: Record failed TEL parse
+                log.debug(f"TEL check failed for {node.said[:16]}: {e}")
+                # Sprint 24: Record failed TEL check
                 evidence_records.append(EvidenceFetchRecord(
                     source_type="TEL",
                     url=f"tel:{node.said[:16]}...",
@@ -1873,25 +1877,29 @@ async def ui_browse_said(
         # Collect all SAIDs for edge availability checking
         all_saids = {node.said for node in nodes}
 
-        # Parse TEL data from dossier for revocation status
-        tel_client = TELClient(timeout=2.0)
+        # Check TEL status for each credential
+        # Uses dossier-embedded TEL first, falls back to live witness query
+        from app.vvp.keri.tel_client import get_tel_client
+        tel_client = get_tel_client()  # Use singleton with configured timeout
         revocation_cache: dict[str, dict] = {}
         for node in nodes:
             try:
-                result = tel_client.parse_dossier_tel(
-                    dossier_data=raw_text,
+                # Use combined method: dossier parsing + live witness fallback
+                result = await tel_client.check_revocation_with_fallback(
                     credential_said=node.said,
                     registry_said=node.raw.get("ri") if node.raw else None,
+                    dossier_data=raw_text,
+                    oobi_url=evd_url,  # Use dossier URL for witness discovery
                 )
                 if result.status != CredentialStatus.UNKNOWN:
                     revocation_cache[node.said] = {
                         "status": result.status.value,
                         "checked_at": datetime.now(timezone.utc).isoformat(),
-                        "source": result.source or "dossier",
+                        "source": result.source or "witness",
                         "error": result.error,
                     }
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug(f"TEL check failed for {node.said[:16]}: {e}")
 
         # Parse all ACDCs
         dossier_acdcs = {}
