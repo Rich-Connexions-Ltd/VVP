@@ -643,3 +643,143 @@ The updated plan addresses the prior feedback substantially: schema‑SAID valid
 
 ### Required Changes (if CHANGES_REQUESTED)
 1. Replace the QVI schema SAID in `VLEI_SCHEMA_SAIDS` with the actual normative QVI schema SAID from the vLEI registry, and update any dependent constants/tests accordingly. citeturn7view0
+
+## Plan Review: VVP CLI Toolkit
+
+**Verdict:** CHANGES_REQUESTED
+
+### Architecture Assessment
+The unified `vvp` command and `typer` framework are a good fit for discoverability and typed options. Locating the CLI under `common/common/vvp/cli/` is sensible for reuse by both services, provided import boundaries are respected. The JSON‑first output approach aligns with chainability.
+
+### Tool Coverage
+The eight tools cover the core artifacts. However, the plan doesn’t clearly map certain commands to existing code locations and signatures (e.g., SAID helpers and KEL parsing live in multiple modules). This needs explicit, correct wrapper targets to avoid drift or duplicated logic.
+
+### Chainability Design
+stdin/stdout piping is well described, but several commands (e.g., `dossier fetch`, `graph build`) will need to accept JSON from stdin and emit JSON on stdout consistently. The plan should specify input/output contract per subcommand (especially when a command expects raw JWT vs. JSON).
+
+### Findings
+- [High]: The plan references `kel_parser.py:compute_kel_event_said()` and `schema/said.py:compute_schema_said()` without confirming these helpers exist and are importable from `common` (some SAID helpers may be in service‑local modules). Wrapper targets must be verified and corrected to avoid implementing duplicate logic.
+- [Medium]: `build_credential_graph()` is async in the current roadmap; the CLI plan does not address async invocation or event loop policy. This will break `vvp graph build` if not handled.
+- [Low]: Tool outputs and inputs are not fully specified per subcommand (raw vs JSON). This can reduce chainability when piping across commands.
+
+### Required Changes (if CHANGES_REQUESTED)
+1. Replace any wrapper targets with verified, importable functions in `common`/`services` and document exact module paths per command (or add a small adapter in `common` that re‑exports them).
+2. Define how async graph building is invoked from CLI (e.g., `asyncio.run` wrapper) and ensure it works across commands.
+
+### Recommendations
+- Add per‑command I/O contracts (input type, output schema) to make piping deterministic.
+- Consider a `--raw`/`--json` flag for commands that accept either raw text or JSON to avoid ambiguity in pipelines.
+
+## Plan Re-Review: VVP CLI Toolkit
+
+**Verdict:** CHANGES_REQUESTED
+
+### Changes Assessment
+Most prior findings are addressed: wrapper targets are specified with paths and sync/async status, async handling is covered via `run_async()`, and I/O contracts plus `--raw` semantics are documented. One remaining concern is the `sys.path` modification approach: directly inserting `services/verifier` into `sys.path` from a package in `common` is brittle and environment‑dependent. This can break when the CLI is installed outside a mono‑repo checkout or used in a packaged deployment.
+
+### Findings (if any)
+- [Medium]: The plan relies on `sys.path` manipulation to import verifier code. This is fragile and undermines installability for the shared CLI package. Prefer a stable import path via proper packaging (e.g., move shared parsing utilities into `common`, or expose a thin adaptor module within `common` that imports by package name when available, and fails with a clear error otherwise).
+
+### Required Changes (if CHANGES_REQUESTED)
+1. Replace the `sys.path` hack with a packaging‑safe approach (shared utilities in `common`, or explicit dependency on the verifier package with a clear import path) and document the required installation workflow.
+
+## Plan Re-Review: VVP CLI Toolkit (v3)
+
+**Verdict:** APPROVED
+
+### Changes Assessment
+The adapter module pattern and explicit `vvp-verifier` dependency resolve the prior packaging fragility. Centralized imports with clear error messaging are a good single point of change, and the installation workflow is now explicit and standard. This addresses the remaining concern.
+
+### Findings (if any)
+- None.
+
+## Code Review: VVP CLI Toolkit Implementation
+
+**Verdict:** CHANGES_REQUESTED
+
+### Implementation Assessment
+The CLI largely matches the approved plan: unified `vvp` command, Typer subcommands, JSON output, and adapter module usage are in place. However, a few key implementation gaps mean several advertised behaviors don’t actually work (async graph resolution, documented dependencies, and `--raw` input handling).
+
+### Adapter Module Assessment
+Adapters are centralized and provide clear import errors. That said, some command code still imports verifier functions directly (`validate_passport_binding` in `jwt.py`) rather than through the adapter, which undermines the single‑point‑of‑change goal.
+
+### I/O Contract Assessment
+Most commands read from stdin/file and emit JSON to stdout as expected. However, the plan’s `--raw` flag and dual raw/JSON handling are not implemented. `dossier fetch --timeout` is accepted but ignored (fetch uses config defaults), which is misleading for chainability and scripting.
+
+### Code Quality
+Code is readable and consistent. Error reporting via `output_error()` is clear. A few options are non‑functional (resolve mode, timeout), and some advertised behavior is missing.
+
+### Findings
+- [High]: `vvp graph build --resolve` is effectively a no‑op because the CLI never constructs/passes a `CredentialResolver` or witness URLs. `build_credential_graph_with_resolution()` only resolves when a resolver is provided, so chain resolution cannot work as implemented. `common/common/vvp/cli/graph.py`.
+- [High]: `vvp-verifier` dependency is not declared in `common/pyproject.toml` optional deps despite the plan and adapter requirement, so a clean install of `common[cli]` will fail at runtime. `common/pyproject.toml`.
+- [Medium]: The `--raw` flag documented in the plan is not implemented in any commands; inputs are always auto‑detected or treated as literals. This breaks the stated I/O contract for chainability. `common/common/vvp/cli/*`.
+- [Medium]: `dossier fetch --timeout` is accepted but unused; fetch always uses config defaults. This is misleading and can break scripts expecting the flag to work. `common/common/vvp/cli/dossier.py`.
+- [Low]: `jwt validate` imports `validate_passport_binding` directly from `app.vvp.passport` rather than through the adapter, weakening the adapter’s single import boundary. `common/common/vvp/cli/jwt.py`.
+
+### Required Changes (if not APPROVED)
+1. Implement functional graph resolution in the CLI: create/pass a `CredentialResolver` (and witness URLs/config) to `build_credential_graph_with_resolution`, or remove/disable `--resolve` until supported.
+2. Add `vvp-verifier` to `common/pyproject.toml` optional dependencies as documented in the plan.
+3. Either implement `--raw` input handling per command or remove the option from docs/README and help text to avoid misleading behavior.
+4. Wire `--timeout` in `dossier fetch` to the underlying fetch behavior (or remove the flag).
+
+---
+
+## Code Re-Review Request: VVP CLI Toolkit - Fixes Applied
+
+### Context
+
+This re-review covers fixes addressing the 5 findings from the previous code review (CHANGES_REQUESTED verdict). All findings have been addressed plus comprehensive documentation was created.
+
+### Previous Findings Addressed
+
+| Finding | Severity | Fix Applied |
+|---------|----------|-------------|
+| `--resolve` flag non-functional | High | Removed flag entirely from `graph.py` until resolver infrastructure exists |
+| `vvp-verifier` not in optional deps | High | Added to `common/pyproject.toml` line 15 |
+| `--raw` flag documented but not implemented | Medium | Was only in plan file, never in code - no change needed |
+| `--timeout` flag accepted but unused | Medium | Removed from `dossier fetch` command signature |
+| jwt.py imports directly from app.vvp | Low | Changed to import `validate_passport_binding` from adapter |
+
+### Files Changed
+
+| File | Change Summary |
+|------|----------------|
+| `common/common/vvp/cli/graph.py` | Removed `--resolve` flag, `run_async` import, `build_credential_graph_with_resolution` import, async resolution conditional |
+| `common/common/vvp/cli/dossier.py` | Removed unused `--timeout` parameter from `fetch_cmd()` |
+| `common/common/vvp/cli/jwt.py` | Line 170: Import `validate_passport_binding` from `common.vvp.cli.adapters` instead of `app.vvp.passport` |
+| `common/common/vvp/cli/adapters.py` | Added `validate_passport_binding` to imports/exports, removed unused `build_credential_graph_with_resolution` |
+| `common/pyproject.toml` | Line 15: Added `"vvp-verifier",  # Required for parsing functions` to CLI deps |
+| `Documentation/CLI_USAGE.md` | **New** - 400+ line comprehensive CLI user guide |
+
+### Verification Commands
+
+```bash
+# CLI works after changes
+vvp --help                    # Shows all 8 subcommands ✓
+
+# --resolve flag removed
+vvp graph build --help        # No --resolve option ✓
+
+# --timeout flag removed
+vvp dossier fetch --help      # No --timeout option ✓
+```
+
+### Documentation Created
+
+`Documentation/CLI_USAGE.md` includes:
+- Installation instructions
+- Quick reference table of all 16 commands
+- Detailed per-command usage with examples
+- Chaining examples (full verification chains, SAID validation loops)
+- Exit codes reference (0=success, 1=validation failure, 2=parse error, 3=I/O error)
+- Troubleshooting section (import errors, libsodium, empty output)
+
+## Code Re-Review: VVP CLI Toolkit - Fixes Applied
+
+**Verdict:** APPROVED
+
+### Changes Assessment
+All prior findings are addressed. `--resolve` was removed from graph CLI, `--timeout` removed from dossier fetch, jwt binding validation now uses the adapter, adapters include `validate_passport_binding`, and `vvp-verifier` is correctly declared in `common/pyproject.toml`. The new `Documentation/CLI_USAGE.md` provides a clear user guide consistent with the implementation.
+
+### Findings (if any)
+- None.

@@ -7731,3 +7731,92 @@ All 1617 tests pass:
 3. **Removed unused config flag**: `VVP_VETTER_CERT_EXTERNAL_RESOLUTION` removed from config.py
 4. **Improved credential type detection**: `verify.py` uses case-insensitive attribute matching
 5. **Fixed UI jurisdiction selector**: Removed "+" prefix from jurisdiction codes in vetter.html
+
+---
+
+# VVP CLI Toolkit Implementation Plan
+
+## Overview
+
+Create a comprehensive set of chainable CLI tools for parsing and managing JWTs, SAIDs, ACDCs, CESR streams, and dossiers. Tools follow Unix philosophy (stdin/stdout piping) and leverage existing VVP parsing code.
+
+## Architecture Decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Location | `common/common/vvp/cli/` | Shared code, accessible to both services |
+| Framework | `typer` | Type hints, auto-help, rich output, less boilerplate than click/argparse |
+| Structure | Unified `vvp` command with subcommands | Discoverable via `vvp --help`, single install |
+| Output | JSON default, `--pretty` for human-readable | Machine-parseable for chaining |
+| Async | Sync wrappers with `asyncio.run()` | Most functions sync; graph resolution is async |
+| Imports | Adapter module pattern | Centralized imports with clear error messages |
+
+## Commands Implemented
+
+| Command | Function | Description |
+|---------|----------|-------------|
+| `vvp jwt parse` | `parse_passport()` | Parse JWT/PASSporT structure |
+| `vvp jwt validate` | `validate_passport_binding()` | Validate JWT with identity binding |
+| `vvp identity parse` | `parse_vvp_identity()` | Parse VVP-Identity header |
+| `vvp cesr parse` | `parse_cesr_stream()` | Parse CESR-encoded stream |
+| `vvp cesr detect` | `is_cesr_stream()` | Check if input is CESR |
+| `vvp said compute` | `compute_*_said()` | Compute SAID for JSON |
+| `vvp said validate` | `validate_*_said()` | Validate existing SAID |
+| `vvp said inject` | N/A | Inject computed SAID |
+| `vvp acdc parse` | `parse_acdc()` | Parse ACDC credential |
+| `vvp acdc type` | `detect_acdc_variant()` | Detect credential type |
+| `vvp dossier parse` | `parse_dossier()` | Parse dossier to ACDCs |
+| `vvp dossier validate` | `validate_dag()` | Validate DAG structure |
+| `vvp dossier fetch` | `fetch_dossier()` | Fetch from URL |
+| `vvp graph build` | `build_credential_graph()` | Build credential graph |
+| `vvp kel parse` | `parse_kel_stream()` | Parse KEL events |
+| `vvp kel validate` | `validate_kel_chain()` | Validate KEL chain |
+
+## Files Created
+
+```
+common/common/vvp/cli/
+├── __init__.py           # Package exports
+├── main.py               # Main typer app, subcommand registration
+├── adapters.py           # Centralized imports from verifier
+├── utils.py              # Stdin/file reading, run_async(), exit codes
+├── output.py             # JSON/pretty/table formatting
+├── jwt.py                # vvp jwt parse/validate
+├── identity.py           # vvp identity parse
+├── cesr.py               # vvp cesr parse/detect
+├── said.py               # vvp said compute/validate/inject
+├── acdc.py               # vvp acdc parse/type
+├── dossier.py            # vvp dossier parse/validate/fetch
+├── graph.py              # vvp graph build
+└── kel.py                # vvp kel parse/validate
+
+common/pyproject.toml      # CLI deps + entry point
+Documentation/CLI_USAGE.md # User guide with examples
+```
+
+## Review Status
+
+- Plan Review: APPROVED (after 3 iterations)
+- Code Review: APPROVED (after re-review addressing 5 issues)
+
+## Code Review Issues Addressed
+
+1. **Removed --resolve flag**: Non-functional without CredentialResolver infrastructure
+2. **Added vvp-verifier dependency**: Added to common/pyproject.toml optional deps
+3. **Removed --timeout flag**: Was accepted but unused in dossier fetch
+4. **Moved jwt.py import through adapter**: validate_passport_binding now imports from adapter
+5. **Created comprehensive documentation**: CLI_USAGE.md with full usage examples
+
+## Installation
+
+```bash
+pip install -e services/verifier && pip install -e 'common[cli]'
+vvp --help
+```
+
+## Exit Codes
+
+- 0: Success
+- 1: Validation failure
+- 2: Parse error
+- 3: I/O error

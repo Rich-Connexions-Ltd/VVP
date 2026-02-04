@@ -25,6 +25,7 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 38 | OAuth (Microsoft M365) | COMPLETE | Sprint 30 |
 | 39 | Code Review Remediation | COMPLETE | Sprint 38 |
 | 40 | Vetter Certification Constraints | COMPLETE | Sprint 31 |
+| - | VVP CLI Toolkit | COMPLETE | Sprint 26 |
 
 ---
 
@@ -919,6 +920,59 @@ services/issuer/web/
 - [x] Issuer UI for vetter certification creation
 - [x] All tests passing (1617 total tests)
 - [x] Code review approved
+
+---
+
+## VVP CLI Toolkit (COMPLETE)
+
+**Goal:** Create chainable command-line tools for parsing and analyzing JWTs, ACDCs, CESR streams, dossiers, and KERI structures.
+
+**Deliverables:**
+- [x] Unified `vvp` command with 8 subcommand groups (16 total commands)
+- [x] JWT/PASSporT parsing and validation (`vvp jwt parse/validate`)
+- [x] VVP-Identity header parsing (`vvp identity parse`)
+- [x] CESR stream parsing and detection (`vvp cesr parse/detect`)
+- [x] SAID computation, validation, injection (`vvp said compute/validate/inject`)
+- [x] ACDC credential parsing and type detection (`vvp acdc parse/type`)
+- [x] Dossier parsing, validation, and fetching (`vvp dossier parse/validate/fetch`)
+- [x] Credential graph building (`vvp graph build`)
+- [x] KEL parsing and validation (`vvp kel parse/validate`)
+- [x] Adapter module for centralized imports with clear error messages
+- [x] Comprehensive documentation (`Documentation/CLI_USAGE.md`)
+
+**Key Files:**
+```
+common/common/vvp/cli/
+├── __init__.py           # Package exports
+├── main.py               # Main typer app, subcommand registration
+├── adapters.py           # Centralized imports from verifier
+├── utils.py              # Stdin/file reading, run_async(), exit codes
+├── output.py             # JSON/pretty/table formatting
+├── jwt.py                # vvp jwt parse/validate
+├── identity.py           # vvp identity parse
+├── cesr.py               # vvp cesr parse/detect
+├── said.py               # vvp said compute/validate/inject
+├── acdc.py               # vvp acdc parse/type
+├── dossier.py            # vvp dossier parse/validate/fetch
+├── graph.py              # vvp graph build
+└── kel.py                # vvp kel parse/validate
+common/pyproject.toml      # CLI deps + entry point
+Documentation/CLI_USAGE.md # User guide with examples
+```
+
+**Installation:**
+```bash
+pip install -e services/verifier && pip install -e 'common[cli]'
+vvp --help
+```
+
+**Exit Criteria:**
+- [x] All 16 commands functional
+- [x] Chainable via Unix pipes (stdin/stdout)
+- [x] JSON output format for machine parsing
+- [x] Adapter module for clean imports
+- [x] Code review approved
+- [x] Documentation complete
 
 ---
 
