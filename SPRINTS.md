@@ -1066,16 +1066,17 @@ services/issuer/web/
 | `VVP_MOCK_QVI_NAME` | `mock-qvi` | Mock QVI identity name |
 
 **Exit Criteria:**
-- [ ] Mock GLEIF + QVI created on startup with valid credential chain
-- [ ] Organizations get pseudo-LEI + AID + Legal Entity credential
-- [ ] Org admins can create/manage users in their org only
-- [ ] Dossier managers can build dossiers from org's credentials only
-- [ ] Cross-org access returns 403 Forbidden
-- [ ] Login page works with all auth methods (email/password, API key, OAuth)
-- [ ] User management UI allows CRUD operations for org users
-- [ ] Profile page allows password change
-- [ ] Navigation shows user/company context
-- [ ] All tests pass
+- [x] Mock GLEIF + QVI created on startup with valid credential chain
+- [x] Organizations get pseudo-LEI + AID + Legal Entity credential
+- [x] Organization API keys can be created and used for auth
+- [x] Org admins can create/manage users in their org only
+- [x] Dossier managers can build dossiers from org's credentials only
+- [x] Cross-org access returns 403 Forbidden
+- [x] Login page works with all auth methods (email/password, API key, OAuth)
+- [x] User management UI allows CRUD operations for org users
+- [x] Profile page allows password change
+- [x] Navigation shows user/company context
+- [x] All tests pass (367 tests)
 
 ---
 
