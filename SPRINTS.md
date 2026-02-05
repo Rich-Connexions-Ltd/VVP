@@ -26,6 +26,8 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 39 | Code Review Remediation | COMPLETE | Sprint 38 |
 | 40 | Vetter Certification Constraints | COMPLETE | Sprint 31 |
 | - | VVP CLI Toolkit | COMPLETE | Sprint 26 |
+| - | Chain Revocation Fixes | COMPLETE | Sprint 35 |
+| 41 | User Management & Mock vLEI | PLANNED | Sprint 37 |
 
 ---
 
@@ -976,6 +978,105 @@ vvp --help
 
 ---
 
+## Chain Revocation Fixes (COMPLETE)
+
+**Goal:** Address code review issues in chain-aware revocation checking.
+
+**Commits:** `a779952`
+
+**Deliverables:**
+- [x] Fix chain completeness enforcement in `build_all_credential_chains()` to detect missing links
+- [x] Fix registry SAID extraction to use top-level ACDC `ri` field (not attributes)
+- [x] Guard against empty `chain_saids` returning ACTIVE in `check_chain_revocation()`
+- [x] Add 4 new tests for missing link detection, synthetic edges, ri extraction, empty chains
+
+**Key Files:**
+```
+services/verifier/app/vvp/acdc/graph.py      # Chain completeness + ri extraction
+services/verifier/app/vvp/keri/tel_client.py # Empty chain guard
+services/verifier/tests/test_chain_revocation.py  # New tests
+```
+
+**Technical Notes:**
+- `build_all_credential_chains()` now checks if `node.edges_to` targets exist in graph
+- Missing links (excluding synthetic `root:`, `issuer:`, `qvi:` nodes) set `complete=False`
+- `_build_node_from_acdc()` extracts `ri` from `acdc.raw` (top-level) not `acdc.attributes` (the `a` field)
+- `check_chain_revocation()` returns UNKNOWN for empty chains instead of ACTIVE (empty `all()` bug)
+
+**Exit Criteria:**
+- [x] All 3 code review issues addressed
+- [x] All 1661 tests pass (4 new tests added)
+- [x] Code review approved
+
+---
+
+## Sprint 41: User Management & Mock vLEI Infrastructure
+
+**Goal:** Add multi-tenant user and organization management with mock vLEI credential chain and complete UI.
+
+**Prerequisites:** Sprint 37 (Session-Based Authentication) complete.
+
+**Deliverables:**
+- [ ] Database schema (SQLite + SQLAlchemy) for orgs, users, roles
+- [ ] Mock GLEIF + QVI infrastructure (pseudo root-of-trust)
+- [ ] Organization CRUD API (`POST/GET/PATCH /organizations`)
+- [ ] User management API (`POST/GET/PATCH/DELETE /users`)
+- [ ] Org roles: `org:administrator`, `org:dossier_manager`
+- [ ] Dossier scoping by credential ownership
+- [ ] Organization API key management
+- [ ] Enhanced login page (`/login`) with email/password + API key + OAuth
+- [ ] User management UI (`/users/ui`) for org administrators
+- [ ] Organization management UI (`/organizations/ui`) for system admins
+- [ ] User profile page (`/profile`) for self-service password change
+- [ ] Navigation updates with role-based links and user/company context
+- [ ] Tests for multi-tenant access control
+
+**Key Files:**
+```
+services/issuer/app/
+├── db/
+│   ├── models.py           # SQLAlchemy ORM (Organization, User)
+│   └── session.py          # Database session management
+├── org/
+│   ├── service.py          # Organization CRUD
+│   ├── mock_vlei.py        # Mock GLEIF/QVI manager
+│   └── lei_generator.py    # Pseudo-LEI generation
+├── auth/
+│   ├── db_users.py         # Database-backed user store
+│   └── org_roles.py        # Org role authorization
+└── api/
+    ├── organization.py     # Org management API
+    └── user.py             # User management API
+services/issuer/web/
+├── login.html              # Enhanced login page
+├── users.html              # User management UI
+├── organizations.html      # Organization management UI
+├── profile.html            # User profile page
+└── shared.js               # Updated with org context
+```
+
+**Configuration:**
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VVP_DATABASE_URL` | `sqlite:///.../vvp_issuer.db` | Database connection |
+| `VVP_MOCK_VLEI_ENABLED` | `true` | Enable mock GLEIF/QVI |
+| `VVP_MOCK_GLEIF_NAME` | `mock-gleif` | Mock GLEIF identity name |
+| `VVP_MOCK_QVI_NAME` | `mock-qvi` | Mock QVI identity name |
+
+**Exit Criteria:**
+- [ ] Mock GLEIF + QVI created on startup with valid credential chain
+- [ ] Organizations get pseudo-LEI + AID + Legal Entity credential
+- [ ] Org admins can create/manage users in their org only
+- [ ] Dossier managers can build dossiers from org's credentials only
+- [ ] Cross-org access returns 403 Forbidden
+- [ ] Login page works with all auth methods (email/password, API key, OAuth)
+- [ ] User management UI allows CRUD operations for org users
+- [ ] Profile page allows password change
+- [ ] Navigation shows user/company context
+- [ ] All tests pass
+
+---
+
 ## Quick Reference
 
 To start a sprint, say:
@@ -993,6 +1094,7 @@ To start a sprint, say:
 - "Sprint 38" - OAuth (Microsoft M365) for UI SSO
 - "Sprint 39" - Code review remediation (blocking + high priority fixes)
 - "Sprint 40" - Vetter certification constraints (geographic/jurisdictional validation)
+- "Sprint 41" - User management & mock vLEI (multi-tenant orgs, users, login UI)
 
 Each sprint follows the pair programming workflow:
 1. Plan phase (design, review, approval)
