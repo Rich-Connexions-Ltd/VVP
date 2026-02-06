@@ -17,8 +17,7 @@ from app.config import (
     SIPS_CERT_FILE,
     SIPS_KEY_FILE,
 )
-from app.sip.models import SIPRequest, SIPResponse
-from app.sip.parser import parse_sip_request
+from common.vvp.sip import SIPRequest, SIPResponse, parse_sip_request
 
 log = logging.getLogger(__name__)
 

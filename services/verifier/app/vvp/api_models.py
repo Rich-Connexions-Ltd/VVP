@@ -345,6 +345,12 @@ class VerifyResponse(BaseModel):
             in the dossier (Sprint 40). Results are status bits - whether they
             affect overall_status depends on VVP_ENFORCE_VETTER_CONSTRAINTS config.
             None when no dossier is present or no constraints to validate.
+        brand_name: Brand name extracted from PASSporT card claim (Sprint 44).
+            Populated from card.org or card.fn when brand verification succeeds.
+            Used by SIP services for X-VVP-Brand-Name header.
+        brand_logo_url: Brand logo URL extracted from PASSporT card claim (Sprint 44).
+            Populated from card.logo when brand verification succeeds.
+            Used by SIP services for X-VVP-Brand-Logo header.
     """
 
     request_id: str
@@ -357,6 +363,8 @@ class VerifyResponse(BaseModel):
     toip_warnings: Optional[List[ToIPWarningDetail]] = None
     issuer_identities: Optional[Dict[str, IssuerIdentityInfo]] = None
     vetter_constraints: Optional[Dict[str, VetterConstraintInfo]] = None
+    brand_name: Optional[str] = None
+    brand_logo_url: Optional[str] = None
 
 
 # =============================================================================

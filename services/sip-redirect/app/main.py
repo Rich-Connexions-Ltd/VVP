@@ -65,6 +65,12 @@ async def main() -> None:
 
     # Cleanup
     log.info("Stopping servers...")
+
+    # Stop status HTTP server
+    if status_handler:
+        await stop_status_server()
+
+    # Stop SIP servers
     for server in servers:
         if hasattr(server, "close"):
             server.close()

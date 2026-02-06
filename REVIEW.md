@@ -1,15 +1,15 @@
-## Plan Re-Review: Sprint 44 - SIP Redirect Verification Service (Revised)
+## Code Review (Re-Review): Sprint 44 - SIP Redirect Verification Service
 
 **Verdict:** APPROVED
 
-### Issues Addressed
-- Architecture: now creates a new `services/sip-verify/` service and extracts shared SIP utilities to `common/common/vvp/sip/`.
-- Verifier enhancements: VerifyResponse includes `brand_name` and `brand_logo_url`, with extraction in verify_brand().
-- VVP-Identity decoder: explicitly added as a dedicated phase and file.
-- Exit criteria: reorganized by phase and aligned with deliverables.
+### Previous Findings Resolution
+- [High] iat in VVP-Identity: RESOLVED - `VerifierClient._build_vvp_identity_header()` now requires `iat` and optionally `exp`, and the handler passes `iat` from decoded P‑VVP‑Identity with a fallback to current time.
+- [High] 400 for missing headers: RESOLVED - handler returns 400 Bad Request with a clear reason when verification headers are missing.
+- [Medium] has_verification_headers: RESOLVED - property now checks `identity_header`, `p_vvp_identity`, and `p_vvp_passport`.
+- [Low] Client tests: RESOLVED - new `test_client.py` covers VVP‑Identity header construction and parsing.
 
-### Remaining Concerns (if any)
+### New Findings (if any)
 - None.
 
-### Recommendations
-- Consider adding a test case that exercises both Identity and P‑VVP‑Identity inputs to ensure the parser and handler handle mixed header presence correctly.
+### Recommendation
+Fixes align with Sprint 44 requirements and tests cover the corrected behavior. No further changes required.

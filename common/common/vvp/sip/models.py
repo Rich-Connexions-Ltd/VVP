@@ -59,8 +59,16 @@ class SIPRequest:
         """Check if this request has VVP verification headers.
 
         Used to route between signing and verification handlers.
+        A request has verification headers if any of the following are present:
+        - Identity header (RFC 8224)
+        - P-VVP-Identity header
+        - P-VVP-Passport header
         """
-        return self.identity_header is not None or self.p_vvp_identity is not None
+        return (
+            self.identity_header is not None
+            or self.p_vvp_identity is not None
+            or self.p_vvp_passport is not None
+        )
 
     @property
     def has_signing_headers(self) -> bool:

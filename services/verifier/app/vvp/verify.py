@@ -63,7 +63,7 @@ from .dossier import (
 from .exceptions import VVPIdentityError, PassportError
 from .authorization import AuthorizationContext, validate_authorization
 from .sip_context import verify_sip_context_alignment
-from .brand import verify_brand
+from .brand import verify_brand, BrandInfo
 from .goal import verify_business_logic, GoalPolicyConfig
 from .vetter import verify_vetter_constraints, get_overall_constraint_status
 
@@ -1294,7 +1294,9 @@ async def verify_vvp(
     # Phase 11: Brand Verification (§5A Step 12)
     # -------------------------------------------------------------------------
     # brand_verified is REQUIRED when card is present (failures propagate)
+    # Sprint 44: Also extract brand info for SIP header population
     brand_claim = None
+    brand_info = None
     if passport and getattr(passport.payload, "card", None):
         # Sprint 18 fix A3: Find DE credential for the signer's delegation chain
         # Using signer AID ensures we get the correct DE when multiple DEs exist
@@ -1305,7 +1307,8 @@ async def verify_vvp(
                 # Fallback to first DE if signer-specific not found (no delegation case)
                 de_credential = _find_de_credential(dossier_acdcs)
 
-        brand_claim = verify_brand(passport, dossier_acdcs if dag else {}, de_credential)
+        # Sprint 44: verify_brand now returns (claim, brand_info) tuple
+        brand_claim, brand_info = verify_brand(passport, dossier_acdcs if dag else {}, de_credential)
 
         # Add errors for brand verification failures
         if brand_claim and brand_claim.status == ClaimStatus.INVALID:
@@ -1681,6 +1684,13 @@ async def verify_vvp(
                 for aid, ident in identity_map.items()
             }
 
+    # Sprint 44: Populate brand fields when brand verification succeeded
+    response_brand_name = None
+    response_brand_logo_url = None
+    if brand_info and brand_claim and brand_claim.status == ClaimStatus.VALID:
+        response_brand_name = brand_info.brand_name
+        response_brand_logo_url = brand_info.brand_logo_url
+
     return request_id, VerifyResponse(
         request_id=request_id,
         overall_status=overall_status,
@@ -1692,4 +1702,6 @@ async def verify_vvp(
         toip_warnings=toip_warnings,
         issuer_identities=issuer_identities,
         vetter_constraints=vetter_constraint_results if vetter_constraint_results else None,
+        brand_name=response_brand_name,
+        brand_logo_url=response_brand_logo_url,
     )

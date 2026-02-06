@@ -42,6 +42,21 @@ class ClaimBuilder:
         self.evidence.append(ev)
 
 
+@dataclass
+class BrandInfo:
+    """Extracted brand information from PASSporT card claim.
+
+    Sprint 44: Used by SIP services to populate X-VVP-Brand-* headers.
+
+    Attributes:
+        brand_name: Organization name from card.org or full name from card.fn.
+        brand_logo_url: Logo URL from card.logo (parsed from vCard LOGO format).
+    """
+
+    brand_name: Optional[str] = None
+    brand_logo_url: Optional[str] = None
+
+
 # Known vCard fields per RFC 6350 (subset relevant to brand identity)
 VCARD_FIELDS: Set[str] = {
     "fn",  # Full name
@@ -62,6 +77,63 @@ VCARD_FIELDS: Set[str] = {
 
 # Brand-indicative fields - presence of these suggests a brand credential
 BRAND_INDICATOR_FIELDS: Set[str] = {"fn", "org", "logo", "url", "photo"}
+
+
+def extract_brand_info(card: Dict[str, Any]) -> BrandInfo:
+    """Extract brand name and logo URL from PASSporT card claim.
+
+    Sprint 44: Extracts brand information for SIP header population.
+
+    Brand name priority:
+    1. card.org (organization name)
+    2. card.fn (full name / display name)
+
+    Logo URL parsing:
+    - If card.logo is a simple URL string, use directly
+    - If card.logo is in vCard format (LOGO;VALUE=URI:https://...), parse URL
+
+    Args:
+        card: Dictionary of card attributes from PASSporT
+
+    Returns:
+        BrandInfo with brand_name and brand_logo_url (may be None if not found)
+    """
+    info = BrandInfo()
+
+    # Extract brand name: prefer org, fall back to fn
+    org = card.get("org") or card.get("ORG")
+    fn = card.get("fn") or card.get("FN")
+
+    if org:
+        info.brand_name = str(org)
+    elif fn:
+        info.brand_name = str(fn)
+
+    # Extract logo URL
+    logo = card.get("logo") or card.get("LOGO")
+    if logo:
+        logo_str = str(logo)
+        # Check if it's vCard format: LOGO;VALUE=URI:https://...
+        if ";VALUE=URI:" in logo_str.upper():
+            # Parse vCard LOGO field
+            parts = logo_str.split(":", 1)
+            if len(parts) == 2 and parts[1].startswith(("http://", "https://")):
+                info.brand_logo_url = parts[1]
+            else:
+                # Try to find URL in the string
+                for proto in ("https://", "http://"):
+                    if proto in logo_str:
+                        url_start = logo_str.find(proto)
+                        info.brand_logo_url = logo_str[url_start:]
+                        break
+        elif logo_str.startswith(("http://", "https://")):
+            # Direct URL
+            info.brand_logo_url = logo_str
+        else:
+            # Log and skip non-URL logo values (could be base64 data)
+            log.debug(f"Brand logo is not a URL: {logo_str[:50]}...")
+
+    return info
 
 
 def validate_vcard_format(card: Dict[str, Any]) -> List[str]:
@@ -278,11 +350,14 @@ def verify_brand(
     passport,  # Passport type
     dossier_acdcs: Dict[str, Any],
     de_credential: Optional[Any] = None,
-) -> Optional[ClaimBuilder]:
+) -> Tuple[Optional[ClaimBuilder], Optional[BrandInfo]]:
     """Verify brand claims if card present in PASSporT.
 
     Per §5A Step 12: If passport includes non-null card claim values,
     MUST locate brand credential and verify attributes are justified.
+
+    Sprint 44: Also returns extracted brand info for SIP header population.
+    Brand info is extracted even when verification fails (but status is not VALID).
 
     Args:
         passport: Parsed PASSporT object
@@ -290,15 +365,24 @@ def verify_brand(
         de_credential: Delegation edge credential (if delegation present)
 
     Returns:
-        ClaimBuilder for brand_verified claim, or None if no card
+        Tuple of:
+        - ClaimBuilder for brand_verified claim, or None if no card
+        - BrandInfo with brand_name/brand_logo_url, or None if no card
     """
     # Check if card is present
     card = getattr(passport.payload, "card", None)
     if card is None:
-        return None  # No card, no verification needed
+        return None, None  # No card, no verification needed
 
     claim = ClaimBuilder("brand_verified")
     claim.add_evidence("card:present")
+
+    # Extract brand info from card (Sprint 44)
+    brand_info = extract_brand_info(card)
+    if brand_info.brand_name:
+        claim.add_evidence(f"brand_name:{brand_info.brand_name}")
+    if brand_info.brand_logo_url:
+        claim.add_evidence(f"brand_logo_url:{brand_info.brand_logo_url[:40]}...")
 
     # Validate vCard format (warn on unknown fields, don't fail)
     warnings = validate_vcard_format(card)
@@ -310,7 +394,7 @@ def verify_brand(
     brand_credential = find_brand_credential(dossier_acdcs)
     if brand_credential is None:
         claim.fail(ClaimStatus.INVALID, "No brand credential found in dossier")
-        return claim
+        return claim, brand_info
 
     brand_said = getattr(brand_credential, "said", "unknown")
     claim.add_evidence(f"brand_credential:{brand_said[:16]}...")
@@ -323,7 +407,7 @@ def verify_brand(
     else:
         for mismatch in attr_result:
             claim.fail(ClaimStatus.INVALID, mismatch)
-        return claim
+        return claim, brand_info
 
     # Verify brand credential has JL to vetting (§6.3.7)
     jl_valid, jl_evidence = verify_brand_jl(brand_credential, dossier_acdcs)
@@ -331,7 +415,7 @@ def verify_brand(
         claim.add_evidence(jl_evidence)
     else:
         claim.fail(ClaimStatus.INVALID, jl_evidence)
-        return claim
+        return claim, brand_info
 
     # Verify brand proxy in delegation (§6.3.4)
     # If delegation present, DE MUST have brand proxy → INDETERMINATE if missing
@@ -344,6 +428,6 @@ def verify_brand(
         else:
             # Per Reviewer: INDETERMINATE for missing brand proxy (can't verify)
             claim.fail(ClaimStatus.INDETERMINATE, proxy_evidence)
-            return claim
+            return claim, brand_info
 
-    return claim
+    return claim, brand_info

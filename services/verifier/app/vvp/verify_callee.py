@@ -49,7 +49,7 @@ from .dossier import (
     CachedDossier,
 )
 from .exceptions import VVPIdentityError, PassportError
-from .brand import verify_brand
+from .brand import verify_brand, BrandInfo
 from .goal import verify_goal_overlap, GoalPolicyConfig
 
 log = logging.getLogger(__name__)
@@ -850,7 +850,9 @@ async def verify_callee_vvp(
     # -------------------------------------------------------------------------
     # Brand Verification (§5B Step 11 - REQUIRED when card present)
     # -------------------------------------------------------------------------
+    # Sprint 44: Also extract brand info for SIP header population
     brand_claim = None
+    brand_info = None
     if passport and getattr(passport.payload, "card", None):
         from .verify import _find_signer_de_credential
 
@@ -859,7 +861,8 @@ async def verify_callee_vvp(
         if dag is not None:
             de_credential = _find_signer_de_credential(dossier_acdcs, signer_aid)
 
-        brand_claim = verify_brand(passport, dossier_acdcs if dag else {}, de_credential)
+        # Sprint 44: verify_brand now returns (claim, brand_info) tuple
+        brand_claim, brand_info = verify_brand(passport, dossier_acdcs if dag else {}, de_credential)
 
         if brand_claim and brand_claim.status == ClaimStatus.INVALID:
             errors.append(
@@ -993,9 +996,18 @@ async def verify_callee_vvp(
     claims = [root_claim]
     overall_status = derive_overall_status(claims, errors if errors else None)
 
+    # Sprint 44: Populate brand fields when brand verification succeeded
+    response_brand_name = None
+    response_brand_logo_url = None
+    if brand_info and brand_claim and brand_claim.status == ClaimStatus.VALID:
+        response_brand_name = brand_info.brand_name
+        response_brand_logo_url = brand_info.brand_logo_url
+
     return request_id, VerifyResponse(
         request_id=request_id,
         overall_status=overall_status,
         claims=claims,
         errors=errors if errors else None,
+        brand_name=response_brand_name,
+        brand_logo_url=response_brand_logo_url,
     )

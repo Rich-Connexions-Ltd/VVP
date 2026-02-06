@@ -28,9 +28,9 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | - | VVP CLI Toolkit | COMPLETE | Sprint 26 |
 | - | Chain Revocation Fixes | COMPLETE | Sprint 35 |
 | 41 | User Management & Mock vLEI | COMPLETE | Sprint 37 |
-| 42 | SIP Redirect Signing Service | PLANNED | Sprint 41 |
-| 43 | PBX Test Infrastructure | IN PROGRESS (Phase 3 Complete) | Sprint 42 |
-| 44 | SIP Redirect Verification Service | PLANNED | Sprint 43 |
+| 42 | SIP Redirect Signing Service | COMPLETE | Sprint 41 |
+| 43 | PBX Test Infrastructure | COMPLETE | Sprint 42 |
+| 44 | SIP Redirect Verification Service | COMPLETE | Sprint 43 |
 
 ---
 
@@ -1444,18 +1444,18 @@ PBX/WebRTC <──SIP 302 + X-VVP-* headers────────────�
 **Deliverables:**
 
 **Phase 1: SIP Verification Service** (`services/sip-verify/`)
-- [ ] **SIP Parser** - Extract `Identity`, `P-VVP-Identity`, `P-VVP-Passport` headers from INVITE
-- [ ] **Identity Header Parser** - Parse RFC 8224 Identity header format:
+- [x] **SIP Parser** - Extract `Identity`, `P-VVP-Identity`, `P-VVP-Passport` headers from INVITE
+- [x] **Identity Header Parser** - Parse RFC 8224 Identity header format:
   - `Identity: <base64url PASSporT>;info=<oobi>;alg=EdDSA;ppt=vvp`
-- [ ] **VVP-Identity Decoder** - Base64url decode JSON payload
-- [ ] **Verifier API Client** - Call VVP Verifier `/verify-callee` endpoint
-- [ ] **SIP 302 Response Builder** - Include X-VVP-* headers based on verification result
-- [ ] **SIP 4xx Response Builder** - Return appropriate errors for failed verification
-- [ ] **AsyncIO UDP/TCP Transport** - Reuse pattern from Sprint 42 `services/sip-redirect/`
+- [x] **VVP-Identity Decoder** - Base64url decode JSON payload
+- [x] **Verifier API Client** - Call VVP Verifier `/verify-callee` endpoint
+- [x] **SIP 302 Response Builder** - Include X-VVP-* headers based on verification result
+- [x] **SIP 4xx Response Builder** - Return appropriate errors for failed verification
+- [x] **AsyncIO UDP/TCP Transport** - Extracted to `common/common/vvp/sip/` for reuse
 
 **Phase 2: VVP Verifier Enhancements** (`services/verifier/`)
-- [ ] **Brand Info Extraction** - Add `brand_name` and `brand_logo_url` to VerifyResponse
-- [ ] **Caller ID from PASSporT** - Extract orig.tn for X-VVP-Caller-ID header
+- [x] **Brand Info Extraction** - Add `brand_name` and `brand_logo_url` to VerifyResponse
+- [x] **Caller ID from PASSporT** - Extract orig.tn for X-VVP-Caller-ID header
 - [ ] **SIP Context Endpoint** - Optional: `/verify-sip` endpoint that accepts raw SIP headers
 
 **Phase 3: PBX Integration** (`services/pbx/`)

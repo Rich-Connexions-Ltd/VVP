@@ -8102,3 +8102,78 @@ All 1711 tests pass (25 new tests added for operator validation).
 - [x] Layer labels and back-reference highlighting
 - [x] All tests pass
 
+
+---
+
+# Sprint 44: SIP Redirect Verification Service
+
+**Date Completed:** 2026-02-06
+
+## Summary
+
+Implemented a SIP redirect-based verification service that:
+1. Receives inbound SIP INVITEs containing VVP headers (RFC 8224 Identity, P-VVP-*)
+2. Parses headers and extracts PASSporT + VVP-Identity
+3. Calls VVP Verifier `/verify-callee` endpoint
+4. Returns SIP 302 with X-VVP-* headers for PBX to pass to WebRTC client
+
+## Key Design Decisions
+
+1. **Shared SIP Utilities** - Extracted `common/common/vvp/sip/` with models, parser, builder, transport for reuse by sip-redirect and sip-verify
+2. **Brand Fields in VerifyResponse** - Added `brand_name` and `brand_logo_url` to VerifyResponse, extracted from PASSporT card claim
+3. **400 for Missing Headers** - Return 400 Bad Request when verification headers are missing (not 302 INDETERMINATE)
+4. **VVP-Identity requires iat** - The VVP-Identity header sent to verifier must include `iat` timestamp
+
+## Files Created
+
+### Common SIP Utilities (`common/common/vvp/sip/`)
+- `__init__.py` - Package exports
+- `models.py` - SIPRequest, SIPResponse with VVP headers
+- `parser.py` - RFC 3261 parser + Identity/P-VVP-* extraction
+- `builder.py` - Response builder with 400, X-VVP-Error support
+- `transport.py` - AsyncIO UDP/TCP server
+
+### SIP Verify Service (`services/sip-verify/`)
+- `app/main.py` - AsyncIO entrypoint with signal handling
+- `app/config.py` - Environment-based configuration
+- `app/audit.py` - Ring buffer audit logging
+- `app/verify/identity_parser.py` - RFC 8224 Identity header parser
+- `app/verify/vvp_identity.py` - VVP-Identity JSON decoder
+- `app/verify/client.py` - Verifier API client
+- `app/verify/handler.py` - Verification handler
+- `pyproject.toml` - Dependencies
+- `Dockerfile` - Container image
+- `tests/test_identity_parser.py` - 10 Identity parser tests
+- `tests/test_vvp_identity.py` - 18 VVP-Identity decoder tests
+- `tests/test_handler.py` - 7 handler tests
+- `tests/test_client.py` - 9 client tests
+
+## Files Modified
+
+### Verifier Enhancements
+- `services/verifier/app/vvp/api_models.py` - Added brand_name, brand_logo_url
+- `services/verifier/app/vvp/brand.py` - Added BrandInfo dataclass, extract_brand_info(), modified verify_brand() to return tuple
+- `services/verifier/app/vvp/verify.py` - Populate brand fields in response
+- `services/verifier/app/vvp/verify_callee.py` - Populate brand fields in response
+- `services/verifier/tests/test_brand.py` - 9 new brand info extraction tests
+
+### SIP Redirect Refactor
+- `services/sip-redirect/app/sip/__init__.py` - Re-exports from common.vvp.sip
+- `services/sip-redirect/app/sip/transport.py` - Imports from common.vvp.sip
+
+## Test Results
+
+- sip-verify: 41 passed
+- sip-redirect: 38 passed
+- verifier: 1695 passed, 9 skipped
+
+## Review History
+
+1. **Initial Review** - CHANGES_REQUESTED
+   - [High] Missing iat in VVP-Identity header
+   - [High] Missing headers returned 302 instead of 400
+   - [Medium] has_verification_headers ignored p_vvp_passport
+   - [Low] No client tests
+
+2. **Re-Review** - APPROVED
+   - All findings resolved

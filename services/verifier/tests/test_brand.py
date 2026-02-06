@@ -6,6 +6,7 @@ Tests cover:
 - Brand attribute verification
 - Brand JL (join link) to vetting
 - Brand proxy in delegation scenarios
+- Sprint 44: Brand info extraction (brand_name, brand_logo_url)
 """
 
 import pytest
@@ -19,6 +20,8 @@ from app.vvp.brand import (
     verify_brand_jl,
     verify_brand_proxy,
     verify_brand,
+    extract_brand_info,
+    BrandInfo,
     VCARD_FIELDS,
     ClaimBuilder,
 )
@@ -307,14 +310,18 @@ class TestBrandProxyDelegation:
 
 
 class TestBrandVerificationIntegration:
-    """Integration tests for full brand verification."""
+    """Integration tests for full brand verification.
+
+    Sprint 44: verify_brand now returns (claim, brand_info) tuple.
+    """
 
     def test_no_card_no_claim(self):
-        """No card in passport should return None"""
+        """No card in passport should return (None, None)"""
         passport = MockPassport(payload=MockPassportPayload(card=None))
 
-        result = verify_brand(passport, {})
-        assert result is None
+        claim, brand_info = verify_brand(passport, {})
+        assert claim is None
+        assert brand_info is None
 
     def test_brand_valid(self):
         """Valid brand verification should pass"""
@@ -332,9 +339,12 @@ class TestBrandVerificationIntegration:
             "VETTING123": MockACDC(said="VETTING123", issuer_aid="VETTER"),
         }
 
-        result = verify_brand(passport, dossier)
-        assert result is not None
-        assert result.status == ClaimStatus.VALID
+        claim, brand_info = verify_brand(passport, dossier)
+        assert claim is not None
+        assert claim.status == ClaimStatus.VALID
+        # Sprint 44: Also verify brand info extraction
+        assert brand_info is not None
+        assert brand_info.brand_name == "ACME"  # org takes precedence over fn
 
     def test_no_brand_credential_invalid(self):
         """Missing brand credential should be INVALID"""
@@ -342,10 +352,13 @@ class TestBrandVerificationIntegration:
             payload=MockPassportPayload(card={"fn": "ACME Corp"})
         )
 
-        result = verify_brand(passport, {})
-        assert result is not None
-        assert result.status == ClaimStatus.INVALID
-        assert "No brand credential" in result.reasons[0]
+        claim, brand_info = verify_brand(passport, {})
+        assert claim is not None
+        assert claim.status == ClaimStatus.INVALID
+        assert "No brand credential" in claim.reasons[0]
+        # Sprint 44: Brand info still extracted even if verification fails
+        assert brand_info is not None
+        assert brand_info.brand_name == "ACME Corp"
 
     def test_brand_missing_jl_invalid(self):
         """Brand without JL to vetting should be INVALID"""
@@ -359,10 +372,10 @@ class TestBrandVerificationIntegration:
             edges={},  # No JL
         )
 
-        result = verify_brand(passport, {"BRAND123": brand})
-        assert result is not None
-        assert result.status == ClaimStatus.INVALID
-        assert "no edges" in result.reasons[0] or "missing JL" in result.reasons[0]
+        claim, brand_info = verify_brand(passport, {"BRAND123": brand})
+        assert claim is not None
+        assert claim.status == ClaimStatus.INVALID
+        assert "no edges" in claim.reasons[0] or "missing JL" in claim.reasons[0]
 
     def test_brand_proxy_missing_indeterminate(self):
         """Missing brand proxy in delegation should be INDETERMINATE"""
@@ -385,10 +398,10 @@ class TestBrandVerificationIntegration:
             "VETTING123": MockACDC(said="VETTING123", issuer_aid="VETTER"),
         }
 
-        result = verify_brand(passport, dossier, de_credential=de)
-        assert result is not None
-        assert result.status == ClaimStatus.INDETERMINATE
-        assert "missing brand proxy" in result.reasons[0]
+        claim, brand_info = verify_brand(passport, dossier, de_credential=de)
+        assert claim is not None
+        assert claim.status == ClaimStatus.INDETERMINATE
+        assert "missing brand proxy" in claim.reasons[0]
 
     def test_unknown_vcard_fields_warn_not_fail(self):
         """Unknown vCard fields should warn but not fail"""
@@ -408,8 +421,73 @@ class TestBrandVerificationIntegration:
             "VETTING123": MockACDC(said="VETTING123", issuer_aid="VETTER"),
         }
 
-        result = verify_brand(passport, dossier)
-        assert result is not None
+        claim, brand_info = verify_brand(passport, dossier)
+        assert claim is not None
         # Should still pass, but with warning in evidence
-        assert result.status == ClaimStatus.VALID
-        assert any("warning" in ev for ev in result.evidence)
+        assert claim.status == ClaimStatus.VALID
+        assert any("warning" in ev for ev in claim.evidence)
+
+
+# =============================================================================
+# Sprint 44: Brand Info Extraction Tests
+# =============================================================================
+
+
+class TestExtractBrandInfo:
+    """Tests for extract_brand_info function (Sprint 44)."""
+
+    def test_extract_org_as_brand_name(self):
+        """org field should be used as brand_name"""
+        card = {"fn": "John Doe", "org": "ACME Corporation"}
+        info = extract_brand_info(card)
+        assert info.brand_name == "ACME Corporation"
+
+    def test_extract_fn_when_no_org(self):
+        """fn field should be fallback when org not present"""
+        card = {"fn": "ACME Display Name"}
+        info = extract_brand_info(card)
+        assert info.brand_name == "ACME Display Name"
+
+    def test_extract_logo_url_direct(self):
+        """Direct URL in logo field should be extracted"""
+        card = {"org": "ACME", "logo": "https://cdn.acme.com/logo.png"}
+        info = extract_brand_info(card)
+        assert info.brand_logo_url == "https://cdn.acme.com/logo.png"
+
+    def test_extract_logo_url_vcard_format(self):
+        """vCard LOGO;VALUE=URI: format should be parsed"""
+        card = {"org": "ACME", "logo": "LOGO;VALUE=URI:https://cdn.acme.com/logo.png"}
+        info = extract_brand_info(card)
+        assert info.brand_logo_url == "https://cdn.acme.com/logo.png"
+
+    def test_extract_logo_url_vcard_format_lowercase(self):
+        """vCard format should be case-insensitive"""
+        card = {"org": "ACME", "logo": "logo;value=uri:https://cdn.acme.com/logo.png"}
+        info = extract_brand_info(card)
+        assert info.brand_logo_url == "https://cdn.acme.com/logo.png"
+
+    def test_extract_empty_card(self):
+        """Empty card should return empty BrandInfo"""
+        card = {}
+        info = extract_brand_info(card)
+        assert info.brand_name is None
+        assert info.brand_logo_url is None
+
+    def test_extract_case_insensitive_fields(self):
+        """Fields should be case-insensitive"""
+        card = {"ORG": "ACME Corp", "LOGO": "https://acme.com/logo.png"}
+        info = extract_brand_info(card)
+        assert info.brand_name == "ACME Corp"
+        assert info.brand_logo_url == "https://acme.com/logo.png"
+
+    def test_non_url_logo_ignored(self):
+        """Non-URL logo values (base64 data) should be ignored"""
+        card = {"org": "ACME", "logo": "base64,iVBORw0KGgo..."}
+        info = extract_brand_info(card)
+        assert info.brand_logo_url is None
+
+    def test_http_logo_url(self):
+        """HTTP URLs should be extracted (not just HTTPS)"""
+        card = {"org": "ACME", "logo": "http://cdn.acme.com/logo.png"}
+        info = extract_brand_info(card)
+        assert info.brand_logo_url == "http://cdn.acme.com/logo.png"
