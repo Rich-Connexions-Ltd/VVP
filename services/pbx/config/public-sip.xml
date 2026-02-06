@@ -1,15 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  VVP Inbound PSTN Dialplan for SIP.js WebRTC Client
+  VVP Dialplan - Handles both inbound PSTN and outbound from WebRTC
 
   This dialplan:
-  1. Receives inbound PSTN calls on the external (public) profile
-  2. Sets VVP channel variables (brand_name, status, logo)
-  3. Converts VVP channel variables to SIP headers (sip_h_X-VVP-*)
-  4. Bridges to the SIP-registered WebRTC client (user/1001)
-
-  The SIP.js client registers via WSS on port 7443 as a standard SIP user.
-  This allows bidirectional call bridging (unlike Verto's verto.rtc endpoint).
+  1. Routes UK outbound calls (9+0+number) to Twilio with valid caller ID
+  2. Routes international calls (9+00+country+number) to Twilio
+  3. Handles inbound PSTN calls with VVP header injection
+  4. Bridges to SIP-registered WebRTC client (extension 1001)
 
   File: /etc/freeswitch/dialplan/public.xml
 
@@ -19,9 +16,39 @@
 <include>
   <context name="public">
 
-    <!-- VVP Inbound Call Handler -->
+    <!-- UK Outbound: 9 + 0 + UK number -> Twilio gateway -->
+    <extension name="uk-outbound-9prefix">
+      <condition field="${sofia_profile_name}" expression="^internal$"/>
+      <condition field="destination_number" expression="^90(\d{9,11})$">
+        <action application="log" data="INFO [VVP] UK Outbound: dialing +44$1 via Twilio"/>
+        <action application="export" data="call_direction=outbound"/>
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="continue_on_fail=true"/>
+        <!-- Set valid caller ID for Twilio -->
+        <action application="set" data="effective_caller_id_number=+441923311000"/>
+        <action application="set" data="effective_caller_id_name=VVP Test"/>
+        <action application="bridge" data="sofia/gateway/7d3b7bf4-e1e7-43f0-8d6c-5dd4eb6e35cc/+44$1"/>
+      </condition>
+    </extension>
+
+    <!-- International Outbound: 9 + 00 + country code + number -->
+    <extension name="intl-outbound-9prefix">
+      <condition field="${sofia_profile_name}" expression="^internal$"/>
+      <condition field="destination_number" expression="^900(\d{10,15})$">
+        <action application="log" data="INFO [VVP] Intl Outbound: dialing +$1 via Twilio"/>
+        <action application="export" data="call_direction=outbound"/>
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="continue_on_fail=true"/>
+        <!-- Set valid caller ID for Twilio -->
+        <action application="set" data="effective_caller_id_number=+441923311000"/>
+        <action application="set" data="effective_caller_id_name=VVP Test"/>
+        <action application="bridge" data="sofia/gateway/7d3b7bf4-e1e7-43f0-8d6c-5dd4eb6e35cc/+$1"/>
+      </condition>
+    </extension>
+
+    <!-- VVP Inbound Call Handler - ONLY for external/PSTN calls -->
     <extension name="vvp-inbound-sip">
-      <condition field="destination_number" expression=".*">
+      <condition field="${sofia_profile_name}" expression="^external$">
 
         <!-- Log the incoming call -->
         <action application="log" data="INFO [VVP] Inbound PSTN call from ${caller_id_number} to ${destination_number}"/>
@@ -32,7 +59,6 @@
         <action application="set" data="vvp_status=VALID"/>
 
         <!-- Convert VVP variables to SIP headers for the B-leg INVITE to WebRTC client -->
-        <!-- SIP.js will receive these as X-VVP-* headers -->
         <action application="set" data="sip_h_X-VVP-Brand-Name=${vvp_brand_name}"/>
         <action application="set" data="sip_h_X-VVP-Brand-Logo=${vvp_brand_logo}"/>
         <action application="set" data="sip_h_X-VVP-Status=${vvp_status}"/>
@@ -48,7 +74,6 @@
         <action application="set" data="continue_on_fail=true"/>
 
         <!-- Bridge to SIP-registered WebRTC client (extension 1001) -->
-        <!-- Note: Using hardcoded domain as ${domain_name} may not be available in public context -->
         <action application="log" data="INFO [VVP] Bridging to user/1001@pbx.rcnx.io"/>
         <action application="bridge" data="user/1001@pbx.rcnx.io"/>
 
@@ -58,6 +83,15 @@
         <action application="playback" data="ivr/ivr-call_cannot_be_completed_as_dialed.wav"/>
         <action application="hangup" data="USER_BUSY"/>
 
+      </condition>
+    </extension>
+
+    <!-- Fallback for unmatched internal calls -->
+    <extension name="internal-unmatched">
+      <condition field="${sofia_profile_name}" expression="^internal$">
+        <action application="log" data="WARNING [VVP] Unmatched internal call to ${destination_number}"/>
+        <action application="playback" data="ivr/ivr-call_cannot_be_completed_as_dialed.wav"/>
+        <action application="hangup" data="NO_ROUTE_DESTINATION"/>
       </condition>
     </extension>
 

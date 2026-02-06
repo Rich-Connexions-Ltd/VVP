@@ -1,6 +1,6 @@
 # VVP Phone SIP.js Setup Guide
 
-This guide explains how to configure FusionPBX/FreeSWITCH to receive inbound PSTN calls on a SIP.js WebRTC client.
+This guide explains how to configure FusionPBX/FreeSWITCH for bidirectional calling (inbound PSTN and outbound dialing) with a SIP.js WebRTC client.
 
 ## Why SIP.js Instead of Verto?
 
@@ -128,6 +128,21 @@ Should show extension 1001 registered.
 2. SIP.js client should show incoming call
 3. VVP headers should be extracted and displayed
 
+## Step 8: Test Outbound Call
+
+The dialplan supports outbound dialing via Twilio:
+
+| Dial Pattern | Destination | Example |
+|--------------|-------------|---------|
+| `90xxxxxxxxxx` | UK number (+44...) | `907785463210` → `+447785463210` |
+| `900xxxxxxxxxxx` | International (+...) | `9001234567890` → `+1234567890` |
+
+**Note:** The dialplan sets `effective_caller_id_number=+441923311000` for outbound calls. This number must be verified in your Twilio account.
+
+1. Enter a UK number with 9-prefix: `907785463210`
+2. Click "Call"
+3. Call should connect via Twilio
+
 ## Troubleshooting
 
 ### Registration fails
@@ -148,8 +163,30 @@ Should show extension 1001 registered.
 2. Check FreeSWITCH logs for header set actions
 3. Verify `sip_h_` prefix is used (passes headers to B-leg INVITE)
 
+### Outbound call fails with "Invalid Caller ID"
+
+Twilio requires a verified caller ID for outbound calls:
+
+1. Verify the caller ID number in Twilio Console → Phone Numbers → Verified Caller IDs
+2. Or use a Twilio-purchased number as the caller ID
+3. Update `effective_caller_id_number` in the dialplan
+
+### Outbound call rejected by ACL
+
+If calls fail with "Rejected by acl", disable the inbound ACL for the internal profile:
+
+```sql
+UPDATE v_sip_profile_settings
+SET sip_profile_setting_enabled = 'false'
+WHERE sip_profile_setting_name = 'apply-inbound-acl'
+AND sip_profile_uuid = (SELECT sip_profile_uuid FROM v_sip_profiles WHERE sip_profile_name = 'internal');
+```
+
+Then restart the profile: `fs_cli -x "sofia profile internal restart"`
+
 ## Architecture
 
+### Inbound PSTN Call Flow
 ```
 Twilio ─UDP:5080─> FreeSWITCH (external profile)
                         │
@@ -166,4 +203,27 @@ Twilio ─UDP:5080─> FreeSWITCH (external profile)
                    SIP.js Client (browser)
                    - Receives X-VVP-* headers
                    - Displays VVP verification info
+```
+
+### Outbound Call Flow
+```
+SIP.js Client (browser)
+        │
+   WSS:7443 INVITE
+        │
+        ▼
+FreeSWITCH (internal profile)
+        │
+   [public.xml dialplan]
+   - Matches 90... pattern
+   - Sets caller ID
+   - bridge sofia/gateway/twilio
+        │
+        ▼
+FreeSWITCH (external profile)
+        │
+   UDP:5080
+        │
+        ▼
+      Twilio ─────> PSTN
 ```
