@@ -25,8 +25,8 @@ Your SBC then forwards the call to the carrier with the VVP headers, providing c
 ┌─────────────┐    SIP INVITE     ┌────────────┴────────────┐
 │             │   + X-VVP-API-Key │                         │
 │  Your PBX   │ ────────────────> │   VVP SIP Signer       │
-│    / SBC    │                   │   (UDP 5060 or         │
-│             │ <──────────────── │    TLS 5061)           │
+│    / SBC    │                   │   (UDP 5070 live, or   │
+│             │ <──────────────── │    5060/5061 prod)     │
 └─────────────┘    302 Redirect   └─────────────────────────┘
        │           + VVP Headers
        │
@@ -244,12 +244,19 @@ If you exceed the rate limit, you'll receive a **403 Forbidden** response. The r
 
 The VVP SIP Signing Service is deployed at:
 
-| Service | Host | Port | Protocol |
-|---------|------|------|----------|
-| **SIP Signer** | `pbx.rcnx.io` | 5060 | UDP/TCP |
-| **SIP Signer (TLS)** | `pbx.rcnx.io` | 5061 | TLS/SIPS |
-| **VVP Issuer API** | `vvp-issuer.rcnx.io` | 443 | HTTPS |
-| **VVP Verifier API** | `vvp-verifier.rcnx.io` | 443 | HTTPS |
+| Service | Host | Port | Protocol | Status |
+|---------|------|------|----------|--------|
+| **SIP Signer (Live)** | `pbx.rcnx.io` | 5070 | UDP | **Deployed** |
+| **SIP Signer (Production)** | `pbx.rcnx.io` | 5060 | UDP/TCP | Future |
+| **SIP Signer (TLS)** | `pbx.rcnx.io` | 5061 | TLS/SIPS | Future |
+| **Status Endpoint** | `pbx.rcnx.io` | 8080 | HTTP | Deployed |
+| **VVP Issuer API** | `vvp-issuer.rcnx.io` | 443 | HTTPS | Deployed |
+| **VVP Verifier API** | `vvp-verifier.rcnx.io` | 443 | HTTPS | Deployed |
+
+> **Note:** The current live deployment uses port **5070** for testing and development.
+> Production deployments will use standard SIP ports 5060/5061 once enterprise TLS
+> configuration is complete. See [DEPLOYMENT.md](DEPLOYMENT.md#port-reference) for
+> the authoritative port mapping.
 
 ### DNS Records
 
@@ -262,6 +269,15 @@ vvp-verifier.rcnx.io → Azure Container App (Verifier)
 ---
 
 ## Service Endpoints
+
+### Current Live Deployment (Testing)
+
+| Protocol | Port | Description |
+|----------|------|-------------|
+| UDP | 5070 | SIP signer (current live) |
+| HTTP | 8080 | Status endpoint (admin auth required) |
+
+### Production Deployment (Future)
 
 | Protocol | Port | Description |
 |----------|------|-------------|
@@ -331,13 +347,13 @@ Logs are written to `/var/log/vvp-sip/audit-YYYY-MM-DD.jsonl` in JSON Lines form
 
 The SIP signing service is configured via environment variables:
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `VVP_SIP_LISTEN_HOST` | `0.0.0.0` | Listen address |
-| `VVP_SIP_LISTEN_PORT` | `5060` | SIP port |
-| `VVP_SIP_TRANSPORT` | `udp` | Transport: `udp`, `tcp`, `both`, `all` |
-| `VVP_SIPS_ENABLED` | `false` | Enable TLS on 5061 |
-| `VVP_SIPS_LISTEN_PORT` | `5061` | SIPS/TLS port |
+| Variable | Default | Live Value | Description |
+|----------|---------|------------|-------------|
+| `VVP_SIP_LISTEN_HOST` | `0.0.0.0` | `0.0.0.0` | Listen address |
+| `VVP_SIP_LISTEN_PORT` | `5060` | `5070` | SIP port (live uses 5070) |
+| `VVP_SIP_TRANSPORT` | `udp` | `udp` | Transport: `udp`, `tcp`, `both`, `all` |
+| `VVP_SIPS_ENABLED` | `false` | `false` | Enable TLS on 5061 |
+| `VVP_SIPS_LISTEN_PORT` | `5061` | - | SIPS/TLS port (future) |
 | `VVP_SIPS_CERT_FILE` | - | TLS certificate path |
 | `VVP_SIPS_KEY_FILE` | - | TLS private key path |
 | `VVP_ISSUER_URL` | `http://localhost:8001` | VVP Issuer API URL |
@@ -521,6 +537,83 @@ This validates:
 - All test keys exist and are valid
 
 **Warning:** These test fixtures contain deterministic keys and credentials that are **NOT CRYPTOGRAPHICALLY SECURE**. They are intended only for testing purposes and must **NEVER** be used in production.
+
+### Configuring the PBX for Trial Testing
+
+To test with the Acme Corp trial dossier, configure your PBX with these exact values:
+
+| Setting | Value |
+|---------|-------|
+| **API Key** | `vvp_test_acme_corp_api_key_12345678901234567890` |
+| **Test TN** | `+441923311000` |
+| **SIP Signer Host** | `pbx.rcnx.io:5060` |
+
+#### FreeSWITCH Configuration
+
+Add to `/etc/freeswitch/dialplan/default.xml`:
+
+```xml
+<!-- VVP Trial Test Extension -->
+<extension name="vvp-trial-test">
+  <condition field="caller_id_number" expression="^1001$">
+    <condition field="destination_number" expression="^71006$">
+      <!-- Set the test API key -->
+      <action application="set" data="sip_h_X-VVP-API-Key=vvp_test_acme_corp_api_key_12345678901234567890"/>
+
+      <!-- Set caller ID to test TN -->
+      <action application="set" data="effective_caller_id_number=+441923311000"/>
+
+      <!-- Route through VVP signer on localhost (same PBX) -->
+      <action application="bridge" data="sofia/external/${destination_number}@127.0.0.1:5070"/>
+    </condition>
+  </condition>
+</extension>
+```
+
+#### Kamailio Configuration
+
+```
+# VVP Trial Test Route
+if ($fU == "1001" && $rU == "71006") {
+    # Add test API key
+    append_hf("X-VVP-API-Key: vvp_test_acme_corp_api_key_12345678901234567890\r\n");
+
+    # Route to VVP signer
+    $du = "sip:127.0.0.1:5070";
+    route(RELAY);
+}
+```
+
+#### Asterisk Configuration
+
+```
+[vvp-trial-test]
+exten => 71006,1,NoOp(VVP Trial Test)
+same => n,Set(CALLERID(num)=+441923311000)
+same => n,Set(PJSIP_HEADER(add,X-VVP-API-Key)=vvp_test_acme_corp_api_key_12345678901234567890)
+same => n,Dial(PJSIP/71006@vvp-signer-local)
+```
+
+#### Testing the Configuration
+
+1. **Register extension 1001** on your softphone
+2. **Dial 71006** (the VVP loopback test extension)
+3. **Expected flow:**
+   - Call goes to SIP signer with API key header
+   - Signer looks up TN `+441923311000` → finds Acme Corp mapping
+   - Returns 302 with VVP headers
+   - Call completes with attestation
+
+#### Verifying the Test Dossier is Working
+
+Check the SIP signer logs for:
+```
+[INFO] INVITE from +441923311000 with API key vvp_test...
+[INFO] TN lookup: +441923311000 → Acme Corp (ETnAllocationSAID...)
+[INFO] 302 Moved Temporarily with X-VVP-Status: VALID
+```
+
+---
 
 ### End-to-End Testing
 

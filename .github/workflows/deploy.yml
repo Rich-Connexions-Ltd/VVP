@@ -19,6 +19,9 @@ jobs:
       witness: ${{ steps.filter.outputs.witness }}
       issuer: ${{ steps.filter.outputs.issuer }}
       verifier: ${{ steps.filter.outputs.verifier }}
+      sip-redirect: ${{ steps.filter.outputs.sip-redirect }}
+      sip-verify: ${{ steps.filter.outputs.sip-verify }}
+      pbx-config: ${{ steps.filter.outputs.pbx-config }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -33,6 +36,14 @@ jobs:
             verifier:
               - 'services/verifier/**'
               - 'common/**'
+            sip-redirect:
+              - 'services/sip-redirect/**'
+              - 'common/**'
+            sip-verify:
+              - 'services/sip-verify/**'
+              - 'common/**'
+            pbx-config:
+              - 'services/pbx/config/**'
 
   # =========================================================================
   # TEST JOBS - Run tests for both services
@@ -127,6 +138,46 @@ jobs:
         with:
           file: services/issuer/coverage.xml
         continue-on-error: true
+
+  # =========================================================================
+  # TEST SIP REDIRECT SERVICE
+  # =========================================================================
+  # Only runs when sip-redirect code changes
+  test-sip-redirect:
+    needs: [changes]
+    if: needs.changes.outputs.sip-redirect == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/sip-redirect
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install libsodium
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsodium-dev
+
+      - name: Install common package
+        working-directory: common
+        run: pip install -e .
+
+      - name: Install dependencies
+        run: |
+          pip install -e .
+          pip install pytest pytest-asyncio
+
+      - name: Run tests
+        run: |
+          pytest tests/ -v
 
   # =========================================================================
   # DEPLOY VERIFIER
@@ -504,3 +555,203 @@ jobs:
             test_output.txt
             errors.txt
           retention-days: 7
+
+  # =========================================================================
+  # DEPLOY SIP REDIRECT SERVICE (PBX VM)
+  # =========================================================================
+  # Deploys to vvp-pbx VM with atomic symlink switch and rollback capability
+  # Only runs when sip-redirect code changes and tests pass
+  deploy-sip-redirect:
+    needs: [changes, test-sip-redirect]
+    if: needs.changes.outputs.sip-redirect == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Package service
+        run: |
+          VERSION="${{ github.sha }}"
+          tar -czf "sip-redirect-${VERSION}.tar.gz" -C services/sip-redirect app/ pyproject.toml
+          echo "Created package: sip-redirect-${VERSION}.tar.gz"
+          ls -la "sip-redirect-${VERSION}.tar.gz"
+
+      - name: Upload to Azure Blob
+        run: |
+          VERSION="${{ github.sha }}"
+          az storage blob upload \
+            --account-name ${{ secrets.AZURE_STORAGE_ACCOUNT }} \
+            --container-name deployments \
+            --name "sip-redirect/sip-redirect-${VERSION}.tar.gz" \
+            --file "sip-redirect-${VERSION}.tar.gz" \
+            --auth-mode login \
+            --overwrite
+
+      - name: Generate short-lived SAS URL (5 min expiry)
+        id: sas
+        run: |
+          VERSION="${{ github.sha }}"
+          EXPIRY=$(date -u -d "+5 minutes" '+%Y-%m-%dT%H:%MZ')
+          SAS_URL=$(az storage blob generate-sas \
+            --account-name ${{ secrets.AZURE_STORAGE_ACCOUNT }} \
+            --container-name deployments \
+            --name "sip-redirect/sip-redirect-${VERSION}.tar.gz" \
+            --permissions r \
+            --expiry "$EXPIRY" \
+            --auth-mode login \
+            --as-user \
+            --full-uri \
+            --output tsv)
+          echo "url=$SAS_URL" >> $GITHUB_OUTPUT
+
+      - name: Deploy with atomic symlink switch
+        run: |
+          VERSION="${{ github.sha }}"
+          SAS_URL="${{ steps.sas.outputs.url }}"
+          az vm run-command invoke \
+            --resource-group VVP --name vvp-pbx \
+            --command-id RunShellScript \
+            --scripts "
+              set -e
+              VERSION='${VERSION}'
+              DEPLOY_DIR=/opt/vvp/sip-redirect
+
+              # Download using SAS URL (no az CLI needed on VM)
+              curl -sSL -o /tmp/sip-redirect-\${VERSION}.tar.gz '${SAS_URL}'
+
+              # Extract to versioned directory
+              mkdir -p \${DEPLOY_DIR}/releases/\${VERSION}
+              tar -xzf /tmp/sip-redirect-\${VERSION}.tar.gz -C \${DEPLOY_DIR}/releases/\${VERSION}
+
+              # Atomic symlink switch
+              ln -sfn \${DEPLOY_DIR}/releases/\${VERSION} \${DEPLOY_DIR}/current.new
+              mv -Tf \${DEPLOY_DIR}/current.new \${DEPLOY_DIR}/current
+
+              # Cleanup old releases (keep last 3)
+              cd \${DEPLOY_DIR}/releases && ls -t | tail -n +4 | xargs -r rm -rf
+
+              # Cleanup temp file
+              rm -f /tmp/sip-redirect-\${VERSION}.tar.gz
+
+              echo 'Deployed version: '\${VERSION}
+            "
+
+      - name: Validate systemd unit and restart
+        run: |
+          az vm run-command invoke \
+            --resource-group VVP --name vvp-pbx \
+            --command-id RunShellScript \
+            --scripts "
+              set -e
+              # Verify unit file exists
+              if [ ! -f /etc/systemd/system/vvp-sip-redirect.service ]; then
+                echo 'ERROR: Systemd unit not found'
+                exit 1
+              fi
+
+              # Reload and restart
+              systemctl daemon-reload
+              systemctl restart vvp-sip-redirect
+
+              # Wait for startup
+              sleep 5
+              systemctl is-active vvp-sip-redirect
+            "
+
+      - name: Verify /status endpoint
+        run: |
+          sleep 10
+          # Use /status endpoint with admin auth
+          STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            --max-time 30 \
+            -H "X-Admin-Key: ${{ secrets.VVP_SIP_STATUS_ADMIN_KEY }}" \
+            http://pbx.rcnx.io:8080/status || echo "000")
+          if [ "$STATUS_CODE" != "200" ]; then
+            echo "::warning::Status endpoint returned $STATUS_CODE (expected 200)"
+          else
+            echo "Status endpoint healthy (HTTP 200)"
+          fi
+
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          az vm run-command invoke \
+            --resource-group VVP --name vvp-pbx \
+            --command-id RunShellScript \
+            --scripts "
+              # List available releases
+              echo 'Available releases:'
+              ls -t /opt/vvp/sip-redirect/releases | head -5
+
+              # Get previous release
+              PREV=\$(ls -t /opt/vvp/sip-redirect/releases | sed -n '2p')
+              if [ -n \"\$PREV\" ]; then
+                ln -sfn /opt/vvp/sip-redirect/releases/\$PREV /opt/vvp/sip-redirect/current
+                systemctl restart vvp-sip-redirect
+                echo 'Rolled back to: '\$PREV
+              else
+                echo 'No previous release available for rollback'
+              fi
+            "
+
+  # =========================================================================
+  # DEPLOY PBX CONFIGURATION
+  # =========================================================================
+  # Deploys dialplan configuration to PBX VM
+  # Only runs when pbx-config changes
+  deploy-pbx-config:
+    needs: [changes]
+    if: needs.changes.outputs.pbx-config == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Backup current dialplan
+        run: |
+          az vm run-command invoke \
+            --resource-group VVP --name vvp-pbx \
+            --command-id RunShellScript \
+            --scripts "
+              BACKUP_DIR=/etc/freeswitch/dialplan/backup
+              mkdir -p \$BACKUP_DIR
+              cp /etc/freeswitch/dialplan/public.xml \$BACKUP_DIR/public.xml.\$(date +%Y%m%d%H%M%S) || true
+              echo 'Backup complete'
+            "
+
+      - name: Deploy dialplan files
+        run: |
+          for file in services/pbx/config/*.xml; do
+            if [ -f "$file" ]; then
+              FILENAME=$(basename "$file")
+              CONTENT=$(base64 -w0 "$file")
+              echo "Deploying $FILENAME..."
+              az vm run-command invoke \
+                --resource-group VVP --name vvp-pbx \
+                --command-id RunShellScript \
+                --scripts "echo '$CONTENT' | base64 -d > /etc/freeswitch/dialplan/public/$FILENAME"
+            fi
+          done
+
+      - name: Reload FreeSWITCH
+        run: |
+          az vm run-command invoke \
+            --resource-group VVP --name vvp-pbx \
+            --command-id RunShellScript \
+            --scripts "fs_cli -x 'reloadxml' && echo 'FreeSWITCH dialplan reloaded'"

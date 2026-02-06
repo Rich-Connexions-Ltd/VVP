@@ -15,8 +15,8 @@ Carrier/Originating PBX
          │ + P-VVP-Identity + P-VVP-Passport
          ▼
 ┌─────────────────────────┐
-│  VVP SIP Verify Service │ UDP/TCP port 5061
-│  (sip-verify)           │
+│  VVP SIP Verify Service │ UDP 5071 (mock) or
+│  (sip-verify)           │ 5061 (production)
 └───────────┬─────────────┘
             │ HTTPS POST /verify-callee
             ▼
@@ -39,20 +39,31 @@ Carrier/Originating PBX
 
 ### Listening Ports
 
+#### Current Mock Deployment (Testing)
+
+| Protocol | Port | Environment Variable |
+|----------|------|---------------------|
+| UDP | 5071 | `VVP_SIP_VERIFY_PORT` |
+
+#### Production Deployment (Future)
+
 | Protocol | Default Port | Environment Variable |
 |----------|--------------|---------------------|
 | UDP | 5061 | `VVP_SIP_VERIFY_PORT` |
 | TCP | 5061 | `VVP_SIP_VERIFY_PORT` |
-| TLS (SIPS) | 5062 | `VVP_SIPS_PORT` (if enabled) |
+| TLS (SIPS) | 5061 | `VVP_SIPS_PORT` (if enabled) |
 
 ### Firewall Rules
 
 Allow inbound traffic from your carrier/SBC source IPs:
 
 ```bash
-# Example UFW rules
+# Example UFW rules (production port)
 ufw allow from <carrier_ip>/32 to any port 5061 proto udp
 ufw allow from <carrier_ip>/32 to any port 5061 proto tcp
+
+# Mock deployment port
+ufw allow from <carrier_ip>/32 to any port 5071 proto udp
 ```
 
 ### Outbound Connectivity
@@ -67,11 +78,18 @@ The service requires HTTPS (443) connectivity to the VVP Verifier API:
 
 The VVP SIP Verification Service is deployed at:
 
-| Service | Host | Port | Protocol |
-|---------|------|------|----------|
-| **SIP Verify (Dev/Mock)** | `pbx.rcnx.io` | 5071 | UDP/TCP |
-| **VVP Verifier API** | `vvp-verifier.rcnx.io` | 443 | HTTPS |
-| **VVP Issuer API** | `vvp-issuer.rcnx.io` | 443 | HTTPS |
+| Service | Host | Port | Protocol | Status |
+|---------|------|------|----------|--------|
+| **SIP Verify (Mock)** | `pbx.rcnx.io` | 5071 | UDP | Mock |
+| **SIP Verify (Production)** | `pbx.rcnx.io` | 5061 | UDP/TLS | Future |
+| **Status Endpoint** | `pbx.rcnx.io` | 8081 | HTTP | Future |
+| **VVP Verifier API** | `vvp-verifier.rcnx.io` | 443 | HTTPS | Deployed |
+| **VVP Issuer API** | `vvp-issuer.rcnx.io` | 443 | HTTPS | Deployed |
+
+> **Note:** The mock verification service on port **5071** is for development testing only.
+> Production deployments will use standard SIP port 5061 (TLS) with a dedicated
+> verification instance. See [DEPLOYMENT.md](DEPLOYMENT.md#port-reference) for
+> the authoritative port mapping.
 
 ### DNS Records
 
@@ -80,8 +98,6 @@ pbx.rcnx.io          → VVP PBX VM (SIP Services)
 vvp-verifier.rcnx.io → Azure Container App (Verifier)
 vvp-issuer.rcnx.io   → Azure Container App (Issuer)
 ```
-
-**Note:** The mock verification service on port 5071 is for development and testing. Production deployments should use a dedicated SIP verification service instance.
 
 ---
 
@@ -96,19 +112,19 @@ vvp-issuer.rcnx.io   → Azure Container App (Issuer)
 
 ### Optional
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `VVP_SIP_VERIFY_HOST` | `0.0.0.0` | Listen address |
-| `VVP_SIP_VERIFY_PORT` | `5061` | Listen port (UDP/TCP) |
-| `VVP_VERIFIER_TIMEOUT` | `5.0` | Verifier API timeout in seconds |
-| `VVP_VERIFIER_API_KEY` | (none) | API key for Verifier authentication |
-| `VVP_FALLBACK_STATUS` | `INDETERMINATE` | Status when Verifier unreachable |
-| `VVP_LOG_LEVEL` | `INFO` | Logging level (DEBUG, INFO, WARNING, ERROR) |
-| `VVP_SIP_TRANSPORT` | `udp` | Transport: `udp`, `tcp`, `both`, `all` |
-| `VVP_SIPS_ENABLED` | `false` | Enable TLS transport |
-| `VVP_SIPS_PORT` | `5062` | TLS listen port |
-| `VVP_SIPS_CERT_FILE` | (none) | Path to TLS certificate |
-| `VVP_SIPS_KEY_FILE` | (none) | Path to TLS private key |
+| Variable | Default | Mock Value | Description |
+|----------|---------|------------|-------------|
+| `VVP_SIP_VERIFY_HOST` | `0.0.0.0` | `0.0.0.0` | Listen address |
+| `VVP_SIP_VERIFY_PORT` | `5061` | `5071` | Listen port (mock uses 5071) |
+| `VVP_VERIFIER_TIMEOUT` | `5.0` | `5.0` | Verifier API timeout in seconds |
+| `VVP_VERIFIER_API_KEY` | (none) | (none) | API key for Verifier authentication |
+| `VVP_FALLBACK_STATUS` | `INDETERMINATE` | `INDETERMINATE` | Status when Verifier unreachable |
+| `VVP_LOG_LEVEL` | `INFO` | `INFO` | Logging level (DEBUG, INFO, WARNING, ERROR) |
+| `VVP_SIP_TRANSPORT` | `udp` | `udp` | Transport: `udp`, `tcp`, `both`, `all` |
+| `VVP_SIPS_ENABLED` | `false` | `false` | Enable TLS transport |
+| `VVP_SIPS_PORT` | `5061` | - | TLS listen port (future) |
+| `VVP_SIPS_CERT_FILE` | (none) | - | Path to TLS certificate |
+| `VVP_SIPS_KEY_FILE` | (none) | - | Path to TLS private key |
 
 ---
 
@@ -410,7 +426,7 @@ Identity: <$(echo 'test.payload.sig' | base64)>;info=https://example.com;alg=EdD
 P-VVP-Identity: $(echo '{"ppt":"vvp","kid":"https://example.com/oobi","evd":"https://example.com/dossier","iat":1704067200}' | base64 -w0)\r
 Content-Length: 0\r
 \r
-" | nc -u pbx.rcnx.io 5061
+" | nc -u pbx.rcnx.io 5071  # Use 5071 for mock, 5061 for production
 ```
 
 ---
