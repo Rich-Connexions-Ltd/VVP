@@ -181,14 +181,27 @@ class DossierCache:
 
             return entry.dossier
 
-    async def put(self, url: str, dossier: CachedDossier) -> None:
-        """Store dossier in cache.
+    async def put(
+        self,
+        url: str,
+        dossier: CachedDossier,
+        *,
+        chain_info: Optional["ChainExtractionResult"] = None,
+        dossier_data: Optional[str] = None,
+        oobi_url: Optional[str] = None,
+    ) -> None:
+        """Store dossier in cache with optional auto-start revocation check.
 
         Builds secondary SAID index and enforces LRU eviction.
+        If chain_info is provided, automatically starts a fire-and-forget
+        background task to check revocation status for all credentials in chain.
 
         Args:
             url: Dossier URL (from VVP-Identity evd field).
             dossier: The cached dossier data.
+            chain_info: Optional chain extraction result for revocation checking.
+            dossier_data: Optional raw dossier CESR for inline TEL parsing.
+            oobi_url: Optional OOBI URL for witness discovery.
         """
         async with self._lock:
             now = time.time()
@@ -219,6 +232,18 @@ class DossierCache:
             log.debug(
                 f"Dossier cached: {url[:50]}... "
                 f"(saids={len(dossier.contained_saids)}, size={len(self._cache)})"
+            )
+
+        # Auto-start background revocation check if chain_info provided
+        if chain_info is not None:
+            # Fire-and-forget (don't await) - uses its own locking internally
+            asyncio.create_task(
+                self.start_background_revocation_check(
+                    url=url,
+                    chain_info=chain_info,
+                    dossier_data=dossier_data,
+                    oobi_url=oobi_url,
+                )
             )
 
     async def invalidate_by_said(self, said: str) -> int:

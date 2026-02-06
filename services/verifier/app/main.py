@@ -902,9 +902,38 @@ async def ui_fetch_dossier(
             raw_text = raw_bytes.decode("utf-8")
             nodes, signatures = parse_dossier(raw_bytes)
 
-            # Store in cache
+            # Build DAG and chain info for caching with auto-revocation check
             dag = build_dag(nodes)
             contained_saids = set(dag.nodes.keys())
+
+            # Build chain_info for background revocation check
+            from app.vvp.acdc.graph import build_credential_graph, build_all_credential_chains
+            from app.vvp.acdc import parse_acdc, ACDC
+
+            dossier_acdcs: Dict[str, ACDC] = {}
+            for node in nodes:
+                try:
+                    acdc_dict = node.raw.copy() if node.raw else {}
+                    acdc_dict["d"] = node.said
+                    acdc_dict["i"] = node.issuer
+                    acdc_dict["s"] = node.schema
+                    if node.attributes:
+                        acdc_dict["a"] = node.attributes
+                    if node.edges:
+                        acdc_dict["e"] = node.edges
+                    acdc = parse_acdc(acdc_dict)
+                    dossier_acdcs[acdc.said] = acdc
+                except Exception as e:
+                    log.debug(f"Skipping credential {node.said[:16]} for chain check: {e}")
+
+            chain_info = None
+            if dossier_acdcs:
+                graph = build_credential_graph(
+                    dossier_acdcs=dossier_acdcs,
+                    trusted_roots=set(TRUSTED_ROOT_AIDS),
+                )
+                chain_info = build_all_credential_chains(graph)
+
             cached_dossier = CachedDossier(
                 dag=dag,
                 raw_content=raw_bytes,
@@ -912,7 +941,15 @@ async def ui_fetch_dossier(
                 content_type="application/json+cesr",
                 contained_saids=contained_saids,
             )
-            await dossier_cache.put(evd_url, cached_dossier)
+
+            # Cache with auto-start background revocation check
+            await dossier_cache.put(
+                evd_url,
+                cached_dossier,
+                chain_info=chain_info,
+                dossier_data=raw_text,
+                oobi_url=kid_url if kid_url else None,
+            )
             log.info(f"UI dossier cached: {evd_url[:50]}... (saids={len(contained_saids)})")
             # Sprint 24: Record fetch success
             evidence_records.append(EvidenceFetchRecord(
@@ -927,104 +964,45 @@ async def ui_fetch_dossier(
 
         fetch_elapsed = time.time() - start_time
 
-        # Start background chain revocation check if not already done
-        # This runs asynchronously and updates the cache when complete
-        if cached and not cached.chain_revocation and not cached.chain_revocation_in_progress:
-            try:
-                from app.vvp.acdc.graph import build_credential_graph, build_all_credential_chains
-                from app.vvp.acdc import parse_acdc, ACDC
-
-                # Build simple credential graph for chain extraction
-                dossier_acdcs: Dict[str, ACDC] = {}
-                for node in nodes:
-                    try:
-                        acdc_dict = node.raw.copy() if node.raw else {}
-                        acdc_dict["d"] = node.said
-                        acdc_dict["i"] = node.issuer
-                        acdc_dict["s"] = node.schema
-                        if node.attributes:
-                            acdc_dict["a"] = node.attributes
-                        if node.edges:
-                            acdc_dict["e"] = node.edges
-                        acdc = parse_acdc(acdc_dict)
-                        dossier_acdcs[acdc.said] = acdc
-                    except Exception as e:
-                        log.debug(f"Skipping credential {node.said[:16]} for chain check: {e}")
-
-                if dossier_acdcs:
-                    graph = build_credential_graph(
-                        dossier_acdcs=dossier_acdcs,
-                        trusted_roots=set(TRUSTED_ROOT_AIDS),
-                    )
-                    chain_info = build_all_credential_chains(graph)
-
-                    # Start background task (fire-and-forget)
-                    await dossier_cache.start_background_revocation_check(
-                        url=evd_url,
-                        chain_info=chain_info,
-                        dossier_data=raw_text,
-                        oobi_url=kid_url if kid_url else None,
-                    )
-            except Exception as e:
-                log.warning(f"Failed to start background chain revocation check: {e}")
-
-        # Note: nodes and signatures already populated from cache or fresh parse above
+        # Note: Background revocation check auto-started by put() above
+        # Read cached revocation status if available (from background check)
+        revocation_cache: dict[str, dict] = {}
+        if cached and cached.chain_revocation:
+            for said, cred_result in cached.chain_revocation.credential_results.items():
+                revocation_cache[said] = {
+                    "status": cred_result.status.value,
+                    "checked_at": cached.chain_revocation.checked_at,
+                    "source": cred_result.source or "cached",
+                    "error": cred_result.error,
+                }
+            # Record TEL check from cache
+            evidence_records.append(EvidenceFetchRecord(
+                source_type="TEL",
+                url="chain-revocation (cached)",
+                status=EvidenceStatus.CACHED if cached.chain_revocation.check_complete else EvidenceStatus.INDETERMINATE,
+                latency_ms=0,
+                cache_hit=True,
+            ))
+        elif cached and cached.chain_revocation_in_progress:
+            # Background check still running - show as pending for all credentials
+            for said in cached.contained_saids:
+                revocation_cache[said] = {
+                    "status": "PENDING",
+                    "checked_at": None,
+                    "source": "background_check",
+                    "error": None,
+                }
+            evidence_records.append(EvidenceFetchRecord(
+                source_type="TEL",
+                url="chain-revocation (pending)",
+                status=EvidenceStatus.INDETERMINATE,
+                latency_ms=0,
+                cache_hit=False,
+                error="Background revocation check in progress",
+            ))
 
         # Collect all SAIDs for edge availability checking
         all_saids = {node.said for node in nodes}
-
-        # Check TEL status for each credential
-        # Uses dossier-embedded TEL first, falls back to live witness query
-        from app.vvp.keri.tel_client import get_tel_client
-        tel_client = get_tel_client()  # Use singleton with configured timeout
-        revocation_cache: dict[str, dict] = {}
-        for node in nodes:
-            tel_start = time.time()
-            try:
-                # Use combined method: dossier parsing + live witness fallback
-                result = await tel_client.check_revocation_with_fallback(
-                    credential_said=node.said,
-                    registry_said=node.raw.get("ri") if node.raw else None,
-                    dossier_data=raw_text,
-                    oobi_url=kid_url if kid_url else None,
-                )
-                tel_latency = int((time.time() - tel_start) * 1000)
-                if result.status != CredentialStatus.UNKNOWN:
-                    revocation_cache[node.said] = {
-                        "status": result.status.value,
-                        "checked_at": datetime.now(timezone.utc).isoformat(),
-                        "source": result.source or "witness",
-                        "error": result.error,
-                    }
-                    # Sprint 24: Record successful TEL check
-                    evidence_records.append(EvidenceFetchRecord(
-                        source_type="TEL",
-                        url=f"tel:{node.said[:16]}... ({result.source})",
-                        status=EvidenceStatus.SUCCESS,
-                        latency_ms=tel_latency,
-                        cache_hit=False,
-                    ))
-                else:
-                    # Sprint 24: Record INDETERMINATE if no TEL data found anywhere
-                    evidence_records.append(EvidenceFetchRecord(
-                        source_type="TEL",
-                        url=f"tel:{node.said[:16]}...",
-                        status=EvidenceStatus.INDETERMINATE,
-                        latency_ms=tel_latency,
-                        cache_hit=False,
-                        error="No TEL data found (dossier or witness)",
-                    ))
-            except Exception as e:
-                log.debug(f"TEL check failed for {node.said[:16]}: {e}")
-                # Sprint 24: Record failed TEL check
-                evidence_records.append(EvidenceFetchRecord(
-                    source_type="TEL",
-                    url=f"tel:{node.said[:16]}...",
-                    status=EvidenceStatus.FAILED,
-                    latency_ms=int((time.time() - tel_start) * 1000),
-                    cache_hit=False,
-                    error=str(e),
-                ))
 
         # Build view-models for each credential (Sprint 21/22 enhanced display)
         credential_vms = []
@@ -1974,11 +1952,13 @@ async def ui_browse_said(
     graph, and returns the same SVG visualization as simple-verify.
     """
     from app.vvp.dossier.parser import parse_dossier
+    from app.vvp.dossier.validator import build_dag
     from app.vvp.acdc import (
         parse_acdc,
         credential_graph_to_dict,
+        ACDC,
     )
-    from app.vvp.acdc.graph import build_credential_graph_with_resolution
+    from app.vvp.acdc.graph import build_credential_graph_with_resolution, build_credential_graph, build_all_credential_chains
     from app.vvp.ui.credential_viewmodel import (
         build_credential_card_vm,
         build_issuer_identity_map_async,
@@ -1990,37 +1970,92 @@ async def ui_browse_said(
     from app.core.config import TRUSTED_ROOT_AIDS
 
     try:
-        # Fetch dossier
-        raw_bytes = await cached_fetch_dossier(evd_url)
-        raw_text = raw_bytes.decode("utf-8")
-        nodes, signatures = parse_dossier(raw_bytes)
+        # Check cache first
+        dossier_cache = get_dossier_cache()
+        cached = await dossier_cache.get(evd_url)
+
+        if cached:
+            # Cache hit - use cached data
+            raw_bytes = cached.raw_content
+            raw_text = raw_bytes.decode("utf-8")
+            nodes = list(cached.dag.nodes.values())
+            log.info(f"browse-said cache hit: {evd_url[:50]}...")
+        else:
+            # Cache miss - fetch and cache with auto-revocation check
+            raw_bytes = await cached_fetch_dossier(evd_url)
+            raw_text = raw_bytes.decode("utf-8")
+            nodes, signatures = parse_dossier(raw_bytes)
+
+            # Build DAG and chain info
+            dag = build_dag(nodes)
+            contained_saids = set(dag.nodes.keys())
+
+            # Build chain_info for background revocation check
+            dossier_acdcs_for_chain: Dict[str, ACDC] = {}
+            for node in nodes:
+                try:
+                    acdc_dict = node.raw.copy() if node.raw else {}
+                    acdc_dict["d"] = node.said
+                    acdc_dict["i"] = node.issuer
+                    acdc_dict["s"] = node.schema
+                    if node.attributes:
+                        acdc_dict["a"] = node.attributes
+                    if node.edges:
+                        acdc_dict["e"] = node.edges
+                    acdc = parse_acdc(acdc_dict)
+                    dossier_acdcs_for_chain[acdc.said] = acdc
+                except Exception as e:
+                    log.debug(f"Skipping credential {node.said[:16]} for chain check: {e}")
+
+            chain_info = None
+            if dossier_acdcs_for_chain:
+                graph_for_chain = build_credential_graph(
+                    dossier_acdcs=dossier_acdcs_for_chain,
+                    trusted_roots=set(TRUSTED_ROOT_AIDS),
+                )
+                chain_info = build_all_credential_chains(graph_for_chain)
+
+            cached_dossier = CachedDossier(
+                dag=dag,
+                raw_content=raw_bytes,
+                fetch_timestamp=time.time(),
+                content_type="application/json+cesr",
+                contained_saids=contained_saids,
+            )
+
+            # Cache with auto-start background revocation check
+            await dossier_cache.put(
+                evd_url,
+                cached_dossier,
+                chain_info=chain_info,
+                dossier_data=raw_text,
+                oobi_url=evd_url,
+            )
+            cached = cached_dossier
+            log.info(f"browse-said cached: {evd_url[:50]}... (saids={len(contained_saids)})")
+
+        # Read revocation status from cache if available
+        revocation_cache: dict[str, dict] = {}
+        if cached and cached.chain_revocation:
+            for said, cred_result in cached.chain_revocation.credential_results.items():
+                revocation_cache[said] = {
+                    "status": cred_result.status.value,
+                    "checked_at": cached.chain_revocation.checked_at,
+                    "source": cred_result.source or "cached",
+                    "error": cred_result.error,
+                }
+        elif cached and cached.chain_revocation_in_progress:
+            # Background check still running - show as pending
+            for said in cached.contained_saids:
+                revocation_cache[said] = {
+                    "status": "PENDING",
+                    "checked_at": None,
+                    "source": "background_check",
+                    "error": None,
+                }
 
         # Collect all SAIDs for edge availability checking
         all_saids = {node.said for node in nodes}
-
-        # Check TEL status for each credential
-        # Uses dossier-embedded TEL first, falls back to live witness query
-        from app.vvp.keri.tel_client import get_tel_client
-        tel_client = get_tel_client()  # Use singleton with configured timeout
-        revocation_cache: dict[str, dict] = {}
-        for node in nodes:
-            try:
-                # Use combined method: dossier parsing + live witness fallback
-                result = await tel_client.check_revocation_with_fallback(
-                    credential_said=node.said,
-                    registry_said=node.raw.get("ri") if node.raw else None,
-                    dossier_data=raw_text,
-                    oobi_url=evd_url,  # Use dossier URL for witness discovery
-                )
-                if result.status != CredentialStatus.UNKNOWN:
-                    revocation_cache[node.said] = {
-                        "status": result.status.value,
-                        "checked_at": datetime.now(timezone.utc).isoformat(),
-                        "source": result.source or "witness",
-                        "error": result.error,
-                    }
-            except Exception as e:
-                log.debug(f"TEL check failed for {node.said[:16]}: {e}")
 
         # Parse all ACDCs
         dossier_acdcs = {}
@@ -2239,34 +2274,93 @@ async def ui_jwt_explore(
                 {"request": request, "error": f"Failed to parse JWT: {e}"},
             )
 
-        # Step 2: Fetch dossier and build graph (reuse browse-said logic)
-        raw_bytes = await cached_fetch_dossier(evd_url)
-        raw_text = raw_bytes.decode("utf-8")
-        nodes, signatures = parse_dossier(raw_bytes)
+        # Step 2: Check cache first, then fetch if needed
+        from app.vvp.dossier.validator import build_dag
+        from app.vvp.acdc import ACDC
+        from app.vvp.acdc.graph import build_credential_graph, build_all_credential_chains
+
+        dossier_cache = get_dossier_cache()
+        cached = await dossier_cache.get(evd_url)
+
+        if cached:
+            # Cache hit
+            raw_bytes = cached.raw_content
+            raw_text = raw_bytes.decode("utf-8")
+            nodes = list(cached.dag.nodes.values())
+            log.info(f"jwt-explore cache hit: {evd_url[:50]}...")
+        else:
+            # Cache miss - fetch and cache with auto-revocation
+            raw_bytes = await cached_fetch_dossier(evd_url)
+            raw_text = raw_bytes.decode("utf-8")
+            nodes, signatures = parse_dossier(raw_bytes)
+
+            dag = build_dag(nodes)
+            contained_saids = set(dag.nodes.keys())
+
+            # Build chain_info for background revocation check
+            dossier_acdcs_for_chain: Dict[str, ACDC] = {}
+            for node in nodes:
+                try:
+                    acdc_dict = node.raw.copy() if node.raw else {}
+                    acdc_dict["d"] = node.said
+                    acdc_dict["i"] = node.issuer
+                    acdc_dict["s"] = node.schema
+                    if node.attributes:
+                        acdc_dict["a"] = node.attributes
+                    if node.edges:
+                        acdc_dict["e"] = node.edges
+                    acdc = parse_acdc(acdc_dict)
+                    dossier_acdcs_for_chain[acdc.said] = acdc
+                except Exception as e:
+                    log.debug(f"Skipping credential {node.said[:16]} for chain check: {e}")
+
+            chain_info = None
+            if dossier_acdcs_for_chain:
+                graph_for_chain = build_credential_graph(
+                    dossier_acdcs=dossier_acdcs_for_chain,
+                    trusted_roots=set(TRUSTED_ROOT_AIDS),
+                )
+                chain_info = build_all_credential_chains(graph_for_chain)
+
+            cached_dossier = CachedDossier(
+                dag=dag,
+                raw_content=raw_bytes,
+                fetch_timestamp=time.time(),
+                content_type="application/json+cesr",
+                contained_saids=contained_saids,
+            )
+
+            await dossier_cache.put(
+                evd_url,
+                cached_dossier,
+                chain_info=chain_info,
+                dossier_data=raw_text,
+                oobi_url=evd_url,
+            )
+            cached = cached_dossier
+            log.info(f"jwt-explore cached: {evd_url[:50]}... (saids={len(contained_saids)})")
+
+        # Read revocation status from cache if available
+        revocation_cache: dict[str, dict] = {}
+        if cached and cached.chain_revocation:
+            for said, cred_result in cached.chain_revocation.credential_results.items():
+                revocation_cache[said] = {
+                    "status": cred_result.status.value,
+                    "checked_at": cached.chain_revocation.checked_at,
+                    "source": cred_result.source or "cached",
+                    "error": cred_result.error,
+                }
+        elif cached and cached.chain_revocation_in_progress:
+            # Background check still running - show as pending
+            for said in cached.contained_saids:
+                revocation_cache[said] = {
+                    "status": "PENDING",
+                    "checked_at": None,
+                    "source": "background_check",
+                    "error": None,
+                }
 
         all_saids = {node.said for node in nodes}
-
-        # Check TEL status for each credential
-        from app.vvp.keri.tel_client import get_tel_client
-        tel_client = get_tel_client()
-        revocation_cache: dict[str, dict] = {}
-        for node in nodes:
-            try:
-                result = await tel_client.check_revocation_with_fallback(
-                    credential_said=node.said,
-                    registry_said=node.raw.get("ri") if node.raw else None,
-                    dossier_data=raw_text,
-                    oobi_url=evd_url,
-                )
-                if result.status != CredentialStatus.UNKNOWN:
-                    revocation_cache[node.said] = {
-                        "status": result.status.value,
-                        "checked_at": datetime.now(timezone.utc).isoformat(),
-                        "source": result.source or "witness",
-                        "error": result.error,
-                    }
-            except Exception as e:
-                log.debug(f"TEL check failed for {node.said[:16]}: {e}")
 
         # Parse ACDCs
         dossier_acdcs = {}
