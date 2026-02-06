@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  VVP Diagnostic Extensions
+  Location: /etc/freeswitch/dialplan/default/00_vvp_diagnostics.xml
+
+  Test extensions for debugging VVP header propagation:
+  - 7777: Dump all VVP headers to log
+  - 7778: Inject test VVP headers and bridge to extension 1001
+-->
+<include>
+  <!-- Extension 7777: Dump all SIP and VVP headers to log -->
+  <extension name="vvp-dump-headers">
+    <condition field="destination_number" expression="^7777$">
+      <action application="answer"/>
+      <action application="log" data="INFO ==============================================="/>
+      <action application="log" data="INFO [VVP] DIAGNOSTIC DUMP - All VVP Headers"/>
+      <action application="log" data="INFO ==============================================="/>
+
+      <!-- Standard STIR Identity header -->
+      <action application="log" data="INFO [VVP] Identity (STIR): ${sip_h_Identity}"/>
+
+      <!-- VVP custom headers -->
+      <action application="log" data="INFO [VVP] P-VVP-Identity: ${sip_h_P-VVP-Identity}"/>
+      <action application="log" data="INFO [VVP] P-VVP-Passport: ${sip_h_P-VVP-Passport}"/>
+      <action application="log" data="INFO [VVP] X-VVP-Brand-Name: ${sip_h_X-VVP-Brand-Name}"/>
+      <action application="log" data="INFO [VVP] X-VVP-Brand-Logo: ${sip_h_X-VVP-Brand-Logo}"/>
+      <action application="log" data="INFO [VVP] X-VVP-Status: ${sip_h_X-VVP-Status}"/>
+      <action application="log" data="INFO [VVP] X-VVP-LEI: ${sip_h_X-VVP-LEI}"/>
+      <action application="log" data="INFO [VVP] X-VVP-Error: ${sip_h_X-VVP-Error}"/>
+
+      <!-- Channel variables (if extracted) -->
+      <action application="log" data="INFO -----------------------------------------------"/>
+      <action application="log" data="INFO [VVP] Channel Variables:"/>
+      <action application="log" data="INFO [VVP]   vvp_brand_name = ${vvp_brand_name}"/>
+      <action application="log" data="INFO [VVP]   vvp_brand_logo = ${vvp_brand_logo}"/>
+      <action application="log" data="INFO [VVP]   vvp_status = ${vvp_status}"/>
+      <action application="log" data="INFO [VVP]   vvp_identity = ${vvp_identity}"/>
+      <action application="log" data="INFO [VVP]   vvp_passport = ${vvp_passport}"/>
+      <action application="log" data="INFO [VVP]   vvp_stir_identity = ${vvp_stir_identity}"/>
+      <action application="log" data="INFO ==============================================="/>
+
+      <!-- Play confirmation and hang up -->
+      <action application="playback" data="ivr/ivr-call_being_transferred.wav"/>
+      <action application="sleep" data="500"/>
+      <action application="hangup"/>
+    </condition>
+  </extension>
+
+  <!-- Extension 7778: Inject test VVP headers and bridge to 1001 -->
+  <extension name="vvp-test-inject">
+    <condition field="destination_number" expression="^7778$">
+      <action application="log" data="INFO [VVP] Test injection: Setting mock VVP headers"/>
+
+      <!-- Set outbound SIP headers (for next hop) -->
+      <action application="set" data="sip_h_X-VVP-Brand-Name=Test Diagnostic Corp"/>
+      <action application="set" data="sip_h_X-VVP-Brand-Logo=https://example.com/test-logo.png"/>
+      <action application="set" data="sip_h_X-VVP-Status=VALID"/>
+
+      <!-- Set channel variables -->
+      <action application="set" data="vvp_brand_name=Test Diagnostic Corp"/>
+      <action application="set" data="vvp_brand_logo=https://example.com/test-logo.png"/>
+      <action application="set" data="vvp_status=VALID"/>
+
+      <!-- Export to bridged legs -->
+      <action application="export" data="nolocal:vvp_brand_name=${vvp_brand_name}"/>
+      <action application="export" data="nolocal:vvp_brand_logo=${vvp_brand_logo}"/>
+      <action application="export" data="nolocal:vvp_status=${vvp_status}"/>
+
+      <action application="log" data="INFO [VVP] Bridging to Verto client at 1001"/>
+
+      <!-- Bridge to extension 1001 (typically a Verto/WebRTC client) -->
+      <action application="bridge" data="${verto_contact(1001@${domain_name})}"/>
+    </condition>
+  </extension>
+</include>

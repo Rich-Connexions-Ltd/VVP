@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  VVP Verto/WebRTC Test Extension
+  Location: /etc/freeswitch/dialplan/default/02_vvp_verto_test.xml
+
+  Extension 8888: C-leg validation - test VVP variable propagation to Verto
+
+  This extension simulates receiving a redirected call with VVP headers
+  and bridges to a Verto/WebRTC client. Used to verify that:
+  1. Channel variables are set correctly
+  2. 'export nolocal:' propagates variables to the C-leg
+  3. Verto.js client receives variables in d.params
+
+  Test procedure:
+  1. Register WebRTC client (SaraPhone) as extension 1001
+  2. Call 8888 from softphone or fs_cli
+  3. Inspect Verto JSON-RPC message in browser dev tools
+  4. Verify vvp_* variables present in call params
+-->
+<include>
+  <extension name="vvp-verto-bridge-test">
+    <condition field="destination_number" expression="^8888$">
+      <action application="log" data="INFO [VVP] C-leg test: Setting VVP variables for Verto bridge"/>
+
+      <!-- Simulate VVP headers received from redirect -->
+      <action application="set" data="vvp_brand_name=Test Corp"/>
+      <action application="set" data="vvp_brand_logo=https://example.com/logo.png"/>
+      <action application="set" data="vvp_status=VALID"/>
+
+      <!-- Export to C-leg (Verto/WebRTC client) -->
+      <action application="export" data="nolocal:vvp_brand_name=${vvp_brand_name}"/>
+      <action application="export" data="nolocal:vvp_brand_logo=${vvp_brand_logo}"/>
+      <action application="export" data="nolocal:vvp_status=${vvp_status}"/>
+
+      <action application="log" data="INFO [VVP] Variables set: brand_name=${vvp_brand_name}, status=${vvp_status}"/>
+      <action application="log" data="INFO [VVP] Bridging to Verto client at 1001@${domain_name}"/>
+
+      <!-- Bridge to Verto client -->
+      <!-- Note: ${domain_name} is set by FusionPBX; adjust if needed -->
+      <action application="bridge" data="${verto_contact(1001@${domain_name})}"/>
+    </condition>
+  </extension>
+
+  <!-- Alternative test extensions for different VVP statuses -->
+
+  <extension name="vvp-verto-test-invalid">
+    <condition field="destination_number" expression="^8881$">
+      <action application="set" data="vvp_brand_name=Unknown Caller"/>
+      <action application="set" data="vvp_status=INVALID"/>
+      <action application="export" data="nolocal:vvp_brand_name=${vvp_brand_name}"/>
+      <action application="export" data="nolocal:vvp_status=${vvp_status}"/>
+      <action application="log" data="INFO [VVP] C-leg test (INVALID): ${vvp_status}"/>
+      <action application="bridge" data="${verto_contact(1001@${domain_name})}"/>
+    </condition>
+  </extension>
+
+  <extension name="vvp-verto-test-indeterminate">
+    <condition field="destination_number" expression="^8882$">
+      <action application="set" data="vvp_brand_name=Pending Verification"/>
+      <action application="set" data="vvp_status=INDETERMINATE"/>
+      <action application="export" data="nolocal:vvp_brand_name=${vvp_brand_name}"/>
+      <action application="export" data="nolocal:vvp_status=${vvp_status}"/>
+      <action application="log" data="INFO [VVP] C-leg test (INDETERMINATE): ${vvp_status}"/>
+      <action application="bridge" data="${verto_contact(1001@${domain_name})}"/>
+    </condition>
+  </extension>
+</include>

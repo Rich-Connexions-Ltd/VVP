@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  VVP Header Extraction Dialplan
+  Location: /etc/freeswitch/dialplan/public/00_vvp_headers.xml
+
+  This extension extracts X-VVP-* headers from incoming SIP messages
+  and sets them as channel variables. The 'export nolocal:' directive
+  propagates variables to bridged call legs (B-leg, C-leg).
+
+  Use continue="true" to allow processing to continue to other extensions.
+-->
+<include>
+  <extension name="vvp-header-extraction" continue="true">
+    <condition field="destination_number" expression="^(.*)$">
+      <!-- Extract VVP headers from SIP message -->
+      <action application="set" data="vvp_brand_name=${sip_h_X-VVP-Brand-Name}"/>
+      <action application="set" data="vvp_brand_logo=${sip_h_X-VVP-Brand-Logo}"/>
+      <action application="set" data="vvp_status=${sip_h_X-VVP-Status}"/>
+      <action application="set" data="vvp_identity=${sip_h_P-VVP-Identity}"/>
+      <action application="set" data="vvp_passport=${sip_h_P-VVP-Passport}"/>
+      <action application="set" data="vvp_stir_identity=${sip_h_Identity}"/>
+
+      <!-- Export to bridged legs (nolocal: prevents local echo) -->
+      <action application="export" data="nolocal:vvp_brand_name=${vvp_brand_name}"/>
+      <action application="export" data="nolocal:vvp_brand_logo=${vvp_brand_logo}"/>
+      <action application="export" data="nolocal:vvp_status=${vvp_status}"/>
+      <action application="export" data="nolocal:vvp_identity=${vvp_identity}"/>
+      <action application="export" data="nolocal:vvp_passport=${vvp_passport}"/>
+      <action application="export" data="nolocal:vvp_stir_identity=${vvp_stir_identity}"/>
+
+      <!-- Log for debugging -->
+      <action application="log" data="INFO [VVP] Headers extracted: brand_name=${vvp_brand_name}, status=${vvp_status}"/>
+    </condition>
+  </extension>
+</include>

@@ -7909,3 +7909,125 @@ services/issuer/tests/
 - Code Review #1: CHANGES_REQUESTED (5 issues)
 - Code Review #2: CHANGES_REQUESTED (1 issue)
 - Code Review #3: APPROVED
+
+---
+
+# Sprint 43: PBX Test Infrastructure (Phases 1-3 Complete)
+
+## Overview
+
+Deployed FusionPBX (FreeSWITCH) on Azure to test VVP SIP header propagation to WebRTC clients.
+
+**Key Finding:** FreeSWITCH's Verto.js uses a `verto.rtc` endpoint that cannot receive incoming calls (CHAN_NOT_IMPLEMENTED). Solution was to use SIP.js with standard SIP over WebSocket on port 7443.
+
+## Architecture
+
+```
+Twilio PSTN ──UDP:5080──> FreeSWITCH (external profile)
+                              │
+                         [public.xml dialplan]
+                         - Sets VVP headers (sip_h_X-VVP-*)
+                         - bridge user/1001@pbx.rcnx.io
+                              │
+                              ▼
+                         FreeSWITCH (internal profile)
+                              │
+                         WSS:7443
+                              │
+                              ▼
+                         SIP.js Client (browser)
+                         - Extracts X-VVP-* headers from INVITE
+                         - Displays brand name, logo, status
+```
+
+## Key Technical Decisions
+
+### 1. SIP.js vs Verto.js
+
+| Feature | Verto.js | SIP.js |
+|---------|----------|--------|
+| Protocol | JSON-RPC | Standard SIP |
+| Port | 8081/8082 | **7443** |
+| Endpoint | `verto.rtc` | `user/1001` |
+| Incoming calls | **NOT SUPPORTED** | **SUPPORTED** |
+
+Verto was designed for browser-to-PBX calls, not PBX-to-browser.
+
+### 2. Dial String Fix
+
+Extension 1001's dial_string was using `verto_contact()`:
+```
+${verto_contact(${dialed_user}@${dialed_domain})}
+```
+
+Changed to `sofia_contact()`:
+```
+{sip_invite_domain=${dialed_domain}}${sofia_contact(${dialed_user}@${dialed_domain})}
+```
+
+### 3. SSL Certificate for WSS
+
+FreeSWITCH was using self-signed certificate for WSS on port 7443. Browsers rejected it.
+
+Fixed by configuring Let's Encrypt certificate:
+```bash
+cat /etc/letsencrypt/live/pbx.rcnx.io/fullchain.pem \
+    /etc/letsencrypt/live/pbx.rcnx.io/privkey.pem > /etc/freeswitch/tls/wss.pem
+```
+
+### 4. VVP Header Propagation
+
+Dialplan sets headers as `sip_h_X-VVP-*` variables:
+```xml
+<action application="set" data="sip_h_X-VVP-Brand-Name=${vvp_brand_name}"/>
+<action application="set" data="sip_h_X-VVP-Status=${vvp_status}"/>
+<action application="export" data="nolocal:sip_h_X-VVP-Brand-Name=${vvp_brand_name}"/>
+```
+
+SIP.js receives these as standard SIP headers in the INVITE.
+
+## Files Created/Modified
+
+### New Files
+- `services/pbx/webrtc/vvp-phone/sip-phone.html` - SIP.js WebRTC phone
+- `services/pbx/webrtc/vvp-phone/js/vvp-display.js` - VVP header display module
+- `services/pbx/config/public-sip.xml` - FreeSWITCH dialplan
+- `services/pbx/config/SETUP_SIP_WEBRTC.md` - Setup documentation
+
+### Server Configuration (via Azure CLI)
+- `/etc/freeswitch/dialplan/public.xml` - VVP header injection dialplan
+- `/etc/freeswitch/tls/wss.pem` - Let's Encrypt certificate for WSS
+- `v_extensions.dial_string` - Changed to `sofia_contact()`
+- `v_sip_profile_settings` - WSS binding on port 7443
+
+## Validation Results
+
+Browser console log on incoming PSTN call:
+```
+Header: X-Vvp-Brand-Name = Test Corporation Ltd
+Header: X-Vvp-Brand-Logo = https://example.com/logo.png
+Header: X-Vvp-Status = VALID
+VVP Data: {"brand_name":"Test Corporation Ltd","brand_logo":"https://example.com/logo.png","status":"VALID"}
+```
+
+## Exit Criteria Status
+
+- [x] FusionPBX accessible at https://pbx.rcnx.io
+- [x] SIP registration working (port 5080 for Twilio, port 7443 WSS for WebRTC)
+- [x] Dialplan injects X-VVP-* headers into SIP INVITE
+- [x] VVP headers propagate to WebRTC client via SIP.js
+- [x] WebRTC client extracts and displays VVP data
+- [x] Inbound PSTN call rings WebRTC client
+- [ ] End-to-end with real VVP SIP Redirect (requires Sprint 42)
+- [ ] All three VVP status colors (requires UI work)
+
+## Remaining Work (Phase 4)
+
+Phase 4 requires Sprint 42 (SIP Redirect Signing Service) to be complete:
+- Connect to real VVP SIP Redirect instead of hardcoded test values
+- Configure TN mappings in issuer
+- Test VALID/INVALID/INDETERMINATE status rendering
+
+## Date Completed
+
+2026-02-05 (Phases 1-3)

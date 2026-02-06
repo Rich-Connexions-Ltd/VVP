@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  VVP SIP Redirect Gateway Configuration
+  Location: /etc/freeswitch/sip_profiles/external/vvp_redirect.xml
+
+  This gateway points to the VVP SIP Redirect service (Sprint 42).
+  For Phase 2 validation, point to the mock redirect server on localhost:5070.
+  For Phase 4 production, point to the actual VVP SIP Redirect VM.
+
+  Usage:
+    fs_cli -x "originate sofia/gateway/vvp-redirect/+15551234567 &park()"
+-->
+<include>
+  <gateway name="vvp-redirect">
+    <!--
+      Phase 2 Testing: Use localhost mock server
+      <param name="realm" value="localhost"/>
+      <param name="proxy" value="localhost:5070"/>
+    -->
+
+    <!-- Phase 4 Production: Use VVP SIP Redirect service -->
+    <param name="realm" value="sip-redirect.rcnx.io"/>
+    <param name="proxy" value="sip-redirect.rcnx.io:5060"/>
+
+    <!-- No registration needed - this is an outbound-only gateway -->
+    <param name="register" value="false"/>
+
+    <!-- Authentication (if required by SIP redirect service) -->
+    <!-- <param name="username" value="vvp-pbx"/> -->
+    <!-- <param name="password" value="your-password-here"/> -->
+
+    <!-- Caller ID -->
+    <param name="caller-id-in-from" value="true"/>
+
+    <!-- Retry settings -->
+    <param name="retry-seconds" value="30"/>
+    <param name="ping" value="30"/>
+  </gateway>
+</include>

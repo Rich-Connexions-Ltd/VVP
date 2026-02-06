@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  VVP Loopback Target Extension
+  Location: /etc/freeswitch/dialplan/default/01_vvp_loopback.xml
+
+  Extension 9999: Loopback target for B-leg validation
+  Used to verify that VVP headers are preserved on redirected INVITEs.
+
+  Test flow:
+  1. Originate call through vvp-redirect gateway
+  2. Mock server returns 302 with X-VVP-* headers
+  3. FreeSWITCH follows redirect to 9999
+  4. This extension logs the received VVP variables
+-->
+<include>
+  <extension name="vvp-loopback-target">
+    <condition field="destination_number" expression="^9999$">
+      <action application="answer"/>
+
+      <action application="log" data="INFO ==============================================="/>
+      <action application="log" data="INFO [VVP] Loopback target (9999) - B-leg received"/>
+      <action application="log" data="INFO ==============================================="/>
+
+      <!-- Log VVP channel variables from the redirected call -->
+      <action application="log" data="INFO [VVP] B-leg variables:"/>
+      <action application="log" data="INFO [VVP]   vvp_brand_name = ${vvp_brand_name}"/>
+      <action application="log" data="INFO [VVP]   vvp_brand_logo = ${vvp_brand_logo}"/>
+      <action application="log" data="INFO [VVP]   vvp_status = ${vvp_status}"/>
+
+      <!-- Also check raw SIP headers (in case extraction failed) -->
+      <action application="log" data="INFO [VVP] B-leg raw headers:"/>
+      <action application="log" data="INFO [VVP]   sip_h_X-VVP-Brand-Name = ${sip_h_X-VVP-Brand-Name}"/>
+      <action application="log" data="INFO [VVP]   sip_h_X-VVP-Status = ${sip_h_X-VVP-Status}"/>
+      <action application="log" data="INFO ==============================================="/>
+
+      <!-- Echo audio back for testing, or just sleep -->
+      <action application="echo"/>
+    </condition>
+  </extension>
+</include>

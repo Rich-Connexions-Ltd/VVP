@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VVP Phone - Verified Voice Protocol</title>
+    <link rel="stylesheet" href="css/vvp-theme.css">
+    <style>
+        /* Base styles */
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: var(--vvp-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .phone-container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            width: 100%;
+            max-width: 400px;
+            overflow: hidden;
+        }
+
+        .phone-header {
+            background: #2a9d8f;
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .phone-header h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+
+        .phone-header p {
+            font-size: 0.875rem;
+            opacity: 0.9;
+            margin-top: 5px;
+        }
+
+        .phone-body {
+            padding: 20px;
+        }
+
+        /* VVP Display Container */
+        #vvp-display-container {
+            margin-bottom: 20px;
+            min-height: 200px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .vvp-placeholder {
+            text-align: center;
+            color: #999;
+            padding: 40px;
+        }
+
+        .vvp-placeholder svg {
+            width: 60px;
+            height: 60px;
+            margin-bottom: 10px;
+            opacity: 0.5;
+        }
+
+        /* Connection Status */
+        #connection-status {
+            text-align: center;
+            padding: 10px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            font-size: 0.875rem;
+        }
+
+        #connection-status.connected {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        #connection-status.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        #connection-status.connecting {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        /* Login Form */
+        .login-form {
+            display: none;
+        }
+
+        .login-form.active {
+            display: block;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: #333;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 1rem;
+            transition: border-color 0.2s;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #2a9d8f;
+        }
+
+        /* Buttons */
+        .btn {
+            display: inline-block;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            width: 100%;
+        }
+
+        .btn-primary {
+            background: #2a9d8f;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #21867a;
+        }
+
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #c82333;
+        }
+
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #218838;
+        }
+
+        /* Call Controls */
+        .call-controls {
+            display: none;
+            gap: 10px;
+        }
+
+        .call-controls.active {
+            display: flex;
+        }
+
+        .call-controls .btn {
+            flex: 1;
+        }
+
+        /* Audio elements */
+        #remote-audio, #local-audio {
+            display: none;
+        }
+
+        /* Debug panel */
+        #debug-panel {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 0.75rem;
+            max-height: 200px;
+            overflow-y: auto;
+            display: none;
+        }
+
+        #debug-panel.active {
+            display: block;
+        }
+
+        .debug-entry {
+            padding: 2px 0;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .debug-entry.error {
+            color: #dc3545;
+        }
+
+        .debug-entry.info {
+            color: #17a2b8;
+        }
+
+        /* Footer */
+        .phone-footer {
+            padding: 15px;
+            text-align: center;
+            background: #f8f9fa;
+            border-top: 1px solid #e9ecef;
+        }
+
+        .phone-footer a {
+            color: #2a9d8f;
+            text-decoration: none;
+        }
+
+        .phone-footer label {
+            font-size: 0.875rem;
+            color: #666;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div class="phone-container">
+        <div class="phone-header">
+            <h1>VVP Phone</h1>
+            <p>Verified Voice Protocol Demo</p>
+        </div>
+
+        <div class="phone-body">
+            <!-- Connection Status -->
+            <div id="connection-status" class="disconnected">
+                Disconnected
+            </div>
+
+            <!-- VVP Caller Display -->
+            <div id="vvp-display-container">
+                <div class="vvp-placeholder">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/>
+                    </svg>
+                    <p>Waiting for incoming call...</p>
+                </div>
+            </div>
+
+            <!-- Login Form -->
+            <div class="login-form active" id="login-form">
+                <div class="form-group">
+                    <label for="server">WebSocket Server</label>
+                    <input type="text" id="server" placeholder="wss://pbx.rcnx.io:8082" value="wss://pbx.rcnx.io:8082">
+                </div>
+                <div class="form-group">
+                    <label for="extension">Extension</label>
+                    <input type="text" id="extension" placeholder="1001" value="1001">
+                </div>
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" placeholder="Password">
+                </div>
+                <button class="btn btn-primary" id="connect-btn">Connect</button>
+            </div>
+
+            <!-- Dial Pad (shown when connected, no active call) -->
+            <div class="dial-section" id="dial-section">
+                <div class="form-group">
+                    <label for="dial-number">Dial Number</label>
+                    <input type="text" id="dial-number" placeholder="1002 or 8888">
+                </div>
+                <button class="btn btn-primary" id="dial-btn">Dial</button>
+            </div>
+
+            <!-- Call Controls -->
+            <div class="call-controls" id="call-controls">
+                <button class="btn btn-success" id="answer-btn">Answer</button>
+                <button class="btn btn-danger" id="hangup-btn">Hang Up</button>
+            </div>
+        </div>
+
+        <div class="phone-footer">
+            <label>
+                <input type="checkbox" id="debug-toggle"> Show Debug Log
+            </label>
+        </div>
+
+        <!-- Debug Panel -->
+        <div id="debug-panel"></div>
+    </div>
+
+    <!-- Audio elements -->
+    <audio id="remote-audio" autoplay></audio>
+    <audio id="local-audio" muted></audio>
+
+    <!-- Verto.js dependencies -->
+    <script src="js/jquery.min.js"></script>
+    <script src="js/jquery.json.shim.js"></script>
+    <script src="js/jquery.jsonrpcclient.js"></script>
+    <script src="js/jquery.FSRTC.js"></script>
+    <script src="js/verto.min.js"></script>
+
+    <!-- VVP Display Module -->
+    <script src="js/vvp-display.js"></script>
+
+    <!-- Main Application -->
+    <script>
+        // Debug logging
+        const debugPanel = document.getElementById('debug-panel');
+        const debugToggle = document.getElementById('debug-toggle');
+
+        function log(message, type = 'info') {
+            const entry = document.createElement('div');
+            entry.className = `debug-entry ${type}`;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            debugPanel.appendChild(entry);
+            debugPanel.scrollTop = debugPanel.scrollHeight;
+            console.log(`[VVP Phone] ${message}`);
+        }
+
+        debugToggle.addEventListener('change', (e) => {
+            debugPanel.classList.toggle('active', e.target.checked);
+        });
+
+        // UI Elements
+        const statusEl = document.getElementById('connection-status');
+        const loginForm = document.getElementById('login-form');
+        const callControls = document.getElementById('call-controls');
+        const connectBtn = document.getElementById('connect-btn');
+        const answerBtn = document.getElementById('answer-btn');
+        const hangupBtn = document.getElementById('hangup-btn');
+
+        // Verto state
+        let verto = null;
+        let currentCall = null;
+
+        function updateStatus(status, className) {
+            statusEl.textContent = status;
+            statusEl.className = className;
+        }
+
+        function showLogin() {
+            loginForm.classList.add('active');
+            callControls.classList.remove('active');
+        }
+
+        function showCallControls() {
+            loginForm.classList.remove('active');
+            callControls.classList.add('active');
+        }
+
+        // Connect to Verto
+        connectBtn.addEventListener('click', () => {
+            const server = document.getElementById('server').value;
+            const extension = document.getElementById('extension').value;
+            const password = document.getElementById('password').value;
+
+            if (!server || !extension || !password) {
+                alert('Please fill in all fields');
+                return;
+            }
+
+            updateStatus('Connecting...', 'connecting');
+            log(`Connecting to ${server} as ${extension}`);
+
+            try {
+                verto = new $.verto({
+                    login: extension + '@' + new URL(server).hostname,
+                    passwd: password,
+                    socketUrl: server,
+                    tag: 'remote-audio',
+                    localTag: 'local-audio',
+                    iceServers: true,
+                    deviceParams: {
+                        useMic: true,
+                        useSpeak: true
+                    },
+                    audioParams: {
+                        googEchoCancellation: true,
+                        googNoiseSuppression: true,
+                        googHighpassFilter: true
+                    }
+                }, {
+                    onWSLogin: (verto, success) => {
+                        if (success) {
+                            log('WebSocket login successful');
+                            updateStatus('Connected', 'connected');
+                            VVPDisplay.init(verto, 'vvp-display-container');
+                        } else {
+                            log('WebSocket login failed', 'error');
+                            updateStatus('Login failed', 'disconnected');
+                        }
+                    },
+                    onWSClose: (verto, success) => {
+                        log('WebSocket closed');
+                        updateStatus('Disconnected', 'disconnected');
+                        showLogin();
+                    },
+                    onDialogState: (dialog) => {
+                        log(`Call state: ${dialog.state.name}`);
+
+                        switch (dialog.state.name) {
+                            case 'ringing':
+                                currentCall = dialog;
+                                log('Incoming call - extracting VVP data');
+
+                                // Extract and display VVP data
+                                const vvpData = VVPDisplay.extractVVPData(dialog);
+                                log(`VVP Data: ${JSON.stringify(vvpData)}`);
+                                VVPDisplay.updateDisplay(vvpData, 'vvp-display-container');
+
+                                showCallControls();
+                                break;
+
+                            case 'active':
+                                log('Call active');
+                                break;
+
+                            case 'hangup':
+                            case 'destroy':
+                                log('Call ended');
+                                currentCall = null;
+                                VVPDisplay.hideDisplay();
+                                showLogin();
+                                break;
+                        }
+                    }
+                });
+
+                log('Verto instance created');
+            } catch (e) {
+                log(`Error: ${e.message}`, 'error');
+                updateStatus('Connection error', 'disconnected');
+            }
+        });
+
+        // Answer call
+        answerBtn.addEventListener('click', () => {
+            if (currentCall) {
+                log('Answering call');
+                currentCall.answer();
+            }
+        });
+
+        // Hang up
+        hangupBtn.addEventListener('click', () => {
+            if (currentCall) {
+                log('Hanging up');
+                currentCall.hangup();
+            }
+        });
+
+        // Initialize
+        log('VVP Phone initialized');
+    </script>
+</body>
+</html>

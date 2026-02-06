@@ -1,0 +1,217 @@
+/**
+ * VVP Theme Styles
+ *
+ * Styling for VVP (Verified Voice Protocol) caller display
+ * Colors match VVP Issuer/Verifier branding
+ */
+
+:root {
+    /* VVP Brand Colors */
+    --vvp-primary: #2a9d8f;          /* Teal - primary brand */
+    --vvp-primary-dark: #21867a;     /* Darker teal for hover */
+    --vvp-success: #28a745;          /* Green - VALID */
+    --vvp-success-light: #d4edda;    /* Light green background */
+    --vvp-danger: #dc3545;           /* Red - INVALID */
+    --vvp-danger-light: #f8d7da;     /* Light red background */
+    --vvp-warning: #ffc107;          /* Amber - INDETERMINATE */
+    --vvp-warning-light: #fff3cd;    /* Light amber background */
+    --vvp-muted: #6c757d;            /* Gray - UNKNOWN */
+    --vvp-muted-light: #e9ecef;      /* Light gray background */
+
+    /* Typography */
+    --vvp-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    --vvp-font-size-sm: 0.875rem;
+    --vvp-font-size-base: 1rem;
+    --vvp-font-size-lg: 1.25rem;
+    --vvp-font-size-xl: 1.5rem;
+
+    /* Spacing */
+    --vvp-spacing-xs: 0.25rem;
+    --vvp-spacing-sm: 0.5rem;
+    --vvp-spacing-md: 1rem;
+    --vvp-spacing-lg: 1.5rem;
+    --vvp-spacing-xl: 2rem;
+
+    /* Shadows */
+    --vvp-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+    --vvp-shadow-md: 0 4px 6px rgba(0, 0, 0, 0.1);
+    --vvp-shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1);
+
+    /* Border radius */
+    --vvp-radius-sm: 0.25rem;
+    --vvp-radius-md: 0.5rem;
+    --vvp-radius-lg: 1rem;
+    --vvp-radius-full: 50%;
+}
+
+/* VVP Display Container */
+#vvp-display-container {
+    position: relative;
+    width: 100%;
+    max-width: 400px;
+    margin: 0 auto;
+}
+
+/* VVP Display Panel */
+.vvp-display-panel {
+    background: white;
+    border-radius: var(--vvp-radius-lg);
+    box-shadow: var(--vvp-shadow-lg);
+    padding: var(--vvp-spacing-lg);
+    text-align: center;
+    font-family: var(--vvp-font-family);
+    animation: vvp-fade-in 0.3s ease-out;
+    border: 2px solid var(--vvp-primary);
+}
+
+.vvp-display-panel.vvp-hidden {
+    display: none;
+}
+
+/* Logo Container */
+.vvp-logo-container {
+    width: 100px;
+    height: 100px;
+    margin: 0 auto var(--vvp-spacing-md);
+    border-radius: var(--vvp-radius-full);
+    overflow: hidden;
+    background: var(--vvp-muted-light);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: var(--vvp-shadow-md);
+}
+
+.vvp-brand-logo {
+    max-width: 80%;
+    max-height: 80%;
+    object-fit: contain;
+}
+
+/* Brand Name */
+.vvp-brand-name {
+    font-size: var(--vvp-font-size-xl);
+    font-weight: 600;
+    color: #333;
+    margin-bottom: var(--vvp-spacing-md);
+    word-wrap: break-word;
+}
+
+/* Status Badge - Base */
+.vvp-status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--vvp-spacing-xs);
+    padding: var(--vvp-spacing-sm) var(--vvp-spacing-md);
+    border-radius: var(--vvp-radius-md);
+    font-size: var(--vvp-font-size-sm);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.vvp-status-icon {
+    font-size: var(--vvp-font-size-base);
+    font-weight: bold;
+}
+
+/* Status Badge - VALID */
+.vvp-status-valid {
+    background: var(--vvp-success-light);
+    color: var(--vvp-success);
+    border: 1px solid var(--vvp-success);
+}
+
+/* Status Badge - INVALID */
+.vvp-status-invalid {
+    background: var(--vvp-danger-light);
+    color: var(--vvp-danger);
+    border: 1px solid var(--vvp-danger);
+}
+
+/* Status Badge - INDETERMINATE */
+.vvp-status-indeterminate {
+    background: var(--vvp-warning-light);
+    color: #856404;
+    border: 1px solid var(--vvp-warning);
+}
+
+/* Status Badge - UNKNOWN */
+.vvp-status-unknown {
+    background: var(--vvp-muted-light);
+    color: var(--vvp-muted);
+    border: 1px solid var(--vvp-muted);
+}
+
+/* Animations */
+@keyframes vvp-fade-in {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes vvp-pulse {
+    0%, 100% {
+        transform: scale(1);
+    }
+    50% {
+        transform: scale(1.05);
+    }
+}
+
+/* Incoming Call Animation */
+.vvp-display-panel.vvp-incoming {
+    animation: vvp-pulse 1.5s ease-in-out infinite;
+}
+
+/* Responsive */
+@media (max-width: 480px) {
+    .vvp-display-panel {
+        padding: var(--vvp-spacing-md);
+        border-radius: var(--vvp-radius-md);
+    }
+
+    .vvp-logo-container {
+        width: 80px;
+        height: 80px;
+    }
+
+    .vvp-brand-name {
+        font-size: var(--vvp-font-size-lg);
+    }
+
+    .vvp-status-badge {
+        font-size: 0.75rem;
+        padding: var(--vvp-spacing-xs) var(--vvp-spacing-sm);
+    }
+}
+
+/* Dark Mode Support */
+@media (prefers-color-scheme: dark) {
+    .vvp-display-panel {
+        background: #1a1a2e;
+        border-color: var(--vvp-primary);
+    }
+
+    .vvp-brand-name {
+        color: #f5f5f5;
+    }
+
+    .vvp-logo-container {
+        background: #2d2d44;
+    }
+}
+
+/* Utility Classes */
+.vvp-text-center { text-align: center; }
+.vvp-text-left { text-align: left; }
+.vvp-text-right { text-align: right; }
+.vvp-mt-sm { margin-top: var(--vvp-spacing-sm); }
+.vvp-mt-md { margin-top: var(--vvp-spacing-md); }
+.vvp-mb-sm { margin-bottom: var(--vvp-spacing-sm); }
+.vvp-mb-md { margin-bottom: var(--vvp-spacing-md); }

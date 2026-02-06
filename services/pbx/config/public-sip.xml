@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  VVP Inbound PSTN Dialplan for SIP.js WebRTC Client
+
+  This dialplan:
+  1. Receives inbound PSTN calls on the external (public) profile
+  2. Sets VVP channel variables (brand_name, status, logo)
+  3. Converts VVP channel variables to SIP headers (sip_h_X-VVP-*)
+  4. Bridges to the SIP-registered WebRTC client (user/1001)
+
+  The SIP.js client registers via WSS on port 7443 as a standard SIP user.
+  This allows bidirectional call bridging (unlike Verto's verto.rtc endpoint).
+
+  File: /etc/freeswitch/dialplan/public.xml
+
+  After updating, reload dialplan:
+    fs_cli -x "reloadxml"
+-->
+<include>
+  <context name="public">
+
+    <!-- VVP Inbound Call Handler -->
+    <extension name="vvp-inbound-sip">
+      <condition field="destination_number" expression=".*">
+
+        <!-- Log the incoming call -->
+        <action application="log" data="INFO [VVP] Inbound PSTN call from ${caller_id_number} to ${destination_number}"/>
+
+        <!-- Set VVP verification data (simulated - real data comes from VVP SIP Redirect in Sprint 42) -->
+        <action application="set" data="vvp_brand_name=Test Corporation Ltd"/>
+        <action application="set" data="vvp_brand_logo=https://example.com/logo.png"/>
+        <action application="set" data="vvp_status=VALID"/>
+
+        <!-- Convert VVP variables to SIP headers for the B-leg INVITE to WebRTC client -->
+        <!-- SIP.js will receive these as X-VVP-* headers -->
+        <action application="set" data="sip_h_X-VVP-Brand-Name=${vvp_brand_name}"/>
+        <action application="set" data="sip_h_X-VVP-Brand-Logo=${vvp_brand_logo}"/>
+        <action application="set" data="sip_h_X-VVP-Status=${vvp_status}"/>
+
+        <!-- Export headers to B-leg -->
+        <action application="export" data="nolocal:sip_h_X-VVP-Brand-Name=${vvp_brand_name}"/>
+        <action application="export" data="nolocal:sip_h_X-VVP-Brand-Logo=${vvp_brand_logo}"/>
+        <action application="export" data="nolocal:sip_h_X-VVP-Status=${vvp_status}"/>
+
+        <!-- Set call options -->
+        <action application="ring_ready"/>
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="continue_on_fail=true"/>
+
+        <!-- Bridge to SIP-registered WebRTC client (extension 1001) -->
+        <!-- Note: Using hardcoded domain as ${domain_name} may not be available in public context -->
+        <action application="log" data="INFO [VVP] Bridging to user/1001@pbx.rcnx.io"/>
+        <action application="bridge" data="user/1001@pbx.rcnx.io"/>
+
+        <!-- Fallback if bridge fails -->
+        <action application="log" data="WARNING [VVP] Bridge failed, playing error message"/>
+        <action application="answer"/>
+        <action application="playback" data="ivr/ivr-call_cannot_be_completed_as_dialed.wav"/>
+        <action application="hangup" data="USER_BUSY"/>
+
+      </condition>
+    </extension>
+
+  </context>
+</include>

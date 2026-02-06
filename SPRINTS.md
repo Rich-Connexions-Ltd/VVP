@@ -29,6 +29,7 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | - | Chain Revocation Fixes | COMPLETE | Sprint 35 |
 | 41 | User Management & Mock vLEI | COMPLETE | Sprint 37 |
 | 42 | SIP Redirect Signing Service | PLANNED | Sprint 41 |
+| 43 | PBX Test Infrastructure | IN PROGRESS (Phase 2 Complete) | Sprint 42 |
 
 ---
 
@@ -1187,10 +1188,29 @@ Response (302):
 ```
 SIP/2.0 302 Moved Temporarily
 Contact: <sip:+14445678901@carrier.com>
+Identity: <base64url>;info=<oobi>;alg=EdDSA;ppt=vvp
 P-VVP-Identity: eyJwcHQiOiJ2dnAi...
 P-VVP-Passport: eyJhbGciOiJFZERTQSI...
+X-VVP-Brand-Name: Acme Corporation
+X-VVP-Brand-Logo: https://cdn.acme.com/logo.png
+X-VVP-Status: VALID
 ...
 ```
+
+**X-Header Response Format (302 Response):**
+
+The SIP Redirect service returns these headers on 302 Moved Temporarily responses:
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `Identity` | Yes | RFC 8224 STIR PASSporT (standard STIR header) |
+| `P-VVP-Identity` | Yes | Base64url VVP-Identity JSON |
+| `P-VVP-Passport` | Yes | Complete PASSporT JWT |
+| `X-VVP-Brand-Name` | Yes | Organization name from dossier |
+| `X-VVP-Brand-Logo` | No | Logo URL from dossier vCard (may be absent) |
+| `X-VVP-Status` | Yes | VALID, INVALID, or INDETERMINATE |
+
+Note: `X-VVP-LEI` and `X-VVP-Error` are optional future enhancements, not required for MVP.
 
 **Configuration:**
 
@@ -1224,7 +1244,121 @@ P-VVP-Passport: eyJhbGciOiJFZERTQSI...
 - [ ] All tests passing
 - [ ] Enterprise integration documentation
 
-**Future:** Sprint 43 will implement verification redirect (validate incoming VVP headers, return status).
+---
+
+## Sprint 43: PBX Test Infrastructure
+
+**Goal:** Deploy a PBX with SBC capabilities to test the VVP SIP redirect signer end-to-end, including a WebRTC client that displays verified brand name and logo.
+
+**Prerequisites:** Sprint 42 (SIP Redirect Signing Service) should be COMPLETE or in progress.
+
+**Background:**
+
+To test the VVP SIP redirect signer, we need a PBX that can send SIP INVITEs to the redirect server, follow 3xx redirects, and pass X-VVP-* headers through to the receiving endpoint. A WebRTC client will display the verified caller's brand name and logo from these headers.
+
+**Architecture:**
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         Azure UK South                               │
+│                                                                      │
+│  ┌──────────────────┐     ┌──────────────────┐    ┌──────────────┐ │
+│  │ FusionPBX VM     │     │ SIP Redirect VM  │    │ VVP Verifier │ │
+│  │ (FreeSWITCH)     │     │ (Sprint 42)      │    │ Container App│ │
+│  │                  │     │                  │    │              │ │
+│  │ - SBC functions  │ SIP │ - Receives INVITE│HTTP│ - /verify    │ │
+│  │ - mod_verto      │────>│ - Calls issuer   │───>│ - /verify-   │ │
+│  │ - WebRTC gateway │<────│ - Returns 302    │    │   callee     │ │
+│  │                  │ 302 │   + X-VVP-*      │    │              │ │
+│  └────────┬─────────┘     └──────────────────┘    └──────────────┘ │
+│           │                                                         │
+│           │ WSS (WebSocket Secure)                                  │
+└───────────┼─────────────────────────────────────────────────────────┘
+            │
+            ▼
+    ┌──────────────────┐
+    │ WebRTC Client    │
+    │ (Browser)        │
+    │ - SaraPhone fork │
+    │ - Display name   │
+    │ - Display logo   │
+    │ - Show VVP status│
+    └──────────────────┘
+```
+
+**Deliverables:**
+
+**Phase 1: Azure Infrastructure Setup** (COMPLETE)
+- [x] Deploy FusionPBX from Azure Marketplace (UK South)
+- [x] Configure SSL certificate (Let's Encrypt)
+- [x] Configure basic SIP trunk (Twilio Elastic SIP)
+- [x] Verify WebRTC works (SIP.js client, not built-in Verto)
+- [x] Document access URLs and credentials (pbx.rcnx.io)
+
+**Phase 2: SIP Header Propagation & WebRTC Bridging** (COMPLETE)
+- [x] Configure FreeSWITCH dialplan for VVP header injection
+- [x] Add VVP header extraction dialplan (`/etc/freeswitch/dialplan/public.xml`)
+- [x] **CRITICAL FINDING**: Verto.js `verto.rtc` endpoint cannot receive incoming calls
+- [x] **SOLUTION**: Implemented SIP.js WebRTC client using port 7443 WSS (standard SIP over WebSocket)
+- [x] Configured Let's Encrypt certificate for WSS endpoint
+- [x] Fixed extension dial_string to use `sofia_contact()` instead of `verto_contact()`
+- [x] **VALIDATED**: X-VVP-* headers propagate from dialplan → SIP INVITE → SIP.js browser client
+- [x] Document validation results (SIP headers captured in browser console)
+
+**Phase 3: WebRTC Client Development** (COMPLETE)
+- [x] Created VVP Phone SIP.js client at `services/pbx/webrtc/vvp-phone/sip-phone.html`
+- [x] Add VVP header extraction from SIP INVITE (`X-VVP-Brand-Name`, `X-VVP-Status`, `X-VVP-Brand-Logo`)
+- [x] Add VVP display module for brand name, logo, status badge
+- [x] Add bidirectional calling (inbound PSTN + outbound dial pad)
+- [x] Style to match VVP branding
+- [x] Test in Chrome, Safari (Firefox pending)
+
+**Phase 4: End-to-End Integration** (PENDING - requires Sprint 42)
+- [ ] Connect FusionPBX to VVP SIP Redirect service (Sprint 42)
+- [ ] Configure test TN mappings in issuer
+- [ ] Verify brand name and logo appear on WebRTC client
+- [ ] Test all VVP status outcomes (VALID/INVALID/INDETERMINATE)
+
+**Key Files:**
+
+```
+services/pbx/                           # NEW DIRECTORY
+├── config/
+│   ├── dialplan.xml                   # VVP header extraction
+│   └── verto.conf.xml                 # Verto configuration
+├── webrtc/
+│   └── saraphone-vvp/                 # Forked SaraPhone
+│       └── (modified for VVP display)
+├── test/
+│   └── mock_redirect.py               # Test 302 server
+└── README.md                          # Setup documentation
+
+Documentation/
+└── PLAN_PBX.md                        # Approved plan (detailed)
+```
+
+**Configuration:**
+
+| Setting | Value | Notes |
+|---------|-------|-------|
+| Domain | pbx.rcnx.io | DNS A record required |
+| Azure Region | UK South | Same as other VVP services |
+| VM Size | Standard_B2s | 2 vCPU, 4 GB RAM |
+| Platform | FusionPBX (FreeSWITCH) | Azure Marketplace image |
+| WebRTC Client | SaraPhone fork | Verto.js-based |
+
+**Exit Criteria:**
+
+- [x] FusionPBX accessible at https://pbx.rcnx.io
+- [x] SIP registration working (port 5080 for Twilio, port 7443 WSS for WebRTC)
+- [x] Dialplan injects X-VVP-* headers into SIP INVITE to WebRTC client
+- [x] VVP headers propagate to WebRTC client via SIP.js (port 7443 WSS)
+- [x] WebRTC client extracts brand name, logo, and status from SIP headers
+- [x] Inbound PSTN call rings WebRTC client with VVP data displayed
+- [ ] End-to-end test with real VVP SIP Redirect (requires Sprint 42)
+- [ ] All three VVP statuses (VALID/INVALID/INDETERMINATE) render with correct colors
+
+**Detailed Plan:** See `Documentation/PLAN_PBX.md` for full technical details, fallback approaches, and risk mitigations.
 
 ---
 
@@ -1247,6 +1381,7 @@ To start a sprint, say:
 - "Sprint 40" - Vetter certification constraints (geographic/jurisdictional validation)
 - "Sprint 41" - User management & mock vLEI (multi-tenant orgs, users, login UI)
 - "Sprint 42" - SIP redirect signing service (native SIP/UDP on Azure VM)
+- "Sprint 43" - PBX test infrastructure (FusionPBX + WebRTC for testing Sprint 42)
 
 Each sprint follows the pair programming workflow:
 1. Plan phase (design, review, approval)
