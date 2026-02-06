@@ -11,6 +11,25 @@ This document provides a detailed step-by-step guide for validating the complete
 | 1001 | +441923311000 | Test extension 1 |
 | 1006 | +441923311006 | Test extension 2 |
 
+### VVP Routing Prefix
+
+The PBX uses prefix **`7`** to route calls through the VVP SIP loopback:
+
+| Dial | From | To | Route |
+|------|------|-----|-------|
+| `71006` | 1001 | 1006 | Via VVP (signing → verifier → destination) |
+| `71001` | 1006 | 1001 | Via VVP (signing → verifier → destination) |
+| `1006` | 1001 | 1006 | Direct (no VVP) |
+
+**Call flow with prefix 7:**
+1. Extension 1001 dials `71006`
+2. PBX routes to SIP Redirect (signing service)
+3. SIP Redirect looks up TN mapping for caller (+441923311000)
+4. SIP Redirect returns 302 with VVP headers (Identity, VVP-Identity)
+5. PBX follows redirect through loopback
+6. Inbound leg delivers call to extension 1006 with VVP headers
+7. Extension 1006 sees verified caller display
+
 These phone numbers should be used when:
 - Creating TN Allocation credentials
 - Creating TN mappings
@@ -332,6 +351,19 @@ Ensure the inbound dialplan processes VVP headers:
 
 ## Part 5: Test Call Execution
 
+### Quick Test (TL;DR)
+
+If all setup is complete, the fastest way to test:
+
+1. Open two browser tabs with `https://pbx.rcnx.io/app/vvp-phone/sip-phone.html`
+2. Register as **1001** in one tab, **1006** in the other
+3. From extension 1001, dial **`71006`**
+4. Extension 1006 should ring with verified caller display showing brand name
+
+If this works, VVP is functioning end-to-end. If not, follow the detailed steps below.
+
+---
+
 ### 5.1 Register WebRTC Client
 
 1. Open `https://pbx.rcnx.io/app/vvp-phone/sip-phone.html`
@@ -347,29 +379,43 @@ Ensure the inbound dialplan processes VVP headers:
 
 **Test scenario:** Register as extension 1006 to receive calls from 1001.
 
-### 5.2 Make Test Call via CLI
+### 5.2 Make Test Call from WebRTC Phone
 
-From the PBX, originate a test call:
+The simplest way to test VVP is to dial using the **7 prefix** from a registered phone:
+
+1. Register WebRTC client as extension 1001
+2. Dial **`71006`** (the 7 prefix routes through VVP)
+3. Extension 1006 receives call with VVP verification display
+
+**What happens:**
+- `7` prefix triggers VVP routing through SIP Redirect
+- SIP Redirect looks up TN mapping for +441923311000 (1001's number)
+- VVP headers are attached and call loops back to 1006
+
+### 5.3 Make Test Call via CLI
+
+For debugging, you can originate calls directly via FreeSWITCH CLI:
 
 ```bash
-# Call from extension 1001 (+441923311000) to extension 1006 (+441923311006)
-fs_cli -x "originate {sip_h_X-VVP-API-Key=YOUR_API_KEY,origination_caller_id_number=+441923311000}sofia/gateway/vvp-redirect/+441923311006 &park()"
+# Call from extension 1001 (+441923311000) to extension 1006 via VVP
+# The 7 prefix routes through the VVP loopback
+fs_cli -x "originate user/1001 71006"
 
-# Or call in the other direction (1006 -> 1001)
-fs_cli -x "originate {sip_h_X-VVP-API-Key=YOUR_API_KEY,origination_caller_id_number=+441923311006}sofia/gateway/vvp-redirect/+441923311000 &park()"
+# Or directly through the VVP gateway with explicit headers:
+fs_cli -x "originate {sip_h_X-VVP-API-Key=YOUR_API_KEY,origination_caller_id_number=+441923311000}sofia/gateway/vvp-redirect/+441923311006 &park()"
 ```
 
 **Parameters explained:**
-- `sip_h_X-VVP-API-Key`: API key for authentication
+- `71006`: Dial string with 7 prefix to route through VVP loopback
+- `sip_h_X-VVP-API-Key`: API key for authentication (when using direct gateway)
 - `origination_caller_id_number`: **MUST match** a TN in your TN mappings (+441923311000 or +441923311006)
-- Destination: The other extension's phone number
 
-**Test scenario:**
+**Test scenarios:**
 1. Register WebRTC client as extension 1006
-2. Originate call with caller ID +441923311000 (extension 1001's number)
+2. From another phone (or CLI), dial `71006` as extension 1001
 3. Call routes through VVP redirect and arrives at extension 1006 with VVP attestation
 
-### 5.3 Verify SIP Redirect Response
+### 5.4 Verify SIP Redirect Response
 
 Check the SIP trace for the 302 redirect:
 
@@ -377,7 +423,10 @@ Check the SIP trace for the 302 redirect:
 # Watch SIP messages in real-time
 fs_cli -x "sofia global siptrace on"
 
-# Make the test call (1001 calling 1006)
+# Make the test call (1001 calling 1006 via VVP prefix)
+fs_cli -x "originate user/1001 71006"
+
+# Or with explicit gateway:
 fs_cli -x "originate {sip_h_X-VVP-API-Key=YOUR_API_KEY,origination_caller_id_number=+441923311000}sofia/gateway/vvp-redirect/+441923311006 &park()"
 
 # Stop tracing
@@ -392,7 +441,7 @@ fs_cli -x "sofia global siptrace off"
    - `VVP-Status: VALID`
 3. Follow-up INVITE to loopback with VVP headers attached
 
-### 5.4 Verify VVP Display on Phone
+### 5.5 Verify VVP Display on Phone
 
 On the WebRTC client:
 
