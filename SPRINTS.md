@@ -29,7 +29,7 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | - | Chain Revocation Fixes | COMPLETE | Sprint 35 |
 | 41 | User Management & Mock vLEI | COMPLETE | Sprint 37 |
 | 42 | SIP Redirect Signing Service | PLANNED | Sprint 41 |
-| 43 | PBX Test Infrastructure | IN PROGRESS (Phase 2 Complete) | Sprint 42 |
+| 43 | PBX Test Infrastructure | IN PROGRESS (Phase 3 Complete) | Sprint 42 |
 | 44 | SIP Redirect Verification Service | PLANNED | Sprint 43 |
 
 ---

@@ -114,6 +114,99 @@ docker compose down
 | Witness (wil) | http://localhost:5643 | KERI witness HTTP |
 | Witness (wes) | http://localhost:5644 | KERI witness HTTP |
 
+## PBX VM Management
+
+The VVP PBX runs on an Azure VM. **Use Azure CLI (`az`) for all PBX management** - SSH keys are not configured for the Claude Code environment.
+
+### VM Details
+
+| Property | Value |
+|----------|-------|
+| Name | `vvp-pbx` |
+| Resource Group | `VVP` |
+| DNS | `pbx.rcnx.io` |
+| Platform | FusionPBX (FreeSWITCH) on Debian |
+
+### Running Commands on PBX
+
+Use `az vm run-command invoke` to execute commands remotely:
+
+```bash
+# Basic command execution
+az vm run-command invoke --resource-group VVP --name vvp-pbx --command-id RunShellScript --scripts "your command here"
+
+# Example: Check service status
+az vm run-command invoke --resource-group VVP --name vvp-pbx --command-id RunShellScript --scripts "systemctl status vvp-mock-sip --no-pager"
+
+# Example: Reload FreeSWITCH dialplan
+az vm run-command invoke --resource-group VVP --name vvp-pbx --command-id RunShellScript --scripts "fs_cli -x 'reloadxml'"
+
+# Example: View logs
+az vm run-command invoke --resource-group VVP --name vvp-pbx --command-id RunShellScript --scripts "journalctl -u vvp-mock-sip -n 50 --no-pager"
+```
+
+### Deploying Files to PBX
+
+**Important:** Stdin piping doesn't work with `az vm run-command`. Use base64 encoding:
+
+```bash
+# Deploy a file using base64 encoding
+FILE_CONTENT=$(cat path/to/local/file | base64)
+az vm run-command invoke --resource-group VVP --name vvp-pbx --command-id RunShellScript --scripts "echo '$FILE_CONTENT' | base64 -d > /remote/path/file"
+```
+
+### Key PBX Paths
+
+| Path | Description |
+|------|-------------|
+| `/etc/freeswitch/dialplan/public.xml` | Main dialplan (VVP routes) |
+| `/opt/vvp/mock/mock_sip_redirect.py` | Mock SIP signing/verification service |
+| `/etc/systemd/system/vvp-mock-sip.service` | Mock service systemd unit |
+
+### PBX Services and Ports
+
+| Service | Port | Description |
+|---------|------|-------------|
+| FreeSWITCH Internal | 5060 (UDP/TCP) | SIP for registered extensions |
+| FreeSWITCH External | 5080 (UDP/TCP) | External SIP (PSTN, trunks) |
+| FreeSWITCH WSS | 7443 | WebRTC SIP over WebSocket |
+| VVP Mock Signing | 5070 (UDP) | Mock signing service |
+| VVP Mock Verification | 5071 (UDP) | Mock verification service |
+
+### VVP Test Flow
+
+To test VVP loopback flow (extension 1001 → signing → extension 1006):
+1. Register extension 1001 via SIP.js client at `wss://pbx.rcnx.io:7443`
+2. Register extension 1006 via SIP.js client
+3. From 1001, dial `71006` (7 prefix triggers VVP signing flow)
+4. Extension 1006 should ring with VVP brand headers
+
+### Common Management Commands
+
+```bash
+# Restart mock SIP service
+az vm run-command invoke --resource-group VVP --name vvp-pbx --command-id RunShellScript --scripts "systemctl restart vvp-mock-sip"
+
+# Check registered extensions
+az vm run-command invoke --resource-group VVP --name vvp-pbx --command-id RunShellScript --scripts "fs_cli -x 'sofia status profile internal reg'"
+
+# View active calls
+az vm run-command invoke --resource-group VVP --name vvp-pbx --command-id RunShellScript --scripts "fs_cli -x 'show calls'"
+
+# Restart FreeSWITCH
+az vm run-command invoke --resource-group VVP --name vvp-pbx --command-id RunShellScript --scripts "systemctl restart freeswitch"
+```
+
+### Local Files (services/pbx/)
+
+| File | Purpose |
+|------|---------|
+| `config/public-sip.xml` | Dialplan with VVP loopback routes |
+| `config/vvp-mock-sip.service` | Systemd service for mock SIP |
+| `config/SETUP_SIP_WEBRTC.md` | SIP.js WebRTC setup guide |
+| `test/mock_sip_redirect.py` | Mock signing/verification Python service |
+| `scripts/deploy-mock-services.sh` | Deployment script (uses SSH, prefer az CLI) |
+
 ## User Commands
 
 ### "Complete"

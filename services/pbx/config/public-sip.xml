@@ -39,7 +39,7 @@
         <action application="log" data="INFO [VVP] Loopback call to extension $1 via VVP signing"/>
         <action application="set" data="hangup_after_bridge=true"/>
         <!-- Map extension to test TN range: 1001->+441923311001, 1006->+441923311006 -->
-        <action application="set" data="loopback_dest_tn=+4419233110${1:1}"/>
+        <action application="set" data="loopback_dest_tn=+44192331$1"/>
         <action application="set" data="effective_caller_id_number=+441923311000"/>
         <action application="set" data="effective_caller_id_name=VVP Loopback"/>
         <!-- Route through mock signing service -->
@@ -162,6 +162,44 @@
       <condition field="${sofia_profile_name}" expression="^internal$">
         <action application="log" data="WARNING [VVP] Unmatched internal call to ${destination_number}"/>
         <action application="playback" data="ivr/ivr-call_cannot_be_completed_as_dialed.wav"/>
+        <action application="hangup" data="NO_ROUTE_DESTINATION"/>
+      </condition>
+    </extension>
+
+  </context>
+
+  <!-- Redirected context: handles calls after 302 redirect from signing service -->
+  <context name="redirected">
+
+    <!-- VVP Redirect Inbound: calls from signing service 302 redirect -->
+    <extension name="vvp-redirect-inbound">
+      <condition field="destination_number" expression="^\+?44192331(\d{4})$">
+        <action application="log" data="INFO [VVP] Redirected call to +44192331$1"/>
+        <!-- Extract VVP headers from 302 response (stored as sip_rh_*) -->
+        <action application="set" data="vvp_brand_name=${sip_rh_X-VVP-Brand-Name}"/>
+        <action application="set" data="vvp_brand_logo=${sip_rh_X-VVP-Brand-Logo}"/>
+        <action application="set" data="vvp_status=${sip_rh_X-VVP-Status}"/>
+        <!-- URL decode -->
+        <action application="set" data="vvp_brand_name=${url_decode(${vvp_brand_name})}"/>
+        <action application="set" data="vvp_brand_logo=${url_decode(${vvp_brand_logo})}"/>
+        <action application="log" data="INFO [VVP] Redirect headers: brand=${vvp_brand_name}, status=${vvp_status}"/>
+        <!-- Export to B-leg for WebRTC client -->
+        <action application="export" data="nolocal:sip_h_X-VVP-Brand-Name=${vvp_brand_name}"/>
+        <action application="export" data="nolocal:sip_h_X-VVP-Brand-Logo=${vvp_brand_logo}"/>
+        <action application="export" data="nolocal:sip_h_X-VVP-Status=${vvp_status}"/>
+        <action application="ring_ready"/>
+        <action application="set" data="hangup_after_bridge=true"/>
+        <!-- Map TN to extension: +4419233110xx -> 10xx, +441923311xxx -> 1xxx -->
+        <action application="set" data="target_ext=$1"/>
+        <action application="log" data="INFO [VVP] Bridging to extension ${target_ext}"/>
+        <action application="bridge" data="user/${target_ext}@pbx.rcnx.io"/>
+      </condition>
+    </extension>
+
+    <!-- Fallback for unmatched redirects -->
+    <extension name="redirect-unmatched">
+      <condition field="destination_number" expression=".*">
+        <action application="log" data="WARNING [VVP] Unmatched redirect to ${destination_number}"/>
         <action application="hangup" data="NO_ROUTE_DESTINATION"/>
       </condition>
     </extension>
