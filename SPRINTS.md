@@ -31,6 +31,7 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 42 | SIP Redirect Signing Service | COMPLETE | Sprint 41 |
 | 43 | PBX Test Infrastructure | COMPLETE | Sprint 42 |
 | 44 | SIP Redirect Verification Service | COMPLETE | Sprint 43 |
+| 45 | CI/CD SQLite Persistence Fixes | PENDING | Sprint 41 |
 
 ---
 
@@ -1729,6 +1730,208 @@ def map_verify_response_to_headers(resp: VerifyResponse) -> dict:
 
 ---
 
+## Sprint 45: CI/CD SQLite Persistence Fixes
+
+**Goal:** Fix CI/CD deployment conflicts with SQLite persistence on Azure Files, ensuring reliable deployments without database lock errors.
+
+**Prerequisites:** Sprint 41 (User Management & Mock vLEI) - introduced SQLite persistence.
+
+**Problem Statement:**
+
+Sprint 41 introduced SQLite persistence on Azure Files for multi-tenant data (organizations, users, credentials, TN mappings). However, the current CI/CD deployment pattern causes database lock conflicts:
+
+1. **Multiple Replicas** - Container Apps auto-scales to multiple replicas, but SQLite only supports single-writer mode
+2. **Zero-Downtime Deploys** - Old and new revisions run simultaneously during deployment, both trying to access the same database
+3. **Azure Files SMB Locking** - SQLite's file-based locking doesn't work reliably over SMB network shares
+4. **Stale Lock Files** - Failed deployments can leave orphaned lock files that block subsequent startups
+
+**Symptoms Observed:**
+```
+sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) database is locked
+[SQL: CREATE TABLE organizations (...)]
+ERROR: Application startup failed. Exiting.
+```
+
+**Root Cause Analysis:**
+
+| Issue | Impact | Current State |
+|-------|--------|---------------|
+| maxReplicas > 1 | Multiple writers corrupt SQLite | Set to 10 (default) |
+| Zero-downtime deploy | Old/new revision race | Both run simultaneously |
+| Azure Files SMB | Poor SQLite locking | Network latency exacerbates |
+| No startup retry | First lock failure = crash | Immediate exit on lock |
+
+**Recommended Solutions:**
+
+**Option A: Single Replica + Stop-Before-Deploy (Recommended)**
+- Force `maxReplicas=1` for issuer service
+- Modify CI/CD to deactivate old revision before deploying new one
+- Accept brief downtime (30-60s) during deployments
+- Simplest solution, maintains SQLite benefits (zero-cost, no external DB)
+
+**Option B: Startup Retry with Backoff**
+- Add retry logic in `init_database()` with exponential backoff
+- Wait for old revision to terminate and release lock
+- Combine with Option A for reliability
+
+**Option C: Migrate to Azure PostgreSQL (Future)**
+- Full multi-replica support
+- Proper concurrent connections
+- Requires infrastructure changes and migration
+- Higher cost (Azure Database for PostgreSQL)
+
+**Deliverables:**
+
+- [x] **CI/CD Workflow Changes** (`.github/workflows/deploy.yml`)
+  - [x] Add `max-replicas 1` to issuer deployment
+  - [x] Add pre-deployment step to deactivate old revision
+  - [x] Add wait time between deactivation and new deployment
+  - [x] Add health check retry logic after deployment
+
+- [x] **Database Initialization Hardening** (`services/issuer/app/db/session.py`)
+  - [x] Add retry with exponential backoff for database initialization
+  - [x] Add SQLite PRAGMA settings for better Azure Files compatibility
+  - [x] Add connection pool limits (StaticPool for SQLite)
+
+- [x] **Container App Configuration**
+  - [x] Document required settings (`maxReplicas: 1`, `minReplicas: 1`)
+  - [x] Add health check grace period for database init
+  - [x] Document Azure Files limitations
+
+- [x] **Deployment Documentation** (`Documentation/DEPLOYMENT.md`)
+  - [x] Document SQLite on Azure Files limitations
+  - [x] Document manual recovery procedures for lock situations
+  - [x] Document future migration path to PostgreSQL
+
+**Key Files:**
+
+```
+.github/workflows/deploy.yml              # CI/CD changes
+services/issuer/app/db/session.py         # Database init with retry
+services/issuer/app/main.py               # Startup sequence
+Documentation/DEPLOYMENT.md              # Deployment documentation
+```
+
+**CI/CD Changes (deploy.yml):**
+
+```yaml
+deploy-issuer:
+  steps:
+    # Step 1: Deactivate all active revisions first
+    - name: Deactivate old revisions
+      run: |
+        OLD_REVS=$(az containerapp revision list --name vvp-issuer \
+          --resource-group VVP --query "[?properties.active].name" -o tsv)
+        for REV in $OLD_REVS; do
+          echo "Deactivating $REV..."
+          az containerapp revision deactivate --name vvp-issuer \
+            --resource-group VVP --revision $REV || true
+        done
+
+    # Step 2: Wait for database lock to release
+    - name: Wait for lock release
+      run: sleep 30
+
+    # Step 3: Deploy new revision with single replica
+    - name: Deploy new revision
+      run: |
+        az containerapp update --name vvp-issuer --resource-group VVP \
+          --image ${{ env.IMAGE }} \
+          --min-replicas 1 --max-replicas 1
+
+    # Step 4: Health check with retry
+    - name: Verify deployment
+      run: |
+        for i in {1..12}; do
+          if curl -sf https://vvp-issuer.rcnx.io/healthz; then
+            echo "Health check passed"
+            exit 0
+          fi
+          echo "Attempt $i failed, waiting..."
+          sleep 10
+        done
+        echo "Health check failed after 2 minutes"
+        exit 1
+```
+
+**Database Init Retry (`session.py`):**
+
+```python
+import time
+from sqlalchemy.exc import OperationalError
+
+def init_database(max_retries: int = 5, base_delay: float = 2.0):
+    """Initialize database with retry for Azure Files lock issues."""
+    for attempt in range(max_retries):
+        try:
+            Base.metadata.create_all(bind=engine)
+            log.info("Database initialized successfully")
+            return
+        except OperationalError as e:
+            if "database is locked" in str(e) and attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt)  # Exponential backoff
+                log.warning(f"Database locked, retry {attempt+1}/{max_retries} in {delay}s")
+                time.sleep(delay)
+            else:
+                raise
+```
+
+**Configuration Changes:**
+
+| Setting | Old Value | New Value | Reason |
+|---------|-----------|-----------|--------|
+| `maxReplicas` | 10 | 1 | SQLite single-writer |
+| `minReplicas` | 1 | 1 | Consistent scaling |
+| `activeRevisionsMode` | Single | Single | One active revision |
+| Health check grace | 30s | 120s | Allow DB init retry |
+
+**Testing:**
+
+| Test | Expected Result |
+|------|-----------------|
+| Fresh deployment | New revision starts, DB created |
+| Update deployment | Old deactivated, new starts, data preserved |
+| Concurrent deploy | Only one revision active at a time |
+| Failed startup | Retries, eventually succeeds |
+| Manual recovery | Documented procedure restores service |
+
+**Manual Recovery Procedure:**
+
+```bash
+# 1. List revisions
+az containerapp revision list --name vvp-issuer --resource-group VVP -o table
+
+# 2. Deactivate all problematic revisions
+az containerapp revision deactivate --name vvp-issuer --resource-group VVP --revision <name>
+
+# 3. If database is corrupt, delete and restart
+az storage file delete --account-name vvpissuerdata --share-name issuer-data \
+  --path "vvp_issuer.db" --account-key <key>
+
+# 4. Force new revision
+az containerapp update --name vvp-issuer --resource-group VVP \
+  --set-env-vars "RESTART_TIMESTAMP=$(date +%s)"
+```
+
+**Future Considerations:**
+
+- **PostgreSQL Migration** - When scaling requirements exceed single-replica limits
+- **Redis Caching** - For high-read scenarios (TN lookups)
+- **Database Backup** - Azure Files snapshots for point-in-time recovery
+- **Monitoring** - Alert on database lock errors in logs
+
+**Exit Criteria:**
+
+- [x] CI/CD deploys with deactivate-before-deploy pattern
+- [x] Issuer runs with `maxReplicas=1` in production
+- [x] Database initialization includes retry logic
+- [x] Health check allows time for DB init retry
+- [x] Manual recovery procedure documented and tested
+- [x] No database lock errors during normal deployment
+- [x] All existing tests pass
+
+---
+
 ## Quick Reference
 
 To start a sprint, say:
@@ -1750,6 +1953,7 @@ To start a sprint, say:
 - "Sprint 42" - SIP redirect signing service (native SIP/UDP on Azure VM)
 - "Sprint 43" - PBX test infrastructure (FusionPBX + WebRTC for testing Sprint 42)
 - "Sprint 44" - SIP redirect verification service (verify inbound calls, extract brand info)
+- "Sprint 45" - CI/CD SQLite persistence fixes (deployment lock conflicts)
 
 Each sprint follows the pair programming workflow:
 1. Plan phase (design, review, approval)

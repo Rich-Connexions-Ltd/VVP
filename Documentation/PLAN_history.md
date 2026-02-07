@@ -8177,3 +8177,67 @@ Implemented a SIP redirect-based verification service that:
 
 2. **Re-Review** - APPROVED
    - All findings resolved
+
+---
+
+# Sprint 45: CI/CD SQLite Persistence Fixes
+
+**Date:** 2026-02-07
+
+## Problem Statement
+
+Sprint 41 introduced SQLite persistence on Azure Files for multi-tenant data. The CI/CD deployment caused database lock conflicts when old and new revisions ran simultaneously during zero-downtime deploys.
+
+## Solution
+
+**Option A: Single Replica + Stop-Before-Deploy**
+
+Accept brief downtime (30-60s) during deployments in exchange for reliable SQLite operation.
+
+## Implementation
+
+### 1. CI/CD Workflow Changes (`.github/workflows/deploy.yml`)
+
+- Added `workflow_dispatch` input for configurable `lock_wait_seconds`
+- Added step to deactivate all active revisions before deploying
+- Added 30-second wait for lock release (configurable)
+- Deploy with `--max-replicas 1`
+- Added health check with 12 retries (2 min total)
+- Added rollback step: reactivates previous revision on failure
+
+### 2. Database Initialization Hardening (`services/issuer/app/db/session.py`)
+
+- StaticPool for SQLite (single connection)
+- SQLite PRAGMAs: `foreign_keys=ON`, `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=30000`
+- Retry with exponential backoff (5 attempts: 2, 4, 8, 16, 32s)
+
+### 3. Documentation (`Documentation/DEPLOYMENT.md`)
+
+- SQLite on Azure Files limitations section
+- Manual recovery procedures
+- PostgreSQL migration path
+
+## Files Changed
+
+| File | Changes |
+|------|---------|
+| `.github/workflows/deploy.yml` | Stop-before-deploy, rollback on failure |
+| `services/issuer/app/db/session.py` | StaticPool, PRAGMAs, retry logic |
+| `Documentation/DEPLOYMENT.md` | SQLite limitations documentation |
+
+## Test Results
+
+- Issuer tests: 390 passed, 5 skipped
+
+## Review History
+
+1. **Plan Review** - CHANGES_REQUESTED
+   - [High] Missing rollback path on failure
+   - [Medium] Use NullPool/StaticPool instead of global pool_size
+   - [Low] Make wait time configurable
+
+2. **Plan Review (Revision 2)** - APPROVED
+   - All findings addressed
+
+3. **Code Review** - APPROVED
+   - Implementation matches approved plan

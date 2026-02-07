@@ -731,6 +731,96 @@ The issuer uses SQLite with automatic path detection:
 - `keystores/` - KERI keystores
 - `databases/` - KERI LMDB databases
 
+### SQLite on Azure Files (SMB) Limitations
+
+The issuer's SQLite database is stored on Azure Files (SMB mount) for persistence across container restarts. This introduces several constraints:
+
+| Constraint | Impact | Mitigation |
+|------------|--------|------------|
+| Single writer | Only one connection can write at a time | `maxReplicas=1` enforced |
+| SMB locking | File locks unreliable over network | 30s busy timeout, WAL mode |
+| Deployment race | Old/new revisions overlap briefly | Stop-before-deploy pattern |
+| Lock files | Orphaned locks block startup | Manual recovery if needed |
+
+**Configuration (session.py):**
+
+```python
+# PRAGMAs for Azure Files compatibility
+PRAGMA foreign_keys=ON    # Referential integrity
+PRAGMA journal_mode=WAL   # Write-ahead logging
+PRAGMA synchronous=NORMAL # Balance durability/performance
+PRAGMA busy_timeout=30000 # Wait 30s for locks
+```
+
+**Container App Settings:**
+
+| Setting | Value | Reason |
+|---------|-------|--------|
+| `minReplicas` | 1 | Consistent single instance |
+| `maxReplicas` | 1 | Prevent SQLite lock conflicts |
+| `activeRevisionsMode` | Single | One active revision at a time |
+
+### Database Lock Recovery
+
+If the issuer fails to start with "database is locked" errors:
+
+```bash
+# 1. List all revisions
+az containerapp revision list --name vvp-issuer --resource-group VVP -o table
+
+# 2. Deactivate all revisions (releases locks)
+OLD_REVS=$(az containerapp revision list --name vvp-issuer \
+  --resource-group VVP --query "[?properties.active].name" -o tsv)
+for REV in $OLD_REVS; do
+  echo "Deactivating $REV..."
+  az containerapp revision deactivate --name vvp-issuer \
+    --resource-group VVP --revision "$REV" || true
+done
+
+# 3. Wait for termination (30-60s)
+sleep 60
+
+# 4. Force new revision with timestamp to ensure fresh start
+az containerapp update --name vvp-issuer --resource-group VVP \
+  --set-env-vars "RESTART_TIMESTAMP=$(date +%s)"
+
+# 5. Monitor health
+for i in {1..12}; do
+  curl -sf https://vvp-issuer.rcnx.io/healthz && echo "Healthy!" && exit 0
+  echo "Waiting ($i/12)..."
+  sleep 10
+done
+```
+
+**If database is corrupt (last resort):**
+
+```bash
+# Delete the database file (DATA WILL BE LOST)
+# You will need Azure Storage account key from portal
+az storage file delete \
+  --account-name vvpissuerdata \
+  --share-name issuer-data \
+  --path "vvp_issuer.db" \
+  --account-key "<key>"
+
+# Restart service to recreate empty database
+az containerapp update --name vvp-issuer --resource-group VVP \
+  --set-env-vars "RESTART_TIMESTAMP=$(date +%s)"
+```
+
+### Future: PostgreSQL Migration
+
+For production scaling beyond single-replica, migrate to Azure Database for PostgreSQL:
+
+| Feature | SQLite | PostgreSQL |
+|---------|--------|------------|
+| Replicas | 1 max | Unlimited |
+| Concurrent writes | Single writer | Full MVCC |
+| Backup | Azure Files snapshots | Continuous backup |
+| Cost | $0 (uses Azure Files) | $15-50/month |
+
+Migration path: Sprint 45 documents the SQLite constraints; future sprint will implement PostgreSQL when scaling is required.
+
 ---
 
 ## TLS/Certificate Configuration

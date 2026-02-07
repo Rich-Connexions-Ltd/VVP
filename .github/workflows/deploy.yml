@@ -3,6 +3,12 @@ name: Build and deploy to Azure Container Apps
 on:
   push:
     branches: [ "main" ]
+  workflow_dispatch:
+    inputs:
+      lock_wait_seconds:
+        description: 'Seconds to wait for DB lock release (default: 30)'
+        required: false
+        default: '30'
 
 permissions:
   contents: read
@@ -270,6 +276,10 @@ jobs:
   # =========================================================================
   # DEPLOY ISSUER
   # =========================================================================
+  # Sprint 45: Stop-before-deploy pattern for SQLite on Azure Files.
+  # SQLite doesn't support multiple writers, so we must ensure only one
+  # revision runs at a time. This causes brief downtime (~30-60s) but
+  # prevents database lock conflicts.
   deploy-issuer:
     needs: [changes, test-issuer]
     if: needs.changes.outputs.issuer == 'true' && !failure()
@@ -299,6 +309,30 @@ jobs:
           docker build -t "$IMAGE" -f services/issuer/Dockerfile .
           docker push "$IMAGE"
 
+      # Sprint 45: Deactivate old revisions before deploying to prevent SQLite lock conflicts
+      - name: Deactivate old revisions
+        run: |
+          echo "Deactivating old revisions to release database locks..."
+          OLD_REVS=$(az containerapp revision list \
+            --name vvp-issuer \
+            --resource-group "${{ secrets.AZURE_RG }}" \
+            --query "[?properties.active].name" -o tsv)
+          for REV in $OLD_REVS; do
+            echo "Deactivating revision: $REV"
+            az containerapp revision deactivate \
+              --name vvp-issuer \
+              --resource-group "${{ secrets.AZURE_RG }}" \
+              --revision "$REV" || true
+          done
+
+      # Wait for old revisions to fully terminate and release database locks
+      # Configurable via workflow_dispatch input (default: 30s)
+      - name: Wait for lock release
+        run: |
+          WAIT_SECONDS="${{ github.event.inputs.lock_wait_seconds || '30' }}"
+          echo "Waiting ${WAIT_SECONDS}s for old revisions to terminate and release database locks..."
+          sleep "$WAIT_SECONDS"
+
       - name: Deploy issuer
         run: |
           az containerapp update \
@@ -306,11 +340,52 @@ jobs:
             --name "vvp-issuer" \
             --image "$IMAGE" \
             --min-replicas 1 \
+            --max-replicas 1 \
             --set-env-vars \
               "GIT_SHA=${{ github.sha }}" \
               "GITHUB_REPOSITORY=${{ github.repository }}" \
               "VVP_WITNESS_CONFIG=/srv/config/witnesses-azure.json" \
               "VVP_ISSUER_DATA_DIR=/data/vvp-issuer"
+
+      # Verify deployment with retry to allow time for database init
+      - name: Verify issuer deployment
+        id: health_check
+        run: |
+          echo "Waiting for issuer to start (database init may take time)..."
+          for i in {1..12}; do
+            if curl -sf https://vvp-issuer.rcnx.io/healthz; then
+              echo "Health check passed on attempt $i"
+              exit 0
+            fi
+            echo "Attempt $i/12 failed, waiting 10s..."
+            sleep 10
+          done
+          echo "Health check failed after 2 minutes"
+          exit 1
+
+      # Rollback on health check failure: reactivate the previous revision
+      - name: Rollback on failure
+        if: failure() && steps.health_check.outcome == 'failure'
+        run: |
+          echo "Health check failed, attempting rollback..."
+
+          # Get the most recent inactive revision (the one we just deactivated)
+          PREV_REV=$(az containerapp revision list --name vvp-issuer \
+            --resource-group "${{ secrets.AZURE_RG }}" \
+            --query "[?!properties.active] | sort_by(@, &properties.createdTime) | [-1].name" -o tsv || echo "")
+
+          if [ -n "$PREV_REV" ]; then
+            echo "Reactivating previous revision: $PREV_REV"
+            az containerapp revision activate --name vvp-issuer \
+              --resource-group "${{ secrets.AZURE_RG }}" \
+              --revision "$PREV_REV"
+            echo "Rollback complete. Previous revision reactivated."
+          else
+            echo "::error::No previous revision available for rollback"
+          fi
+
+          # Still fail the job to alert operators
+          exit 1
 
   # =========================================================================
   # BUILD WITNESS IMAGE
