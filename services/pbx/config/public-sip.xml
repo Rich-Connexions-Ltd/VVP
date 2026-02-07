@@ -43,7 +43,7 @@
         <action application="set" data="effective_caller_id_number=+441923311000"/>
         <action application="set" data="effective_caller_id_name=VVP Loopback"/>
         <!-- Route through mock signing service -->
-        <action application="export" data="nolocal:sip_h_X-VVP-API-Key=mock-test-key"/>
+        <action application="export" data="nolocal:sip_h_X-VVP-API-Key=MCSSfxoH7sFSBWduG-hMEp3aMGeuZbPCxBn3gorq4zk"/>
         <action application="log" data="INFO [VVP] Routing to signing service: ${loopback_dest_tn}"/>
         <action application="bridge" data="sofia/external/${loopback_dest_tn}@127.0.0.1:5070"/>
       </condition>
