@@ -8,6 +8,8 @@ This module provides SQLAlchemy engine and session management:
 
 Sprint 46: PostgreSQL migration with connection pooling.
 SQLite fallback retained for local development.
+
+CI/CD Test: Verifying zero-downtime deployment and data persistence.
 """
 
 import logging
