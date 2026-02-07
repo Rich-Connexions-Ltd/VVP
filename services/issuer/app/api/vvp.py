@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException
 
 from app.api.models import CreateVVPRequest, CreateVVPResponse, ErrorResponse
 from app.auth.api_key import Principal
-from app.auth.roles import require_operator
+from app.auth.roles import check_credential_write_role, require_auth
 from app.keri.identity import get_identity_manager
 from app.vvp.exceptions import (
     IdentityNotAvailableError,
@@ -54,7 +54,7 @@ def _get_witness_url() -> str:
 )
 async def create_vvp_attestation(
     body: CreateVVPRequest,
-    principal: Principal = require_operator,
+    principal: Principal = require_auth,
 ) -> CreateVVPResponse:
     """Create VVP-Identity header and PASSporT for a telephone call.
 
@@ -65,7 +65,7 @@ async def create_vvp_attestation(
     Both share the same iat/exp timestamps and kid/evd references to ensure
     binding per §5.2A.
 
-    **Authentication:** Requires `issuer:operator` role.
+    **Authentication:** Requires `issuer:operator` role or `org:dossier_manager` role.
 
     **Phone Number Format:** E.164 (e.g., "+14155551234")
 
@@ -74,6 +74,9 @@ async def create_vvp_attestation(
     **Dossier URL:** Auto-generated as {ISSUER_BASE_URL}/dossier/{dossier_said}
     The dossier must exist and be accessible at that URL for verifier fetch.
     """
+    # Check authorization (accepts issuer:operator+ OR org:dossier_manager+)
+    check_credential_write_role(principal)
+
     try:
         # Get identity info
         identity_mgr = await get_identity_manager()

@@ -548,6 +548,18 @@ To test with the Acme Corp trial dossier, configure your PBX with these exact va
 | **Test TN** | `+441923311000` |
 | **SIP Signer Host** | `pbx.rcnx.io:5060` |
 
+> **API Key Requirements:**
+>
+> The API key must be registered in the VVP Issuer database with either:
+> - **System role:** `issuer:operator` (or higher: `issuer:admin`)
+> - **Organization role:** `org:dossier_manager` (or higher: `org:administrator`)
+>
+> For the test fixtures to work, the test API key must be provisioned with
+> `org:dossier_manager` role and associated with an organization that has:
+> 1. The Acme Corp TN Allocation credential (covering `+441923311000`)
+> 2. A TN mapping from `+441923311000` to the test dossier
+> 3. A signing identity with the test keys
+
 #### FreeSWITCH Configuration
 
 Add to `/etc/freeswitch/dialplan/default.xml`:
