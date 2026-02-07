@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>VVP SIP Monitor - Login</title>
-    <link rel="stylesheet" href="/static/sip-monitor.css">
+    <link rel="stylesheet" href="static/sip-monitor.css">
 </head>
 <body class="login-page">
     <div class="login-container">
@@ -71,7 +71,7 @@
             errorDiv.style.display = 'none';
 
             try {
-                const response = await fetch('/api/login', {
+                const response = await fetch('api/login', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -86,9 +86,9 @@
                     // Check if password change required
                     if (data.force_password_change) {
                         // For now, redirect to dashboard - password change can be added later
-                        window.location.href = '/';
+                        window.location.href = '.';
                     } else {
-                        window.location.href = '/';
+                        window.location.href = '.';
                     }
                 } else {
                     showError(data.error || 'Login failed');
@@ -109,11 +109,11 @@
         }
 
         // Check if already authenticated
-        fetch('/api/auth/status')
+        fetch('api/auth/status')
             .then(r => r.json())
             .then(data => {
                 if (data.authenticated) {
-                    window.location.href = '/';
+                    window.location.href = '.';
                 }
             })
             .catch(() => {});

@@ -2176,7 +2176,7 @@ services/pbx/test/
 
 ---
 
-## Sprint 49: SIP Monitor - Polish and Deployment
+## Sprint 49: SIP Monitor - Polish and Deployment (COMPLETE)
 
 **Goal:** Finalize styling, configure nginx TLS termination, and deploy to PBX.
 
@@ -2184,40 +2184,42 @@ services/pbx/test/
 
 **Deliverables:**
 
-- [ ] **CSS styling** - Match VVP theme (colors, fonts, badges from WebRTC phone)
-- [ ] **nginx reverse proxy** - TLS termination at `https://pbx.rcnx.io/sip-monitor/`
-- [ ] **Deployment script** - Using `az vm run-command` pattern from CLAUDE.md
-- [ ] **Systemd service update** - Add aiohttp, bcrypt dependencies
-- [ ] **User provisioning script** - Generate random initial password, display once
-- [ ] **Documentation** - Update README with monitor usage
+- [x] **CSS styling** - VVP brand teal (#2a9d8f) primary color, aligned status colors
+- [x] **nginx reverse proxy** - TLS termination at `https://pbx.rcnx.io/sip-monitor/`
+- [x] **Deployment script** - `deploy-sip-monitor.sh` using `az vm run-command`
+- [x] **Systemd service** - New `vvp-sip-redirect.service` with monitor deps
+- [x] **User provisioning script** - `provision-monitor-user.sh` wraps auth.py CLI
+- [x] **Documentation** - README updated with dashboard section
+- [x] **Reverse proxy path fix** - All URLs changed to relative for nginx compatibility
+- [x] **Configurable cookie path** - `VVP_MONITOR_COOKIE_PATH` env var (default `/`, production `/sip-monitor/`)
+
+**Implementation Notes:**
+
+- Old `vvp-mock-sip.service` is stopped/disabled during deployment
+- All HTML/JS URLs changed from absolute to relative for nginx path-prefix proxying
+- WebSocket URL computed from `location.pathname` for correct `wss://` path
+- Cookie path configurable via `VVP_MONITOR_COOKIE_PATH`
 
 **Key Files:**
 
 ```
+services/sip-redirect/app/
+├── config.py                     # MODIFIED: MONITOR_COOKIE_PATH
+├── monitor/server.py             # MODIFIED: Relative redirect, cookie path
+└── monitor_web/
+    ├── sip-monitor.css           # MODIFIED: VVP teal theme
+    ├── sip-monitor.js            # MODIFIED: Relative URLs, WS path
+    ├── index.html                # MODIFIED: Relative URLs
+    └── login.html                # MODIFIED: Relative URLs
+
 services/pbx/
-├── test/
-│   └── monitor_web/
-│       └── sip-monitor.css       # MODIFY: VVP theme
 ├── config/
-│   ├── vvp-mock-sip.service      # MODIFY: Add deps
-│   ├── nginx-sip-monitor.conf    # NEW: Reverse proxy config
-│   └── users.json.template       # NEW: User store template
-└── README.md                     # UPDATE: Monitor documentation
-```
-
-**nginx Configuration:**
-
-```nginx
-location /sip-monitor/ {
-    proxy_pass http://127.0.0.1:8090/;
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-}
+│   ├── vvp-sip-redirect.service  # NEW: Systemd unit
+│   └── nginx-sip-monitor.conf   # NEW: Reverse proxy config
+├── scripts/
+│   ├── deploy-sip-monitor.sh    # NEW: Deployment script
+│   └── provision-monitor-user.sh # NEW: User provisioning
+└── README.md                     # MODIFIED: Dashboard section
 ```
 
 **Exit Criteria:**
@@ -2225,6 +2227,6 @@ location /sip-monitor/ {
 - [ ] Dashboard accessible at https://pbx.rcnx.io/sip-monitor/
 - [ ] Login page appears, admin can authenticate
 - [ ] WebSocket uses wss:// (secure)
-- [ ] VVP-themed styling applied
+- [x] VVP-themed styling applied
 - [ ] Test call (71006) captured and visualized
-- [ ] Documentation complete
+- [x] Documentation complete

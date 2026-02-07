@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 from app.config import (
+    MONITOR_COOKIE_PATH,
     MONITOR_PORT,
     MONITOR_SESSION_TTL,
     MONITOR_WS_HEARTBEAT,
@@ -149,7 +150,7 @@ async def handle_login(request):
         secure=True,  # Requires HTTPS (via nginx)
         samesite="Strict",
         max_age=MONITOR_SESSION_TTL,
-        path="/",
+        path=MONITOR_COOKIE_PATH,
     )
 
     log.info(f"User '{username}' logged in from {client_ip}")
@@ -164,7 +165,7 @@ async def handle_logout(request):
         await session_store.delete(session_id)
 
     response = web.json_response({"success": True})
-    response.del_cookie(COOKIE_NAME, path="/")
+    response.del_cookie(COOKIE_NAME, path=MONITOR_COOKIE_PATH)
 
     return response
 
@@ -250,7 +251,7 @@ async def handle_index(request):
 
     if session is None:
         # Redirect to login
-        raise web.HTTPFound("/login")
+        raise web.HTTPFound("login")
 
     index_file = MONITOR_WEB_DIR / "index.html"
     if not index_file.exists():

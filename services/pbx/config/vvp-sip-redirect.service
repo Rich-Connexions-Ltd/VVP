@@ -1,0 +1,27 @@
+[Unit]
+Description=VVP SIP Redirect Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/vvp/sip-redirect
+ExecStart=/opt/vvp/sip-redirect/venv/bin/python -m app.main
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Core configuration
+Environment=PYTHONUNBUFFERED=1
+Environment=VVP_SIP_LISTEN_PORT=5060
+Environment=VVP_ISSUER_URL=http://localhost:8001
+
+# Monitoring dashboard
+Environment=VVP_MONITOR_ENABLED=true
+Environment=VVP_MONITOR_PORT=8090
+Environment=VVP_MONITOR_USERS_FILE=/opt/vvp/sip-redirect/users.json
+Environment=VVP_MONITOR_COOKIE_PATH=/sip-monitor/
+
+[Install]
+WantedBy=multi-user.target

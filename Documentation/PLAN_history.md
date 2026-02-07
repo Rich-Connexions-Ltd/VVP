@@ -8461,3 +8461,60 @@ Extracted the verifier's dossier cache and revocation infrastructure to `common/
    - [High] Issuer cache never populated (check_dossier_revocation only reads, never puts)
    - [Medium] No issuer tests for revocation gate
 3. **Code Review (Revision 2)** — APPROVED
+
+---
+
+# Sprint 49: SIP Monitor - Polish and Deployment
+
+## Goal
+
+Finalize VVP-branded styling, configure nginx TLS termination for the monitoring dashboard, and deploy to the PBX VM.
+
+## Implementation Summary
+
+### CSS Theme Update
+- Changed primary color from blue (#2563eb) to VVP brand teal (#2a9d8f)
+- Aligned status colors with vvp-theme.css: valid (#28a745), invalid (#dc3545), indeterminate (#ffc107), unknown (#6c757d)
+- Added teal top border to header and login container
+- Updated all RGBA backgrounds to match new hex values
+
+### Reverse Proxy Path Fix
+- All absolute URLs in HTML/JS changed to relative for nginx path-prefix proxying
+- WebSocket URL computed from location.pathname for correct wss:// path
+- Server redirect changed to relative ("login" instead of "/login")
+- Cookie path made configurable via VVP_MONITOR_COOKIE_PATH env var
+
+### Deployment Infrastructure
+- nginx reverse proxy config with WebSocket upgrade support
+- New systemd service (vvp-sip-redirect.service) replacing old mock service
+- Deployment script using az vm run-command (10-step sequential deployment)
+- User provisioning script wrapping auth.py CLI
+
+## Files Changed
+
+| File | Action | Purpose |
+|------|--------|---------|
+| services/sip-redirect/app/monitor_web/sip-monitor.css | Modified | VVP teal theme |
+| services/sip-redirect/app/monitor_web/index.html | Modified | Relative URLs |
+| services/sip-redirect/app/monitor_web/login.html | Modified | Relative URLs |
+| services/sip-redirect/app/monitor_web/sip-monitor.js | Modified | Relative URLs + WS path |
+| services/sip-redirect/app/monitor/server.py | Modified | Relative redirect + cookie path |
+| services/sip-redirect/app/config.py | Modified | MONITOR_COOKIE_PATH env var |
+| services/pbx/config/nginx-sip-monitor.conf | Created | nginx reverse proxy |
+| services/pbx/config/vvp-sip-redirect.service | Created | Systemd unit |
+| services/pbx/scripts/deploy-sip-monitor.sh | Created | Deployment script |
+| services/pbx/scripts/provision-monitor-user.sh | Created | User provisioning |
+| services/pbx/README.md | Modified | Dashboard documentation |
+
+## Test Results
+
+- Verifier: 1752 passed, 9 skipped
+- SIP Redirect: 74 passed
+
+## Review History
+
+1. **Plan Review (Round 1)** — CHANGES_REQUESTED
+   - [Medium] Stop/disable vvp-mock-sip.service before enabling new unit
+   - Recommendation: Make cookie path configurable
+   - Recommendation: Document password exposure in az output
+2. **Plan Review (Round 2)** — APPROVED

@@ -228,8 +228,12 @@ services/pbx/
 │   ├── 00_vvp_headers.xml       # VVP header extraction dialplan
 │   ├── 01_vvp_loopback.xml      # Loopback target (9999)
 │   ├── 02_vvp_verto_test.xml    # C-leg validation (8888)
-│   └── vvp_redirect.xml         # Gateway to VVP SIP Redirect
+│   ├── vvp_redirect.xml         # Gateway to VVP SIP Redirect
+│   ├── vvp-sip-redirect.service # Systemd unit for sip-redirect
+│   └── nginx-sip-monitor.conf  # nginx reverse proxy for dashboard
 ├── scripts/
+│   ├── deploy-sip-monitor.sh    # Deploy sip-redirect + monitor to PBX
+│   ├── provision-monitor-user.sh # Create dashboard admin user
 │   ├── monitor-sip.sh           # SIP packet capture
 │   ├── watch-channels.sh        # Channel variable monitoring
 │   └── tail-vvp-logs.sh         # VVP log filtering
@@ -259,6 +263,57 @@ Headers returned by VVP SIP Redirect service on 302 responses:
 | `X-VVP-Brand-Logo` | No | Logo URL from dossier vCard |
 | `X-VVP-Status` | Yes | VALID, INVALID, or INDETERMINATE |
 
+## SIP Monitoring Dashboard
+
+Real-time SIP event visualization dashboard for debugging VVP call flows.
+
+**URL:** `https://pbx.rcnx.io/sip-monitor/`
+
+### Features
+
+- Real-time WebSocket streaming of SIP INVITE events
+- JWT/PASSporT decoding with VVP field highlighting
+- Session-based authentication with rate limiting
+- Tabbed detail view: Summary, All Headers, VVP Headers, PASSporT, Raw SIP
+
+### Initial Setup
+
+The deployment script handles everything:
+
+```bash
+# From repo root
+./services/pbx/scripts/deploy-sip-monitor.sh
+```
+
+This stops the old mock service, deploys the sip-redirect code, installs dependencies, configures nginx, provisions an admin user, and starts the service. The admin password is displayed once during provisioning.
+
+### Management Commands
+
+```bash
+# Check service status
+az vm run-command invoke --resource-group VVP --name vvp-pbx --command-id RunShellScript --scripts "systemctl status vvp-sip-redirect --no-pager"
+
+# View service logs
+az vm run-command invoke --resource-group VVP --name vvp-pbx --command-id RunShellScript --scripts "journalctl -u vvp-sip-redirect -n 50 --no-pager"
+
+# Restart service
+az vm run-command invoke --resource-group VVP --name vvp-pbx --command-id RunShellScript --scripts "systemctl restart vvp-sip-redirect"
+```
+
+### Architecture
+
+```
+Browser ──HTTPS──> nginx (pbx.rcnx.io:443)
+                     │
+                     ├── /sip-monitor/ ──proxy──> aiohttp (127.0.0.1:8090)
+                     │                              ├── /login    (login page)
+                     │                              ├── /         (dashboard)
+                     │                              ├── /api/*    (REST API)
+                     │                              └── /ws       (WebSocket)
+                     │
+                     └── /* ──> FusionPBX (default)
+```
+
 ## Cost
 
 | Resource | Monthly |
@@ -275,3 +330,4 @@ Headers returned by VVP SIP Redirect service on 302 responses:
 - [PLAN_PBX.md](../../Documentation/PLAN_PBX.md) - Approved architecture
 - [Sprint 42](../../SPRINTS.md) - SIP Redirect Signing Service
 - [Sprint 43](../../SPRINTS.md) - PBX Test Infrastructure
+- [Sprint 47-49](../../SPRINTS.md) - SIP Monitor Dashboard

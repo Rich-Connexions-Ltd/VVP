@@ -1,6 +1,6 @@
 # VVP System Deployment Architecture
 
-**Version:** 1.1
+**Version:** 1.3
 **Last Updated:** 2026-02-06
 **Status:** Source of Truth for VVP Infrastructure
 
@@ -83,7 +83,7 @@ The VVP (Verified Voice Protocol) system consists of multiple interconnected ser
 | FreeSWITCH WSS | 7443 | WSS | Active | WebRTC SIP over WebSocket |
 | **SIP Signer (Live)** | 5070 | UDP | **Deployed** | VVP signing service (`services/sip-redirect/`) |
 | **SIP Signer (Production)** | 5060/5061 | UDP/TLS | Future | Standard SIP ports for enterprise |
-| **SIP Verifier (Live)** | 5071 | UDP | **Deployed** | VVP verification service (`services/sip-verify/`) |
+| **SIP Verifier (Live)** | 5071 | UDP | **Deployed (CI/CD)** | VVP verification service (`services/sip-verify/`) |
 | **SIP Status (Signer)** | 8080 | HTTP | Deployed | `/status` endpoint (admin auth required) |
 | FusionPBX Admin | 443 | HTTPS | Active | Web administration |
 
@@ -259,8 +259,8 @@ Enterprise SBC <──SIP 302 + VVP Headers────────────�
 | Aspect | Status |
 |--------|--------|
 | Code | Complete (Sprint 44) |
-| Deployment | Mock on port 5071 |
-| CI/CD | Not automated |
+| Deployment | **Live on port 5071** |
+| CI/CD | **Automated** (atomic symlink deploy with rollback) |
 
 **Flow:**
 
@@ -281,79 +281,21 @@ PBX/WebRTC <──SIP 302 + X-VVP Headers─────────────
 
 ## CI/CD Pipeline
 
-### GitHub Actions Workflow
+> **Full documentation:** See [CICD.md](CICD.md) for comprehensive pipeline documentation including all job details, dependency graphs, deployment strategies, troubleshooting, and rollback procedures.
 
 **Trigger:** Push to `main` branch
 
-**File:** `.github/workflows/deploy.yml`
+**Workflows:**
+- `.github/workflows/deploy.yml` — Build, test, and deploy all services
+- `.github/workflows/integration-tests.yml` — Nightly and manual integration tests
 
-```
-┌─────────────────┐
-│  Push to main   │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Detect Changes  │ ← paths-filter determines which services changed
-└────────┬────────┘
-         │
-    ┌────┴────┐
-    ▼         ▼
-┌────────┐ ┌────────┐
-│ Test   │ │ Test   │
-│Verifier│ │Issuer  │
-└───┬────┘ └───┬────┘
-    │          │
-    └────┬─────┘
-         ▼
-┌─────────────────┐     ┌─────────────────┐
-│ Deploy Verifier │────>│ Deploy Issuer   │ (parallel)
-└────────┬────────┘     └────────┬────────┘
-         │                       │
-         └───────────┬───────────┘
-                     ▼
-         ┌─────────────────────┐
-         │ Build Witness Image │ (if witnesses/ changed)
-         └──────────┬──────────┘
-                    ▼
-         ┌─────────────────────┐
-         │ Deploy Witnesses    │ (matrix: 3 witnesses)
-         └──────────┬──────────┘
-                    ▼
-         ┌─────────────────────┐
-         │ Verify Witnesses    │ (OOBI endpoint checks)
-         └──────────┬──────────┘
-                    ▼
-         ┌─────────────────────┐
-         │Post-Deploy Tests    │ (integration tests)
-         └─────────────────────┘
-```
-
-### Build & Deploy Steps
-
-**Verifier & Issuer:**
-
-1. Build Docker image
-2. Push to Azure Container Registry (ACR)
-3. Update Container App with new image
-4. Set environment variables
-5. Wait for healthy status
-
-**Witnesses:**
-
-1. Build custom witness image (based on `gleif/keri:1.2.10`)
-2. Push to ACR
-3. Deploy to each witness Container App (matrix)
-4. Verify OOBI endpoints respond
-
-### Post-Deployment Testing
-
-After deployment, integration tests run against Azure:
-
-- Environment: `VVP_TEST_MODE=azure`
-- Issuer URL: `https://vvp-issuer.rcnx.io`
-- Verifier URL: `https://vvp-verifier.rcnx.io`
-- Results submitted to `/admin/deployment-tests` endpoint
+**Key features:**
+- **Path-based change detection** — Only changed services are tested and deployed
+- **6 deployment targets** — Verifier, Issuer, 3 Witnesses (Container Apps) + 3 PBX VM services
+- **Automatic rollback** — SIP services on PBX VM roll back on failure via atomic symlink switch
+- **Serialized VM deploys** — PBX jobs chain sequentially to avoid Azure run-command conflicts
+- **Post-deployment tests** — Integration tests run against Azure after deploy, results reported to admin dashboard
+- **OIDC authentication** — No static Azure credentials stored in GitHub
 
 ---
 
@@ -533,31 +475,29 @@ echo "PBX: (check via Azure CLI)"
 | Component | Code | Deployment | CI/CD |
 |-----------|------|------------|-------|
 | `services/sip-redirect/` | Complete (Sprint 42) | **Live on 5070** | **Automated** |
-| `services/sip-verify/` | Complete (Sprint 44) | Mock on 5071 | Pending |
+| `services/sip-verify/` | Complete (Sprint 44) | **Live on 5071** | **Automated** |
 | PBX dialplan | Complete | Manual via Azure CLI | **Automated** |
 | Mock SIP service | Legacy | **Stopped** | N/A |
 
 > **CI/CD Note:** SIP redirect deployment uses atomic symlink switching with automatic
 > rollback on failure. Requires `AZURE_STORAGE_ACCOUNT` and `VVP_SIP_STATUS_ADMIN_KEY` secrets.
 
-### Currently Not in CI/CD
+### CI/CD Coverage
 
-| Component | Current State | Required Action |
-|-----------|---------------|-----------------|
-| SIP Verify Service | Code ready, not deployed | Add test and deploy jobs (pending) |
+All services are now automated in CI/CD. See [CICD.md](CICD.md) for full details.
 
-> **Note:** SIP Redirect Signing and PBX Configuration are now automated in CI/CD.
-> See `.github/workflows/deploy.yml` for the `deploy-sip-redirect` and `deploy-pbx-config` jobs.
+> **Note:** SIP Redirect, SIP Verify, and PBX Configuration are all automated in CI/CD.
+> See `.github/workflows/deploy.yml` for the `deploy-sip-redirect`, `deploy-sip-verify`, and `deploy-pbx-config` jobs.
 
 ### Future Improvements
 
-1. ~~**Automate SIP Services Deployment**~~ - ✅ Completed with atomic deploy and rollback
-2. **PBX Infrastructure-as-Code** - Terraform/Bicep for VM provisioning
-3. **Monitoring Dashboard** - Centralized health monitoring
-4. **Alerting** - PagerDuty/Slack integration for failures
-5. **Blue-Green Deployment** - Zero-downtime updates for Container Apps
-6. **Azure Key Vault** - Dynamic secrets management for VM services
-7. **Add SIP Verify Deployment** - Similar atomic deployment pattern for verification service
+1. ~~**Automate SIP Services Deployment**~~ - ✅ Completed (sip-redirect + sip-verify)
+2. ~~**Add SIP Verify Deployment**~~ - ✅ Completed with atomic deploy and rollback
+3. **PBX Infrastructure-as-Code** - Terraform/Bicep for VM provisioning
+4. **Monitoring Dashboard** - Centralized health monitoring
+5. **Alerting** - PagerDuty/Slack integration for failures
+6. **Blue-Green Deployment** - Zero-downtime updates for Container Apps
+7. **Azure Key Vault** - Dynamic secrets management for VM services
 
 ---
 
@@ -910,23 +850,16 @@ az vm run-command invoke --resource-group VVP --name vvp-pbx \
 
 ## CI/CD Conditional Deployment
 
-### Current Behavior
+All services use path-based change detection. See [CICD.md](CICD.md) for full details.
 
-| Service | Trigger | Notes |
-|---------|---------|-------|
-| Verifier | Every push to main | Always rebuilds |
-| Issuer | Every push to main | Always rebuilds |
-| Witnesses | Only when `services/witness/` changes | Conditional |
-
-### Planned Improvement
-
-Add conditional deployment for issuer/verifier:
-
-```yaml
-deploy-issuer:
-  needs: [changes, test-verifier, test-issuer]
-  if: needs.changes.outputs.issuer == 'true'
-```
+| Service | Trigger Paths | Notes |
+|---------|--------------|-------|
+| Verifier | `services/verifier/**`, `common/**` | Conditional |
+| Issuer | `services/issuer/**`, `common/**` | Conditional |
+| Witnesses | `services/witness/**` | Conditional, matrix deploy |
+| SIP Redirect | `services/sip-redirect/**`, `common/**` | Conditional, atomic deploy |
+| SIP Verify | `services/sip-verify/**`, `common/**` | Conditional, atomic deploy |
+| PBX Config | `services/pbx/config/**` | Conditional, dialplan reload |
 
 ---
 
@@ -934,6 +867,7 @@ deploy-issuer:
 
 | Document | Description |
 |----------|-------------|
+| [CICD.md](CICD.md) | **Comprehensive CI/CD pipeline documentation** |
 | [SIP_SIGNER.md](SIP_SIGNER.md) | SIP signing service admin guide |
 | [SIP_VERIFIER.md](SIP_VERIFIER.md) | SIP verification service admin guide |
 | `CLAUDE.md` | Development workflow and permissions |
@@ -945,6 +879,7 @@ deploy-issuer:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.3 | 2026-02-07 | Updated CI/CD section to reference new CICD.md. Fixed outdated SIP verify status (now live + automated). Updated conditional deployment table. |
 | 1.2 | 2026-02-07 | Sprint 46: PostgreSQL migration. Updated database section for Azure PostgreSQL, removed SQLite workarounds. |
 | 1.1 | 2026-02-06 | Added missing sections: Test Environment, PBX Deployment, TN Mapping, Database Config, TLS, Logs, NSG, Secrets, Related Docs. Updated SIP service status. |
 | 1.0 | 2026-02-06 | Initial comprehensive deployment document |

@@ -89,7 +89,7 @@ async function apiRequest(url, options = {}) {
 
     if (response.status === 401) {
         // Session expired - redirect to login
-        window.location.href = '/login';
+        window.location.href = 'login';
         throw new Error('Session expired');
     }
 
@@ -167,7 +167,7 @@ function addEventsToTable(newEvents) {
  */
 async function refreshEvents() {
     try {
-        const response = await apiRequest('/api/events');
+        const response = await apiRequest('api/events');
         const data = await response.json();
 
         state.events = data.events || [];
@@ -211,7 +211,7 @@ async function pollEvents() {
     state.isPolling = true;
 
     try {
-        const response = await apiRequest(`/api/events/since/${state.lastEventId}`);
+        const response = await apiRequest(`api/events/since/${state.lastEventId}`);
         const data = await response.json();
 
         if (data.events && data.events.length > 0) {
@@ -247,7 +247,8 @@ function connectWebSocket() {
     }
 
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${protocol}//${location.host}/ws`;
+    const basePath = location.pathname.replace(/[^/]*$/, '');
+    const url = `${protocol}//${location.host}${basePath}ws`;
 
     updateConnectionStatus('connecting');
     state.ws = new WebSocket(url);
@@ -301,7 +302,7 @@ function onWsMessage(msg) {
             if (msg.message === 'session_expired') {
                 updateConnectionStatus('error');
                 // Terminal - redirect to login
-                setTimeout(() => { window.location.href = '/login'; }, 2000);
+                setTimeout(() => { window.location.href = 'login'; }, 2000);
             }
             break;
     }
@@ -314,7 +315,7 @@ function onWsClose(event) {
     if (event.code === 4001) {
         // Session expired - terminal, do NOT reconnect
         updateConnectionStatus('error');
-        setTimeout(() => { window.location.href = '/login'; }, 2000);
+        setTimeout(() => { window.location.href = 'login'; }, 2000);
         return;
     }
 
@@ -848,7 +849,7 @@ async function clearBuffer() {
     if (!confirm('Clear all events from the buffer?')) return;
 
     try {
-        const response = await apiRequest('/api/clear', { method: 'POST' });
+        const response = await apiRequest('api/clear', { method: 'POST' });
         const data = await response.json();
 
         if (data.success) {
@@ -877,11 +878,11 @@ async function clearBuffer() {
  */
 async function logout() {
     try {
-        await apiRequest('/api/logout', { method: 'POST' });
+        await apiRequest('api/logout', { method: 'POST' });
     } catch (error) {
         console.error('Logout error:', error);
     }
-    window.location.href = '/login';
+    window.location.href = 'login';
 }
 
 // =============================================================================
