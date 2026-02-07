@@ -220,17 +220,7 @@ When the user says "Complete", immediately perform all of the following without 
    - If a separate PLAN_*.md file was created, move it to `Documentation/archive/` after appending
 3. **Commit all changes** - Stage all modified/new files and create a descriptive commit
 4. **Push to main** - Push the commit to the main branch
-5. **Rebuild Docker images (if needed)** - Only rebuild if the commit includes changes to service code:
-   - Use `git diff --name-only HEAD~1` to check which files changed in the commit
-   - Rebuild issuer if changes touch: `services/issuer/`, `common/`, or `docker-compose.yml`
-   - Rebuild verifier if changes touch: `services/verifier/`, `common/`, or `docker-compose.yml`
-   - Skip rebuild if changes are only to docs, tests, or unrelated files
-   - Command: `docker compose --profile full build <service>` (use full Docker path if needed)
-6. **Restart local servers** - Based on which files changed:
-   - Run `./scripts/restart-server.sh` if verifier files changed
-   - Run `./scripts/restart-issuer.sh` if issuer files changed
-   - When in doubt about which service was modified, restart both
-7. **Monitor Azure deployment** - Run `./scripts/monitor-azure-deploy.sh` to watch for successful deployment
+5. **Monitor Azure deployment** - Use `gh run watch` to monitor the GitHub Actions workflow for successful deployment
 
 Do not ask for confirmation - execute all steps automatically.
 
