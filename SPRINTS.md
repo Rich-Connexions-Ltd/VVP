@@ -35,6 +35,7 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 46 | PostgreSQL Migration | COMPLETE | Sprint 45 |
 | 47 | SIP Monitor - Core Infrastructure | COMPLETE | Sprint 43 |
 | 48 | SIP Monitor - Real-Time & VVP Viz | COMPLETE | Sprint 47 |
+| 49 | Shared Dossier Cache & Revocation | COMPLETE | Sprint 32 |
 
 ---
 

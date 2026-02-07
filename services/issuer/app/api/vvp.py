@@ -12,6 +12,9 @@ from app.api.models import CreateVVPRequest, CreateVVPResponse, ErrorResponse
 from app.auth.api_key import Principal
 from app.auth.roles import check_credential_write_role, require_auth
 from app.keri.identity import get_identity_manager
+from common.vvp.dossier.trust import TrustDecision
+
+from app.vvp.dossier_service import check_dossier_revocation
 from app.vvp.exceptions import (
     IdentityNotAvailableError,
     InvalidPhoneNumberError,
@@ -48,6 +51,7 @@ def _get_witness_url() -> str:
     response_model=CreateVVPResponse,
     responses={
         400: {"model": ErrorResponse, "description": "Invalid request"},
+        403: {"model": ErrorResponse, "description": "Revoked credentials"},
         404: {"model": ErrorResponse, "description": "Identity not found"},
         500: {"model": ErrorResponse, "description": "Signing failed"},
     },
@@ -73,6 +77,12 @@ async def create_vvp_attestation(
 
     **Dossier URL:** Auto-generated as {ISSUER_BASE_URL}/dossier/{dossier_said}
     The dossier must exist and be accessible at that URL for verifier fetch.
+
+    **Revocation Checking:** Before signing, checks credential revocation
+    status from cache. If any credential in the chain is revoked, returns 403.
+    The ``revocation_status`` field indicates the check result:
+    - "TRUSTED": Credentials active or status still pending (safe to sign)
+    - Response 403: Revoked credentials detected (signing rejected)
     """
     # Check authorization (accepts issuer:operator+ OR org:dossier_manager+)
     check_credential_write_role(principal)
@@ -93,6 +103,24 @@ async def create_vvp_attestation(
 
         issuer_oobi = build_issuer_oobi(identity.aid, witness_url)
         dossier_url = build_dossier_url(body.dossier_said, issuer_base_url)
+
+        # Check dossier revocation status before signing
+        trust, revocation_warning = await check_dossier_revocation(
+            dossier_url=dossier_url,
+            dossier_said=body.dossier_said,
+        )
+
+        if trust == TrustDecision.UNTRUSTED:
+            log.warning(
+                f"Rejecting VVP creation - revoked credentials: {body.dossier_said}"
+            )
+            raise HTTPException(
+                status_code=403,
+                detail="Credential chain contains revoked credentials",
+            )
+
+        if revocation_warning:
+            log.info(f"VVP creation proceeding with warning: {revocation_warning}")
 
         # Cap exp_seconds to normative maximum (§5.2B)
         exp_seconds = min(body.exp_seconds, MAX_VALIDITY_SECONDS)
@@ -127,6 +155,7 @@ async def create_vvp_attestation(
             kid_oobi=issuer_oobi,
             iat=vvp_header.iat,
             exp=vvp_header.exp,
+            revocation_status=trust.value,
         )
 
     except InvalidPhoneNumberError as e:

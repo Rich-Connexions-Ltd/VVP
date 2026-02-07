@@ -396,6 +396,14 @@ class CreateVVPResponse(BaseModel):
     kid_oobi: str = Field(..., description="Full kid OOBI URL for issuer")
     iat: int = Field(..., description="Issued-at timestamp (seconds since epoch)")
     exp: int = Field(..., description="Expiry timestamp (seconds since epoch)")
+    revocation_status: str = Field(
+        "TRUSTED",
+        description=(
+            "Credential revocation check result. "
+            "TRUSTED = credentials active or status pending (safe to sign). "
+            "UNTRUSTED results in 403 rejection, not returned here."
+        ),
+    )
 
 
 # =============================================================================

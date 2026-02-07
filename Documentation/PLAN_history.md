@@ -8406,3 +8406,58 @@ Added a **subscriber mechanism** to `SIPEventBuffer` using `asyncio.Queue` objec
    - [Medium] Idle timeout not enforced based on client activity only — rewrote to track `last_client_msg` with remaining-time computation
 
 4. **Code Review (Revision 2)** - APPROVED
+
+# Sprint 49: Shared Dossier Cache & Revocation
+
+## Summary
+
+Extracted the verifier's dossier cache and revocation infrastructure to `common/`, then integrated into the issuer's VVP creation flow. Both signer and verifier use the same `DossierCache` class with background revocation checking.
+
+**Trust Model:**
+- Unknown revocation status → TRUSTED (allow call to proceed)
+- Revoked → UNTRUSTED (reject signing with 403)
+
+## Architecture
+
+- `DossierCache` accepts injectable `tel_client_factory` parameter
+- Verifier injects its own `get_tel_client` (uses verifier's WitnessPool singleton)
+- Issuer uses common fallback (no WitnessPool needed)
+- TELClient and WitnessPool kept as full implementations in verifier (not shims) to avoid broken relative import resolution
+
+## Files Changed
+
+| File | Action | Purpose |
+|------|--------|---------|
+| `common/common/vvp/dossier/__init__.py` | Created | Package exports |
+| `common/common/vvp/dossier/cache.py` | Created | DossierCache with tel_client_factory DI |
+| `common/common/vvp/dossier/config.py` | Created | Shared env-based configuration |
+| `common/common/vvp/dossier/exceptions.py` | Created | Service-agnostic exceptions |
+| `common/common/vvp/dossier/fetch.py` | Created | HTTP fetch with constraints |
+| `common/common/vvp/dossier/trust.py` | Created | TrustDecision enum |
+| `common/common/vvp/keri/__init__.py` | Created | Package exports |
+| `common/common/vvp/keri/tel_client.py` | Created | TELClient, CredentialStatus |
+| `common/common/vvp/keri/witness_pool.py` | Created | WitnessPool with GLEIF discovery |
+| `services/verifier/app/vvp/dossier/cache.py` | Modified | Compatibility shim |
+| `services/verifier/app/vvp/dossier/fetch.py` | Modified | Compatibility shim |
+| `services/verifier/app/vvp/dossier/exceptions.py` | Modified | Re-export from common |
+| `services/verifier/tests/conftest.py` | Modified | GLEIF discovery env var |
+| `services/verifier/tests/test_chain_revocation.py` | Modified | Patch locations |
+| `services/verifier/tests/test_dossier.py` | Modified | Patch locations |
+| `services/verifier/tests/vectors/runner.py` | Modified | Patch locations |
+| `services/issuer/app/vvp/dossier_service.py` | Created | Cache population + revocation check |
+| `services/issuer/app/api/vvp.py` | Modified | Revocation gate before signing |
+| `services/issuer/app/api/models.py` | Modified | revocation_status field |
+| `services/issuer/tests/test_dossier_revocation.py` | Created | 9 tests for revocation gate |
+
+## Test Results
+
+- Verifier: 1752 passed, 9 skipped
+- Issuer: 399 passed, 5 skipped
+
+## Review History
+
+1. **Plan Review** — APPROVED
+2. **Code Review (Initial)** — CHANGES_REQUESTED
+   - [High] Issuer cache never populated (check_dossier_revocation only reads, never puts)
+   - [Medium] No issuer tests for revocation gate
+3. **Code Review (Revision 2)** — APPROVED
