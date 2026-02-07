@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VVP SIP Monitor</title>
+    <link rel="stylesheet" href="/static/sip-monitor.css">
+</head>
+<body>
+    <header class="header">
+        <div class="header-left">
+            <h1>VVP SIP Monitor</h1>
+            <span id="connection-status" class="status-badge status-disconnected">
+                Disconnected
+            </span>
+        </div>
+        <div class="header-right">
+            <span class="buffer-info">
+                Buffer: <span id="buffer-count">0</span>/<span id="buffer-max">100</span>
+            </span>
+            <button id="clear-btn" class="btn btn-secondary" title="Clear event buffer">
+                Clear
+            </button>
+            <button id="logout-btn" class="btn btn-outline" title="Sign out">
+                Logout
+            </button>
+        </div>
+    </header>
+
+    <main class="main-content">
+        <div class="panel event-list-panel">
+            <div class="panel-header">
+                <h2>Recent Events</h2>
+                <span id="event-count" class="count-badge">0</span>
+            </div>
+            <div class="panel-body">
+                <table class="event-table" id="event-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Service</th>
+                            <th>From</th>
+                            <th>To</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="event-tbody">
+                        <tr class="empty-row">
+                            <td colspan="5">No events yet. Make a test call to see SIP traffic.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="panel event-detail-panel" id="detail-panel" style="display: none;">
+            <div class="panel-header">
+                <h2>Event Details</h2>
+                <button id="close-detail" class="btn btn-icon" title="Close">&times;</button>
+            </div>
+            <div class="panel-body">
+                <div class="detail-tabs">
+                    <button class="tab active" data-tab="summary">Summary</button>
+                    <button class="tab" data-tab="headers">All Headers</button>
+                    <button class="tab" data-tab="vvp">VVP Headers</button>
+                    <button class="tab" data-tab="raw">Raw SIP</button>
+                </div>
+                <div class="detail-content" id="detail-content">
+                    <!-- Content injected by JavaScript -->
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="/static/sip-monitor.js"></script>
+</body>
+</html>

@@ -1,0 +1,650 @@
+/**
+ * VVP SIP Monitor Dashboard - Styles
+ * Sprint 47: Basic styling for monitoring dashboard
+ */
+
+/* =============================================================================
+   CSS VARIABLES
+   ============================================================================= */
+
+:root {
+    /* Colors - VVP Theme */
+    --color-primary: #2563eb;
+    --color-primary-dark: #1d4ed8;
+    --color-secondary: #64748b;
+    --color-success: #10b981;
+    --color-warning: #f59e0b;
+    --color-danger: #ef4444;
+
+    /* Status colors */
+    --status-valid: #10b981;
+    --status-invalid: #ef4444;
+    --status-indeterminate: #f59e0b;
+    --status-unknown: #9ca3af;
+
+    /* Service colors */
+    --service-signing: #8b5cf6;
+    --service-verify: #06b6d4;
+
+    /* Backgrounds */
+    --bg-primary: #ffffff;
+    --bg-secondary: #f8fafc;
+    --bg-tertiary: #f1f5f9;
+
+    /* Text */
+    --text-primary: #1e293b;
+    --text-secondary: #64748b;
+    --text-muted: #94a3b8;
+
+    /* Borders */
+    --border-color: #e2e8f0;
+    --border-radius: 6px;
+
+    /* Shadows */
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+    --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.1);
+
+    /* Spacing */
+    --spacing-xs: 4px;
+    --spacing-sm: 8px;
+    --spacing-md: 16px;
+    --spacing-lg: 24px;
+    --spacing-xl: 32px;
+}
+
+/* =============================================================================
+   RESET & BASE
+   ============================================================================= */
+
+*, *::before, *::after {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--text-primary);
+    background-color: var(--bg-secondary);
+}
+
+/* =============================================================================
+   TYPOGRAPHY
+   ============================================================================= */
+
+h1, h2, h3, h4, h5, h6 {
+    margin: 0;
+    font-weight: 600;
+}
+
+h1 { font-size: 1.5rem; }
+h2 { font-size: 1.125rem; }
+
+.monospace {
+    font-family: 'SF Mono', Monaco, Consolas, 'Liberation Mono', monospace;
+    font-size: 0.875em;
+}
+
+/* =============================================================================
+   BUTTONS
+   ============================================================================= */
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--spacing-sm) var(--spacing-md);
+    border: 1px solid transparent;
+    border-radius: var(--border-radius);
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn-primary {
+    background-color: var(--color-primary);
+    color: white;
+}
+
+.btn-primary:hover:not(:disabled) {
+    background-color: var(--color-primary-dark);
+}
+
+.btn-secondary {
+    background-color: var(--bg-tertiary);
+    color: var(--text-primary);
+    border-color: var(--border-color);
+}
+
+.btn-secondary:hover:not(:disabled) {
+    background-color: var(--border-color);
+}
+
+.btn-outline {
+    background-color: transparent;
+    color: var(--text-secondary);
+    border-color: var(--border-color);
+}
+
+.btn-outline:hover:not(:disabled) {
+    background-color: var(--bg-tertiary);
+}
+
+.btn-icon {
+    padding: var(--spacing-xs) var(--spacing-sm);
+    background: none;
+    border: none;
+    font-size: 1.25rem;
+    color: var(--text-secondary);
+}
+
+.btn-icon:hover {
+    color: var(--text-primary);
+}
+
+/* =============================================================================
+   BADGES
+   ============================================================================= */
+
+.badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.service-signing {
+    background-color: rgba(139, 92, 246, 0.15);
+    color: var(--service-signing);
+}
+
+.service-verify {
+    background-color: rgba(6, 182, 212, 0.15);
+    color: var(--service-verify);
+}
+
+.status-valid {
+    background-color: rgba(16, 185, 129, 0.15);
+    color: var(--status-valid);
+}
+
+.status-invalid {
+    background-color: rgba(239, 68, 68, 0.15);
+    color: var(--status-invalid);
+}
+
+.status-indeterminate {
+    background-color: rgba(245, 158, 11, 0.15);
+    color: var(--status-indeterminate);
+}
+
+.status-unknown {
+    background-color: rgba(156, 163, 175, 0.15);
+    color: var(--status-unknown);
+}
+
+.count-badge {
+    background-color: var(--bg-tertiary);
+    color: var(--text-secondary);
+    padding: 2px 10px;
+    border-radius: 10px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+/* =============================================================================
+   STATUS INDICATORS
+   ============================================================================= */
+
+.status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    border-radius: 16px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.status-badge::before {
+    content: '';
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+
+.status-connected {
+    background-color: rgba(16, 185, 129, 0.15);
+    color: var(--status-valid);
+}
+
+.status-connected::before {
+    background-color: var(--status-valid);
+}
+
+.status-disconnected {
+    background-color: rgba(156, 163, 175, 0.15);
+    color: var(--status-unknown);
+}
+
+.status-disconnected::before {
+    background-color: var(--status-unknown);
+}
+
+.status-error {
+    background-color: rgba(239, 68, 68, 0.15);
+    color: var(--status-invalid);
+}
+
+.status-error::before {
+    background-color: var(--status-invalid);
+}
+
+/* =============================================================================
+   HEADER
+   ============================================================================= */
+
+.header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--spacing-md) var(--spacing-lg);
+    background-color: var(--bg-primary);
+    border-bottom: 1px solid var(--border-color);
+    box-shadow: var(--shadow-sm);
+}
+
+.header-left {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+}
+
+.header-right {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+}
+
+.buffer-info {
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+}
+
+/* =============================================================================
+   MAIN CONTENT
+   ============================================================================= */
+
+.main-content {
+    display: grid;
+    grid-template-columns: 1fr 400px;
+    gap: var(--spacing-lg);
+    padding: var(--spacing-lg);
+    min-height: calc(100vh - 65px);
+}
+
+@media (max-width: 1024px) {
+    .main-content {
+        grid-template-columns: 1fr;
+    }
+
+    .event-detail-panel {
+        position: fixed;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        width: 100%;
+        max-width: 450px;
+        z-index: 100;
+        box-shadow: var(--shadow-md);
+    }
+}
+
+/* =============================================================================
+   PANELS
+   ============================================================================= */
+
+.panel {
+    background-color: var(--bg-primary);
+    border-radius: var(--border-radius);
+    border: 1px solid var(--border-color);
+    overflow: hidden;
+}
+
+.panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--spacing-md);
+    border-bottom: 1px solid var(--border-color);
+    background-color: var(--bg-secondary);
+}
+
+.panel-body {
+    padding: 0;
+    overflow: auto;
+    max-height: calc(100vh - 200px);
+}
+
+.event-list-panel .panel-body {
+    max-height: calc(100vh - 180px);
+}
+
+/* =============================================================================
+   EVENT TABLE
+   ============================================================================= */
+
+.event-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.event-table th,
+.event-table td {
+    padding: var(--spacing-sm) var(--spacing-md);
+    text-align: left;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.event-table th {
+    font-weight: 600;
+    color: var(--text-secondary);
+    background-color: var(--bg-secondary);
+    position: sticky;
+    top: 0;
+}
+
+.event-row {
+    cursor: pointer;
+    transition: background-color 0.1s;
+}
+
+.event-row:hover {
+    background-color: var(--bg-secondary);
+}
+
+.event-row.selected {
+    background-color: rgba(37, 99, 235, 0.1);
+}
+
+.empty-row td {
+    padding: var(--spacing-xl);
+    text-align: center;
+    color: var(--text-muted);
+}
+
+.col-time {
+    white-space: nowrap;
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+    font-size: 0.8125rem;
+}
+
+/* =============================================================================
+   DETAIL TABS
+   ============================================================================= */
+
+.detail-tabs {
+    display: flex;
+    gap: var(--spacing-xs);
+    padding: var(--spacing-md);
+    border-bottom: 1px solid var(--border-color);
+    background-color: var(--bg-secondary);
+}
+
+.tab {
+    padding: var(--spacing-sm) var(--spacing-md);
+    border: none;
+    background: none;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    cursor: pointer;
+    border-radius: var(--border-radius);
+    transition: all 0.15s;
+}
+
+.tab:hover {
+    background-color: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.tab.active {
+    background-color: var(--color-primary);
+    color: white;
+}
+
+.detail-content {
+    padding: var(--spacing-md);
+}
+
+/* =============================================================================
+   SUMMARY TAB
+   ============================================================================= */
+
+.summary-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--spacing-md);
+}
+
+.summary-item {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xs);
+}
+
+.summary-item.full-width {
+    grid-column: 1 / -1;
+}
+
+.summary-item label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+}
+
+.summary-item value {
+    font-size: 0.875rem;
+    color: var(--text-primary);
+    word-break: break-all;
+}
+
+/* =============================================================================
+   HEADERS TABLE
+   ============================================================================= */
+
+.headers-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.headers-table th,
+.headers-table td {
+    padding: var(--spacing-sm);
+    text-align: left;
+    border-bottom: 1px solid var(--border-color);
+    font-size: 0.8125rem;
+}
+
+.headers-table th {
+    font-weight: 600;
+    color: var(--text-secondary);
+    background-color: var(--bg-secondary);
+}
+
+.header-name {
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+    white-space: nowrap;
+    width: 30%;
+}
+
+.header-value {
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+    word-break: break-all;
+}
+
+.vvp-headers .header-name {
+    color: var(--service-signing);
+}
+
+/* =============================================================================
+   VVP STATUS BANNER
+   ============================================================================= */
+
+.vvp-status-banner {
+    padding: var(--spacing-md);
+    border-radius: var(--border-radius);
+    margin-bottom: var(--spacing-md);
+    font-size: 0.875rem;
+}
+
+.vvp-status-banner.status-valid {
+    background-color: rgba(16, 185, 129, 0.1);
+    border: 1px solid var(--status-valid);
+}
+
+.vvp-status-banner.status-invalid {
+    background-color: rgba(239, 68, 68, 0.1);
+    border: 1px solid var(--status-invalid);
+}
+
+.vvp-status-banner.status-indeterminate {
+    background-color: rgba(245, 158, 11, 0.1);
+    border: 1px solid var(--status-indeterminate);
+}
+
+/* =============================================================================
+   RAW SIP
+   ============================================================================= */
+
+.raw-sip {
+    margin: 0;
+    padding: var(--spacing-md);
+    background-color: var(--bg-tertiary);
+    border-radius: var(--border-radius);
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+    font-size: 0.75rem;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-all;
+    overflow-x: auto;
+    max-height: 400px;
+}
+
+/* =============================================================================
+   EMPTY STATE
+   ============================================================================= */
+
+.empty-message {
+    padding: var(--spacing-xl);
+    text-align: center;
+    color: var(--text-muted);
+}
+
+/* =============================================================================
+   LOGIN PAGE
+   ============================================================================= */
+
+.login-page {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-tertiary) 100%);
+}
+
+.login-container {
+    width: 100%;
+    max-width: 360px;
+    padding: var(--spacing-xl);
+    background-color: var(--bg-primary);
+    border-radius: var(--border-radius);
+    box-shadow: var(--shadow-md);
+}
+
+.login-header {
+    text-align: center;
+    margin-bottom: var(--spacing-lg);
+}
+
+.login-header h1 {
+    color: var(--color-primary);
+    margin-bottom: var(--spacing-sm);
+}
+
+.login-header p {
+    color: var(--text-secondary);
+    margin: 0;
+}
+
+.login-form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+}
+
+.form-group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xs);
+}
+
+.form-group label {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.form-group input {
+    padding: var(--spacing-sm) var(--spacing-md);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    font-size: 1rem;
+    transition: border-color 0.15s;
+}
+
+.form-group input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.error-message {
+    padding: var(--spacing-sm) var(--spacing-md);
+    background-color: rgba(239, 68, 68, 0.1);
+    border: 1px solid var(--status-invalid);
+    border-radius: var(--border-radius);
+    color: var(--status-invalid);
+    font-size: 0.875rem;
+}
+
+.login-form .btn-primary {
+    width: 100%;
+    padding: var(--spacing-md);
+    margin-top: var(--spacing-sm);
+}
+
+.login-footer {
+    text-align: center;
+    margin-top: var(--spacing-lg);
+    padding-top: var(--spacing-md);
+    border-top: 1px solid var(--border-color);
+}
+
+.login-footer p {
+    margin: 0;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}

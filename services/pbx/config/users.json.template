@@ -1,0 +1,9 @@
+{
+  "users": {
+    "admin": {
+      "password_hash": "REPLACE_WITH_BCRYPT_HASH",
+      "force_password_change": true,
+      "created_at": "2024-01-01T00:00:00Z"
+    }
+  }
+}
