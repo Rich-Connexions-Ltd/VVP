@@ -266,6 +266,16 @@ async def update_tn_mapping(
         changes["identity_name"] = {"old": mapping.identity_name, "new": body.identity_name}
         update_kwargs["identity_name"] = body.identity_name
 
+    # Allow direct brand_name override (takes precedence over auto-extracted)
+    if body.brand_name is not None and body.brand_name != mapping.brand_name:
+        changes["brand_name"] = {"old": mapping.brand_name, "new": body.brand_name}
+        update_kwargs["brand_name"] = body.brand_name
+
+    # Allow direct brand_logo_url override
+    if body.brand_logo_url is not None and body.brand_logo_url != mapping.brand_logo_url:
+        changes["brand_logo_url"] = {"old": mapping.brand_logo_url, "new": body.brand_logo_url}
+        update_kwargs["brand_logo_url"] = body.brand_logo_url
+
     if body.enabled is not None and body.enabled != mapping.enabled:
         changes["enabled"] = {"old": mapping.enabled, "new": body.enabled}
         update_kwargs["enabled"] = body.enabled

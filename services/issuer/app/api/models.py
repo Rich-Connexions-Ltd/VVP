@@ -436,6 +436,14 @@ class UpdateTNMappingRequest(BaseModel):
         None,
         description="KERI identity name for signing",
     )
+    brand_name: Optional[str] = Field(
+        None,
+        description="Brand name to display (overrides auto-extracted value)",
+    )
+    brand_logo_url: Optional[str] = Field(
+        None,
+        description="Brand logo URL (overrides auto-extracted value)",
+    )
     enabled: Optional[bool] = Field(None, description="Enable/disable mapping")
 
 

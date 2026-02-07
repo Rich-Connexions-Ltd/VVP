@@ -9,7 +9,7 @@ from typing import Optional
 
 import httpx
 
-from app.config import ISSUER_URL, ISSUER_TIMEOUT, ISSUER_OPERATOR_KEY
+from app.config import ISSUER_URL, ISSUER_TIMEOUT
 
 log = logging.getLogger(__name__)
 
@@ -129,7 +129,7 @@ class IssuerClient:
         """Create VVP headers via issuer API.
 
         Args:
-            api_key: Org API key (for logging/audit, not used for auth)
+            api_key: Org API key for authentication (dossier_manager role)
             identity_name: KERI identity name for signing
             dossier_said: Root credential SAID for dossier
             orig_tn: Originating telephone number
@@ -137,17 +137,13 @@ class IssuerClient:
 
         Returns:
             VVPCreateResult with VVP headers or error
-
-        Note:
-            Uses ISSUER_OPERATOR_KEY for authentication as /vvp/create
-            requires issuer:operator role (file-based API keys only).
         """
         if not self._client:
             return VVPCreateResult(success=False, error="Client not initialized")
 
-        if not ISSUER_OPERATOR_KEY:
-            log.error("ISSUER_OPERATOR_KEY not configured")
-            return VVPCreateResult(success=False, error="Service not configured: missing operator key")
+        if not api_key:
+            log.error("No API key provided")
+            return VVPCreateResult(success=False, error="API key required")
 
         try:
             response = await self._client.post(
@@ -156,9 +152,9 @@ class IssuerClient:
                     "identity_name": identity_name,
                     "dossier_said": dossier_said,
                     "orig_tn": orig_tn,
-                    "dest_tn": dest_tn,
+                    "dest_tn": [dest_tn],  # API expects list of TNs
                 },
-                headers={"X-API-Key": ISSUER_OPERATOR_KEY},
+                headers={"X-API-Key": api_key},
             )
 
             if response.status_code == 200:
