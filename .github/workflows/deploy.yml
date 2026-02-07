@@ -104,6 +104,26 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.issuer == 'true'
     runs-on: ubuntu-latest
+
+    # Sprint 46: PostgreSQL service container for tests
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: vvpissuer_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      VVP_DATABASE_URL: postgresql+psycopg://test:test@localhost:5432/vvpissuer_test
+
     defaults:
       run:
         working-directory: services/issuer
@@ -276,10 +296,8 @@ jobs:
   # =========================================================================
   # DEPLOY ISSUER
   # =========================================================================
-  # Sprint 45: Stop-before-deploy pattern for SQLite on Azure Files.
-  # SQLite doesn't support multiple writers, so we must ensure only one
-  # revision runs at a time. This causes brief downtime (~30-60s) but
-  # prevents database lock conflicts.
+  # Sprint 46: PostgreSQL migration - zero-downtime deployment with scaling.
+  # No more stop-before-deploy workaround needed.
   deploy-issuer:
     needs: [changes, test-issuer]
     if: needs.changes.outputs.issuer == 'true' && !failure()
@@ -309,43 +327,6 @@ jobs:
           docker build -t "$IMAGE" -f services/issuer/Dockerfile .
           docker push "$IMAGE"
 
-      # Sprint 45: Deactivate old revisions and wait for termination
-      # SQLite requires exclusive access - must ensure old revision is fully stopped
-      - name: Deactivate old revisions and wait for termination
-        run: |
-          echo "Deactivating old revisions to release database locks..."
-          OLD_REVS=$(az containerapp revision list \
-            --name vvp-issuer \
-            --resource-group "${{ secrets.AZURE_RG }}" \
-            --query "[?properties.active].name" -o tsv)
-
-          for REV in $OLD_REVS; do
-            echo "Deactivating revision: $REV"
-            az containerapp revision deactivate \
-              --name vvp-issuer \
-              --resource-group "${{ secrets.AZURE_RG }}" \
-              --revision "$REV" || true
-
-            # Poll until revision actually stops (not just deactivated)
-            echo "Waiting for $REV to terminate..."
-            for i in {1..24}; do
-              STATE=$(az containerapp revision show \
-                --name vvp-issuer \
-                --resource-group "${{ secrets.AZURE_RG }}" \
-                --revision "$REV" \
-                --query "properties.runningState" -o tsv 2>/dev/null || echo "Stopped")
-
-              if [ "$STATE" != "Running" ] && [ "$STATE" != "Processing" ]; then
-                echo "Revision $REV stopped (state: $STATE)"
-                break
-              fi
-              echo "Attempt $i/24: $REV still $STATE, waiting 5s..."
-              sleep 5
-            done
-          done
-
-          echo "All old revisions terminated"
-
       - name: Deploy issuer
         run: |
           az containerapp update \
@@ -353,51 +334,28 @@ jobs:
             --name "vvp-issuer" \
             --image "$IMAGE" \
             --min-replicas 1 \
-            --max-replicas 1 \
+            --max-replicas 3 \
             --set-env-vars \
               "GIT_SHA=${{ github.sha }}" \
               "GITHUB_REPOSITORY=${{ github.repository }}" \
               "VVP_WITNESS_CONFIG=/srv/config/witnesses-azure.json" \
-              "VVP_ISSUER_DATA_DIR=/data/vvp-issuer"
+              "VVP_POSTGRES_HOST=${{ secrets.POSTGRES_HOST }}" \
+              "VVP_POSTGRES_USER=${{ secrets.POSTGRES_USER }}" \
+              "VVP_POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}" \
+              "VVP_POSTGRES_DB=${{ secrets.POSTGRES_DB }}"
 
-      # Verify deployment with retry to allow time for database init
       - name: Verify issuer deployment
-        id: health_check
         run: |
-          echo "Waiting for issuer to start (database init may take time)..."
-          for i in {1..12}; do
+          echo "Waiting for issuer to be healthy..."
+          for i in {1..6}; do
             if curl -sf https://vvp-issuer.rcnx.io/healthz; then
-              echo "Health check passed on attempt $i"
+              echo "Health check passed"
               exit 0
             fi
-            echo "Attempt $i/12 failed, waiting 10s..."
+            echo "Attempt $i/6, waiting 10s..."
             sleep 10
           done
-          echo "Health check failed after 2 minutes"
-          exit 1
-
-      # Rollback on health check failure: reactivate the previous revision
-      - name: Rollback on failure
-        if: failure() && steps.health_check.outcome == 'failure'
-        run: |
-          echo "Health check failed, attempting rollback..."
-
-          # Get the most recent inactive revision (the one we just deactivated)
-          PREV_REV=$(az containerapp revision list --name vvp-issuer \
-            --resource-group "${{ secrets.AZURE_RG }}" \
-            --query "[?!properties.active] | sort_by(@, &properties.createdTime) | [-1].name" -o tsv || echo "")
-
-          if [ -n "$PREV_REV" ]; then
-            echo "Reactivating previous revision: $PREV_REV"
-            az containerapp revision activate --name vvp-issuer \
-              --resource-group "${{ secrets.AZURE_RG }}" \
-              --revision "$PREV_REV"
-            echo "Rollback complete. Previous revision reactivated."
-          else
-            echo "::error::No previous revision available for rollback"
-          fi
-
-          # Still fail the job to alert operators
+          echo "Health check failed after 1 minute"
           exit 1
 
   # =========================================================================

@@ -31,7 +31,8 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 42 | SIP Redirect Signing Service | COMPLETE | Sprint 41 |
 | 43 | PBX Test Infrastructure | COMPLETE | Sprint 42 |
 | 44 | SIP Redirect Verification Service | COMPLETE | Sprint 43 |
-| 45 | CI/CD SQLite Persistence Fixes | PENDING | Sprint 41 |
+| 45 | CI/CD SQLite Persistence Fixes | COMPLETE | Sprint 41 |
+| 46 | PostgreSQL Migration | COMPLETE | Sprint 45 |
 
 ---
 
@@ -1932,6 +1933,94 @@ az containerapp update --name vvp-issuer --resource-group VVP \
 
 ---
 
+## Sprint 46: PostgreSQL Migration (COMPLETE)
+
+**Goal:** Migrate from SQLite on Azure Files to Azure Database for PostgreSQL for production scalability and zero-downtime deployments.
+
+**Prerequisites:** Sprint 45 (CI/CD SQLite Persistence Fixes) - documented SQLite limitations.
+
+**Problem Statement:**
+
+Sprint 45 implemented workarounds for SQLite on Azure Files, but these are fundamentally anti-patterns:
+- Single replica limitation prevents horizontal scaling
+- Stop-before-deploy causes 30-60s downtime per deployment
+- Stale lock files require manual recovery
+- Complex retry logic for database initialization
+
+**Solution:** Azure Database for PostgreSQL Flexible Server (~$16/month)
+
+**Benefits:**
+
+| Aspect | SQLite (Before) | PostgreSQL (After) |
+|--------|-----------------|-------------------|
+| Replicas | max=1 only | Unlimited scaling |
+| Deployment | 30-60s downtime | Zero-downtime |
+| Concurrent writes | Single-writer | Full MVCC |
+| Connection pooling | StaticPool (1 conn) | QueuePool (10+) |
+
+**Deliverables:**
+
+- [x] **Update dependencies** (`services/issuer/pyproject.toml`)
+  - [x] Replace `aiosqlite` with `psycopg[binary]`
+
+- [x] **Refactor database session** (`services/issuer/app/db/session.py`)
+  - [x] Add PostgreSQL connection pooling configuration
+  - [x] Retain SQLite fallback for local development
+  - [x] Remove SQLite-specific retry logic
+
+- [x] **Update configuration** (`services/issuer/app/config.py`)
+  - [x] Add `_get_database_url()` function
+  - [x] Support PostgreSQL from `VVP_POSTGRES_*` env vars
+  - [x] Enforce `sslmode=require` for Azure connections
+
+- [x] **Update CI/CD** (`.github/workflows/deploy.yml`)
+  - [x] Add PostgreSQL service container for tests
+  - [x] Remove stop-before-deploy pattern
+  - [x] Increase `maxReplicas` to 3
+  - [x] Add PostgreSQL credentials as env vars
+
+- [x] **Update documentation** (`Documentation/DEPLOYMENT.md`)
+  - [x] Document PostgreSQL configuration
+  - [x] Remove SQLite workarounds
+  - [x] Document local development with SQLite fallback
+
+**Key Files:**
+
+```
+services/issuer/pyproject.toml           # Dependencies
+services/issuer/app/config.py            # Database URL construction
+services/issuer/app/db/session.py        # Engine configuration
+.github/workflows/deploy.yml             # CI/CD with PostgreSQL
+Documentation/DEPLOYMENT.md              # Deployment docs
+```
+
+**Security Configuration:**
+
+| Setting | Value | Purpose |
+|---------|-------|---------|
+| `sslmode` | require | Enforce TLS connections |
+| Public access | None | Container Apps IPs only |
+| Credentials | Key Vault → GitHub Secrets | No plaintext exposure |
+
+**Exit Criteria:**
+
+- [x] `psycopg[binary]` added to dependencies
+- [x] session.py updated with PostgreSQL pooling
+- [x] config.py constructs PostgreSQL URL with SSL
+- [x] CI/CD uses PostgreSQL service container for tests
+- [x] deploy-issuer job simplified (no stop-before-deploy)
+- [x] All existing tests pass (390 tests)
+
+**Infrastructure (Manual Steps Required):**
+
+Before first PostgreSQL deployment:
+1. Provision Azure PostgreSQL Flexible Server (B1ms tier)
+2. Store credentials in Azure Key Vault
+3. Add GitHub Secrets: `POSTGRES_HOST`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`
+4. Configure firewall for Container Apps IPs only
+
+---
+
 ## Quick Reference
 
 To start a sprint, say:
@@ -1954,6 +2043,7 @@ To start a sprint, say:
 - "Sprint 43" - PBX test infrastructure (FusionPBX + WebRTC for testing Sprint 42)
 - "Sprint 44" - SIP redirect verification service (verify inbound calls, extract brand info)
 - "Sprint 45" - CI/CD SQLite persistence fixes (deployment lock conflicts)
+- "Sprint 46" - PostgreSQL migration (zero-downtime deployments)
 
 Each sprint follows the pair programming workflow:
 1. Plan phase (design, review, approval)

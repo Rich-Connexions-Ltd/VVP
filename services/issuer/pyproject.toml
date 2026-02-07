@@ -18,9 +18,9 @@ dependencies = [
   # Azure SDK for Container App scaling management
   "azure-identity>=1.15.0",
   "azure-mgmt-appcontainers>=3.0.0",
-  # Database (Sprint 41: User Management & Multi-tenancy)
+  # Database (Sprint 41: Multi-tenancy, Sprint 46: PostgreSQL migration)
   "sqlalchemy>=2.0.0",
-  "aiosqlite>=0.19.0",
+  "psycopg[binary]>=3.1.0",
 ]
 
 [project.optional-dependencies]

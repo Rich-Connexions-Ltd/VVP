@@ -49,13 +49,38 @@ DATABASE_DIR: Path = DATA_DIR / "databases"
 
 
 # =============================================================================
-# DATABASE CONFIGURATION (Sprint 41: Multi-tenancy)
+# DATABASE CONFIGURATION (Sprint 41: Multi-tenancy, Sprint 46: PostgreSQL)
 # =============================================================================
 
-DATABASE_URL: str = os.getenv(
-    "VVP_DATABASE_URL",
-    f"sqlite:///{DATA_DIR}/vvp_issuer.db"
-)
+
+def _get_database_url() -> str:
+    """Get database URL from environment.
+
+    Priority:
+    1. VVP_DATABASE_URL - explicit full connection string
+    2. VVP_POSTGRES_* - construct PostgreSQL URL from components
+    3. SQLite fallback for local development
+
+    Sprint 46: PostgreSQL migration with SSL enforcement.
+    """
+    # Explicit URL takes precedence
+    if url := os.getenv("VVP_DATABASE_URL"):
+        return url
+
+    # Construct PostgreSQL URL from components (Azure deployment)
+    host = os.getenv("VVP_POSTGRES_HOST")
+    if host:
+        user = os.getenv("VVP_POSTGRES_USER", "vvpadmin")
+        password = os.getenv("VVP_POSTGRES_PASSWORD", "")
+        db = os.getenv("VVP_POSTGRES_DB", "vvpissuer")
+        # sslmode=require enforces encrypted connection to Azure PostgreSQL
+        return f"postgresql+psycopg://{user}:{password}@{host}/{db}?sslmode=require"
+
+    # Fallback to SQLite for local development
+    return f"sqlite:///{DATA_DIR}/vvp_issuer.db"
+
+
+DATABASE_URL: str = _get_database_url()
 
 
 # =============================================================================
