@@ -49,6 +49,8 @@ jobs:
   # TEST JOBS - Run tests for both services
   # =========================================================================
   test-verifier:
+    needs: [changes]
+    if: needs.changes.outputs.verifier == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -93,6 +95,8 @@ jobs:
         continue-on-error: true
 
   test-issuer:
+    needs: [changes]
+    if: needs.changes.outputs.issuer == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -223,7 +227,8 @@ jobs:
   # DEPLOY VERIFIER
   # =========================================================================
   deploy-verifier:
-    needs: [test-verifier, test-issuer]
+    needs: [changes, test-verifier]
+    if: needs.changes.outputs.verifier == 'true' && !failure()
     runs-on: ubuntu-latest
 
     steps:
@@ -266,7 +271,8 @@ jobs:
   # DEPLOY ISSUER
   # =========================================================================
   deploy-issuer:
-    needs: [test-verifier, test-issuer]
+    needs: [changes, test-issuer]
+    if: needs.changes.outputs.issuer == 'true' && !failure()
     runs-on: ubuntu-latest
 
     steps:
@@ -461,7 +467,8 @@ jobs:
   # =========================================================================
   # Run full E2E integration tests after deployment to verify the system works
   post-deployment-tests:
-    needs: [deploy-verifier, deploy-issuer]
+    needs: [changes, deploy-verifier, deploy-issuer]
+    if: (needs.changes.outputs.verifier == 'true' || needs.changes.outputs.issuer == 'true') && !failure()
     runs-on: ubuntu-latest
 
     env:
