@@ -34,6 +34,7 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 45 | CI/CD SQLite Persistence Fixes | COMPLETE | Sprint 41 |
 | 46 | PostgreSQL Migration | COMPLETE | Sprint 45 |
 | 47 | SIP Monitor - Core Infrastructure | COMPLETE | Sprint 43 |
+| 48 | SIP Monitor - Real-Time & VVP Viz | COMPLETE | Sprint 47 |
 
 ---
 
@@ -2134,13 +2135,13 @@ services/sip-redirect/app/
 
 **Deliverables:**
 
-- [ ] **WebSocket endpoint** (`GET /ws`) - Stream new events in real-time
-- [ ] **WebSocket auth** - Validate session cookie on connection
-- [ ] **Connection management** - 30s idle timeout, 10 connections per IP limit, auto-restart on crash
-- [ ] **VVP header parsing** (JavaScript) - Extract Identity, P-VVP-Identity, P-VVP-Passport, X-VVP-* headers
-- [ ] **PASSporT JWT decode** (JavaScript) - Reuse base64urlDecode and parsing from verifier
-- [ ] **Tabbed detail view** - Summary, All Headers, VVP Headers, PASSporT, Raw SIP tabs
-- [ ] **Auto-reconnect** - Exponential backoff on WebSocket disconnect
+- [x] **WebSocket endpoint** (`GET /ws`) - Stream new events in real-time
+- [x] **WebSocket auth** - Validate session cookie on connection
+- [x] **Connection management** - 30s idle timeout, 10 per-IP + 50 global limit, auto-restart on crash
+- [x] **VVP header parsing** (JavaScript) - Extract Identity, P-VVP-Identity headers
+- [x] **PASSporT JWT decode** (JavaScript) - Reuse base64urlDecode and parsing from verifier
+- [x] **Tabbed detail view** - Summary, All Headers, VVP Headers, PASSporT, Raw SIP tabs
+- [x] **Auto-reconnect** - Exponential backoff on WebSocket disconnect with polling fallback
 
 **Code Reuse:**
 
@@ -2165,12 +2166,12 @@ services/pbx/test/
 
 **Exit Criteria:**
 
-- [ ] New events appear in browser within 100ms
-- [ ] WebSocket auto-reconnects on disconnect
-- [ ] JWT header/payload decoded and displayed
-- [ ] All SIP headers visible in table
-- [ ] VVP headers highlighted in dedicated tab
-- [ ] Connection status indicator works
+- [x] New events appear in browser within 100ms
+- [x] WebSocket auto-reconnects on disconnect
+- [x] JWT header/payload decoded and displayed
+- [x] All SIP headers visible in table
+- [x] VVP headers highlighted in dedicated tab
+- [x] Connection status indicator works
 
 ---
 

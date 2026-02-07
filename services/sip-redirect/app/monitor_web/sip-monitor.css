@@ -251,6 +251,30 @@ h2 { font-size: 1.125rem; }
     background-color: var(--status-invalid);
 }
 
+.status-connecting {
+    background-color: rgba(245, 158, 11, 0.15);
+    color: var(--status-indeterminate);
+}
+
+.status-connecting::before {
+    background-color: var(--status-indeterminate);
+    animation: pulse 1s infinite;
+}
+
+.status-polling {
+    background-color: rgba(37, 99, 235, 0.15);
+    color: var(--color-primary);
+}
+
+.status-polling::before {
+    background-color: var(--color-primary);
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
 /* =============================================================================
    HEADER
    ============================================================================= */
@@ -647,4 +671,111 @@ h2 { font-size: 1.125rem; }
     margin: 0;
     font-size: 0.75rem;
     color: var(--text-muted);
+}
+
+/* =============================================================================
+   PASSPORT TAB (Sprint 48)
+   ============================================================================= */
+
+.passport-section {
+    margin-bottom: var(--spacing-lg);
+    padding-bottom: var(--spacing-md);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.passport-section:last-child {
+    border-bottom: none;
+    margin-bottom: 0;
+}
+
+.passport-section h3 {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    margin-bottom: var(--spacing-md);
+    font-size: 1rem;
+}
+
+.passport-section h4 {
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    margin: var(--spacing-md) 0 var(--spacing-sm);
+}
+
+.passport-params {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-sm);
+    margin-bottom: var(--spacing-md);
+}
+
+.passport-param {
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+    background: var(--bg-tertiary);
+    padding: 2px 8px;
+    border-radius: var(--border-radius);
+}
+
+.passport-json {
+    background-color: var(--bg-tertiary);
+    border-radius: var(--border-radius);
+    overflow: hidden;
+}
+
+.passport-fields {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.passport-fields td {
+    padding: var(--spacing-sm);
+    font-size: 0.8125rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.passport-key {
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+    white-space: nowrap;
+    width: 25%;
+    color: var(--text-secondary);
+}
+
+.passport-value {
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+    word-break: break-all;
+    color: var(--text-primary);
+}
+
+.passport-field {
+    background-color: rgba(139, 92, 246, 0.08);
+}
+
+.passport-field .passport-key {
+    color: var(--service-signing);
+    font-weight: 600;
+}
+
+.passport-signature {
+    background-color: var(--bg-tertiary);
+    border-radius: var(--border-radius);
+    padding: var(--spacing-sm);
+}
+
+.passport-signature code {
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    word-break: break-all;
+}
+
+.passport-error {
+    padding: var(--spacing-md);
+    background-color: rgba(239, 68, 68, 0.1);
+    border: 1px solid var(--status-invalid);
+    border-radius: var(--border-radius);
+    color: var(--status-invalid);
+    font-size: 0.875rem;
+    margin-bottom: var(--spacing-md);
 }

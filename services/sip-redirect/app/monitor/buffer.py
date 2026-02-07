@@ -2,15 +2,20 @@
 
 Sprint 47: Circular buffer for capturing SIP INVITE events for
 real-time visualization in the monitoring dashboard.
+
+Sprint 48: Added subscriber mechanism for real-time WebSocket push.
 """
 
 import asyncio
+import logging
 from collections import deque
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
 from app.config import MONITOR_BUFFER_SIZE
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -54,9 +59,11 @@ class SIPEventBuffer:
         self._buffer: deque = deque(maxlen=max_size)
         self._lock = asyncio.Lock()
         self._next_id: int = 1
+        self._subscribers: set[asyncio.Queue] = set()
+        self._sub_lock = asyncio.Lock()
 
     async def add(self, event_data: dict) -> int:
-        """Add an event to the buffer.
+        """Add an event to the buffer and notify subscribers.
 
         Args:
             event_data: Dict with event fields (id will be auto-assigned)
@@ -74,7 +81,10 @@ class SIPEventBuffer:
                 **event_data,
             )
             self._buffer.append(event)
-            return event_id
+
+        # Notify after releasing buffer lock to avoid holding it during I/O
+        await self._notify_subscribers(event)
+        return event_id
 
     async def get_all(self) -> list[dict]:
         """Get all events in buffer (newest first).
@@ -107,6 +117,57 @@ class SIPEventBuffer:
             count = len(self._buffer)
             self._buffer.clear()
             return count
+
+    async def subscribe(self) -> asyncio.Queue:
+        """Create a subscriber queue for real-time events.
+
+        Returns:
+            asyncio.Queue that receives SIPEvent dicts as they are added.
+        """
+        queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+        async with self._sub_lock:
+            self._subscribers.add(queue)
+        return queue
+
+    async def unsubscribe(self, queue: asyncio.Queue) -> None:
+        """Remove a subscriber queue and drain pending items."""
+        async with self._sub_lock:
+            self._subscribers.discard(queue)
+        # Drain pending items to avoid orphaned references
+        while not queue.empty():
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+    async def _notify_subscribers(self, event: SIPEvent) -> None:
+        """Push event dict to all subscribers (non-blocking).
+
+        Uses copy-on-iterate to avoid RuntimeError from concurrent
+        subscribe/unsubscribe during iteration.
+        """
+        event_dict = asdict(event)
+        dead_queues = []
+
+        async with self._sub_lock:
+            subscribers = list(self._subscribers)
+
+        for queue in subscribers:
+            try:
+                queue.put_nowait(event_dict)
+            except asyncio.QueueFull:
+                log.warning("Subscriber queue full, removing stale client")
+                dead_queues.append(queue)
+
+        if dead_queues:
+            async with self._sub_lock:
+                for q in dead_queues:
+                    self._subscribers.discard(q)
+
+    @property
+    def subscriber_count(self) -> int:
+        """Number of active subscribers."""
+        return len(self._subscribers)
 
     @property
     def count(self) -> int:

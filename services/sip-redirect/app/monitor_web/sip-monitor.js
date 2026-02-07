@@ -1,6 +1,7 @@
 /**
  * VVP SIP Monitor Dashboard - Client JavaScript
  * Sprint 47: Core client logic for event display and polling
+ * Sprint 48: WebSocket real-time updates, JWT parsing, PASSporT tab
  */
 
 // =============================================================================
@@ -13,6 +14,10 @@ const state = {
     selectedEvent: null,
     pollingInterval: null,
     isPolling: false,
+    ws: null,
+    wsRetries: 0,
+    wsRetryTimer: null,
+    wsMode: 'disconnected',
 };
 
 // =============================================================================
@@ -184,11 +189,16 @@ async function refreshEvents() {
         }
 
         updateCounts(data.buffer_size, data.buffer_max);
-        updateConnectionStatus('connected');
+        // Only update status if in polling mode (don't overwrite WebSocket status)
+        if (state.wsMode === 'polling') {
+            updateConnectionStatus('polling');
+        }
 
     } catch (error) {
         console.error('Failed to refresh events:', error);
-        updateConnectionStatus('error');
+        if (state.wsMode !== 'websocket') {
+            updateConnectionStatus('error');
+        }
     }
 }
 
@@ -209,13 +219,227 @@ async function pollEvents() {
             addEventsToTable(data.events.reverse());
         }
 
-        updateConnectionStatus('connected');
+        // Maintain polling status (don't overwrite WebSocket status)
+        if (state.wsMode === 'polling') {
+            updateConnectionStatus('polling');
+        }
 
     } catch (error) {
         console.error('Polling error:', error);
-        updateConnectionStatus('error');
+        if (state.wsMode === 'polling') {
+            updateConnectionStatus('error');
+        }
     } finally {
         state.isPolling = false;
+    }
+}
+
+// =============================================================================
+// WEBSOCKET (Sprint 48)
+// =============================================================================
+
+/**
+ * Connect to WebSocket for real-time event streaming
+ */
+function connectWebSocket() {
+    if (state.ws && state.ws.readyState <= WebSocket.OPEN) {
+        return; // Already connected or connecting
+    }
+
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = `${protocol}//${location.host}/ws`;
+
+    updateConnectionStatus('connecting');
+    state.ws = new WebSocket(url);
+
+    state.ws.onopen = () => {
+        state.wsRetries = 0;
+        state.wsMode = 'websocket';
+        updateConnectionStatus('connected');
+
+        // Stop polling if running
+        if (state.pollingInterval) {
+            clearInterval(state.pollingInterval);
+            state.pollingInterval = null;
+        }
+
+        console.log('WebSocket connected');
+    };
+
+    state.ws.onmessage = (event) => {
+        try {
+            const msg = JSON.parse(event.data);
+            onWsMessage(msg);
+        } catch (e) {
+            console.error('WebSocket message parse error:', e);
+        }
+    };
+
+    state.ws.onclose = (event) => {
+        state.ws = null;
+        onWsClose(event);
+    };
+
+    state.ws.onerror = () => {
+        // onclose will fire after onerror, handling is done there
+        console.error('WebSocket error');
+    };
+}
+
+/**
+ * Handle incoming WebSocket message by type
+ */
+function onWsMessage(msg) {
+    switch (msg.type) {
+        case 'event':
+            addEventsToTable([msg.data]);
+            break;
+        case 'heartbeat':
+            // Connection alive, nothing to do
+            break;
+        case 'error':
+            if (msg.message === 'session_expired') {
+                updateConnectionStatus('error');
+                // Terminal - redirect to login
+                setTimeout(() => { window.location.href = '/login'; }, 2000);
+            }
+            break;
+    }
+}
+
+/**
+ * Handle WebSocket close - route by close code
+ */
+function onWsClose(event) {
+    if (event.code === 4001) {
+        // Session expired - terminal, do NOT reconnect
+        updateConnectionStatus('error');
+        setTimeout(() => { window.location.href = '/login'; }, 2000);
+        return;
+    }
+
+    if (event.code === 1000) {
+        // Normal close
+        state.wsMode = 'disconnected';
+        updateConnectionStatus('disconnected');
+        return;
+    }
+
+    // Unexpected close - schedule reconnect
+    scheduleReconnect();
+}
+
+/**
+ * Schedule WebSocket reconnect with exponential backoff
+ */
+function scheduleReconnect() {
+    state.wsRetries++;
+
+    if (state.wsRetries > 5) {
+        // Fall back to polling
+        fallbackToPolling();
+        return;
+    }
+
+    const delay = Math.min(1000 * Math.pow(2, state.wsRetries - 1), 30000);
+    console.log(`WebSocket reconnect in ${delay}ms (attempt ${state.wsRetries}/5)`);
+    updateConnectionStatus('connecting');
+
+    state.wsRetryTimer = setTimeout(() => {
+        state.wsRetryTimer = null;
+        connectWebSocket();
+    }, delay);
+}
+
+/**
+ * Fall back to polling when WebSocket is unavailable
+ */
+function fallbackToPolling() {
+    console.log('WebSocket unavailable, falling back to polling');
+    state.wsMode = 'polling';
+    updateConnectionStatus('polling');
+
+    if (!state.pollingInterval) {
+        state.pollingInterval = setInterval(pollEvents, 2000);
+    }
+}
+
+// =============================================================================
+// JWT PARSING (Sprint 48)
+// =============================================================================
+
+/**
+ * Decode base64url string (RFC 4648 Section 5)
+ */
+function base64urlDecode(str) {
+    try {
+        let padded = str.replace(/-/g, '+').replace(/_/g, '/');
+        while (padded.length % 4) padded += '=';
+        return atob(padded);
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
+ * Parse a JWT string into header, payload, signature
+ * Returns null if invalid format
+ */
+function parseJWT(jwt) {
+    const parts = jwt.split('.');
+    if (parts.length !== 3) return null;
+    try {
+        const headerStr = base64urlDecode(parts[0]);
+        const payloadStr = base64urlDecode(parts[1]);
+        if (!headerStr || !payloadStr) return null;
+        const header = JSON.parse(headerStr);
+        const payload = JSON.parse(payloadStr);
+        return {
+            header,
+            payload,
+            signature: parts[2],
+            isVVP: header.ppt === 'vvp',
+        };
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
+ * Extract Identity header JWT and parameters (RFC 8224)
+ * Format: Identity: <jwt>;info=<url>;alg=ES256
+ */
+function extractIdentityJWT(headers) {
+    const identityValue = headers['Identity'] || headers['identity'];
+    if (!identityValue) return null;
+
+    const parts = identityValue.split(';');
+    const jwt = parts[0].trim();
+    const params = {};
+    for (let i = 1; i < parts.length; i++) {
+        const [key, ...valueParts] = parts[i].split('=');
+        if (key && valueParts.length) {
+            params[key.trim()] = valueParts.join('=').trim();
+        }
+    }
+    return { jwt, info: params.info || null, alg: params.alg || null, params };
+}
+
+/**
+ * Parse P-VVP-Identity header (base64url-encoded JSON)
+ * Expected fields: kid, ppt, evd, iat
+ */
+function parsePVVPIdentity(value) {
+    try {
+        const jsonStr = base64urlDecode(value);
+        if (!jsonStr) return null;
+        const decoded = JSON.parse(jsonStr);
+        return {
+            decoded,
+            isValid: decoded.ppt === 'vvp',
+        };
+    } catch (e) {
+        return null;
     }
 }
 
@@ -271,6 +495,9 @@ function showTab(tabName) {
             break;
         case 'vvp':
             content.innerHTML = renderVvpTab(event);
+            break;
+        case 'passport':
+            content.innerHTML = renderPassportTab(event);
             break;
         case 'raw':
             content.innerHTML = renderRawTab(event);
@@ -425,6 +652,135 @@ function renderRawTab(event) {
     `;
 }
 
+/**
+ * Render PASSporT tab - decoded JWT and P-VVP-Identity
+ */
+function renderPassportTab(event) {
+    let html = '';
+    const headers = event.headers || {};
+    const vvpHeaders = event.vvp_headers || {};
+
+    // 1. Identity header JWT (RFC 8224 PASSporT)
+    const identity = extractIdentityJWT(headers);
+    if (identity) {
+        const parsed = parseJWT(identity.jwt);
+        if (parsed) {
+            html += renderJWTSection('Identity PASSporT', parsed, identity.params);
+        } else {
+            html += '<div class="passport-error">Identity header present but JWT is malformed</div>';
+        }
+    }
+
+    // 2. P-VVP-Identity header (base64url JSON)
+    const pvvpValue = vvpHeaders['P-VVP-Identity'] || headers['P-VVP-Identity'];
+    if (pvvpValue) {
+        const pvvp = parsePVVPIdentity(pvvpValue);
+        if (pvvp) {
+            html += renderPVVPSection('P-VVP-Identity', pvvp);
+        } else {
+            html += '<div class="passport-error">P-VVP-Identity present but failed to decode</div>';
+        }
+    }
+
+    // 3. No PASSporT data
+    if (!html) {
+        html = '<p class="empty-message">No PASSporT or VVP identity headers found in this request</p>';
+    }
+
+    return html;
+}
+
+/**
+ * Render decoded JWT section with VVP field highlighting
+ */
+function renderJWTSection(title, parsed, params) {
+    const vvpBadge = parsed.isVVP
+        ? '<span class="badge status-valid">VVP</span>'
+        : '<span class="badge status-invalid">NOT VVP</span>';
+
+    const vvpHeaderFields = ['ppt', 'kid', 'evd'];
+    const vvpPayloadFields = ['orig', 'dest', 'iat'];
+
+    let html = `<div class="passport-section">`;
+    html += `<h3>${escapeHtml(title)} ${vvpBadge}</h3>`;
+
+    // Identity header parameters (info, alg)
+    if (params && Object.keys(params).length > 0) {
+        html += `<div class="passport-params">`;
+        for (const [key, value] of Object.entries(params)) {
+            html += `<span class="passport-param"><strong>${escapeHtml(key)}:</strong> ${escapeHtml(value)}</span>`;
+        }
+        html += `</div>`;
+    }
+
+    // JWT Header
+    html += `<h4>Header</h4>`;
+    html += `<div class="passport-json">`;
+    html += renderJsonWithHighlight(parsed.header, vvpHeaderFields);
+    html += `</div>`;
+
+    // JWT Payload
+    html += `<h4>Payload</h4>`;
+    html += `<div class="passport-json">`;
+    html += renderJsonWithHighlight(parsed.payload, vvpPayloadFields);
+    html += `</div>`;
+
+    // Signature (truncated)
+    const sig = parsed.signature || '';
+    const sigDisplay = sig.length > 40 ? sig.substring(0, 40) + '...' : sig;
+    html += `<h4>Signature</h4>`;
+    html += `<div class="passport-signature">`;
+    html += `<code>${escapeHtml(sigDisplay)}</code>`;
+    html += `</div>`;
+
+    html += `</div>`;
+    return html;
+}
+
+/**
+ * Render P-VVP-Identity section with VVP field highlighting
+ */
+function renderPVVPSection(title, pvvp) {
+    const validBadge = pvvp.isValid
+        ? '<span class="badge status-valid">Valid ppt</span>'
+        : '<span class="badge status-invalid">Invalid ppt</span>';
+
+    const vvpFields = ['ppt', 'kid', 'evd', 'iat'];
+
+    let html = `<div class="passport-section">`;
+    html += `<h3>${escapeHtml(title)} ${validBadge}</h3>`;
+    html += `<div class="passport-json">`;
+    html += renderJsonWithHighlight(pvvp.decoded, vvpFields);
+    html += `</div>`;
+    html += `</div>`;
+    return html;
+}
+
+/**
+ * Render JSON object with VVP field highlighting
+ */
+function renderJsonWithHighlight(obj, highlightFields) {
+    let html = '<table class="passport-fields">';
+    for (const [key, value] of Object.entries(obj)) {
+        const isHighlighted = highlightFields.includes(key);
+        const cls = isHighlighted ? ' class="passport-field"' : '';
+        let displayValue = value;
+        if (typeof value === 'object' && value !== null) {
+            displayValue = JSON.stringify(value, null, 2);
+        } else if (key === 'iat' && typeof value === 'number') {
+            // Format iat as human-readable date alongside epoch
+            const date = new Date(value * 1000);
+            displayValue = `${value} (${date.toISOString()})`;
+        }
+        html += `<tr${cls}>`;
+        html += `<td class="passport-key">${escapeHtml(key)}</td>`;
+        html += `<td class="passport-value">${escapeHtml(String(displayValue))}</td>`;
+        html += `</tr>`;
+    }
+    html += '</table>';
+    return html;
+}
+
 // =============================================================================
 // UI UPDATES
 // =============================================================================
@@ -453,12 +809,23 @@ function updateCounts(bufferCount, bufferMax) {
 function updateConnectionStatus(status) {
     const el = document.getElementById('connection-status');
 
-    el.classList.remove('status-connected', 'status-disconnected', 'status-error');
+    el.classList.remove(
+        'status-connected', 'status-disconnected', 'status-error',
+        'status-connecting', 'status-polling'
+    );
 
     switch (status) {
         case 'connected':
             el.classList.add('status-connected');
-            el.textContent = 'Connected';
+            el.textContent = 'Connected (WebSocket)';
+            break;
+        case 'connecting':
+            el.classList.add('status-connecting');
+            el.textContent = 'Connecting...';
+            break;
+        case 'polling':
+            el.classList.add('status-polling');
+            el.textContent = 'Connected (Polling)';
             break;
         case 'error':
             el.classList.add('status-error');
@@ -546,8 +913,8 @@ function init() {
     // Initial load
     refreshEvents();
 
-    // Start polling every 2 seconds
-    state.pollingInterval = setInterval(pollEvents, 2000);
+    // Try WebSocket first (falls back to polling on failure)
+    connectWebSocket();
 
     console.log('VVP SIP Monitor initialized');
 }

@@ -8353,3 +8353,56 @@ After initial implementation on the mock SIP service, the monitoring dashboard w
 2. **Code Review (Revision 2)** - APPROVED
    - All High/Medium findings addressed
    - Data flow verified: parser → transport → handler → buffer → dashboard
+
+---
+
+# Sprint 48: SIP Monitor - Real-Time and VVP Visualization
+
+## Problem Statement
+
+The Sprint 47 SIP Monitor Dashboard polls `/api/events/since/{id}` every 2 seconds. This adds latency (up to 2s before events appear) and creates unnecessary server load. Additionally, the VVP Headers tab shows raw header values without decoding the PASSporT JWT, making it hard to inspect claims and identity information.
+
+## Approach
+
+Added a **subscriber mechanism** to `SIPEventBuffer` using `asyncio.Queue` objects with `asyncio.Lock` and copy-on-iterate pattern. Added a **WebSocket endpoint** (`/ws`) to the aiohttp server that subscribes to the buffer and pushes events to authenticated clients. Replaced client-side polling with **WebSocket connection** that falls back to polling after 5 reconnect failures. Added **JWT parsing utilities** and a **PASSporT tab** to the detail view for decoded JWT header/payload visualization.
+
+### Key Design Decisions
+
+- **Copy-on-iterate pattern**: `_sub_lock` guards all `_subscribers` mutations; `list()` snapshot taken under lock, iteration happens outside lock to avoid RuntimeError from concurrent mutation
+- **Auth before upgrade**: Session cookie validated and connection limits checked BEFORE `ws.prepare()` — no WebSocket upgrade on auth failure
+- **Client-activity idle timeout**: Tracks `last_client_msg` separately from server queue events; only client TEXT messages reset the timer
+- **Close code 4001 = terminal**: Session expiry sends close code 4001; client redirects to `/login` and does NOT reconnect
+- **Exponential backoff**: 1s, 2s, 4s, 8s, 16s, 30s max; after 5 failures falls back to polling
+- **Status gating**: `refreshEvents()` and `pollEvents()` only update connection status when in polling mode, preventing overwrite of WebSocket status
+
+## Files Changed
+
+| File | Action | Purpose |
+|------|--------|---------|
+| `services/sip-redirect/app/monitor/buffer.py` | Modified | Added `_subscribers`, `_sub_lock`, `subscribe()`, `unsubscribe()`, `_notify_subscribers()`, `subscriber_count` |
+| `services/sip-redirect/app/monitor/server.py` | Modified | Added `WebSocketManager` class, `handle_websocket()`, `/ws` route, updated status endpoint |
+| `services/sip-redirect/app/config.py` | Modified | Added `MONITOR_WS_HEARTBEAT`, `MONITOR_WS_IDLE_TIMEOUT`, `MONITOR_WS_MAX_PER_IP`, `MONITOR_WS_MAX_GLOBAL` |
+| `services/sip-redirect/app/monitor_web/sip-monitor.js` | Modified | WebSocket client, JWT parsing, PASSporT tab rendering, connection status states |
+| `services/sip-redirect/app/monitor_web/index.html` | Modified | Added PASSporT tab button |
+| `services/sip-redirect/app/monitor_web/sip-monitor.css` | Modified | Connection status styles (connecting, polling), PASSporT section styles |
+| `services/sip-redirect/tests/test_monitor_websocket.py` | Created | 13 tests: 7 buffer subscriber + 6 WebSocketManager |
+
+### Test Results
+
+74 passed (61 existing + 13 new)
+
+### Review History
+
+1. **Plan Review (Initial)** - CHANGES_REQUESTED
+   - [High] Subscriber set mutation during iteration — fixed with `_sub_lock` + copy-on-iterate
+   - [High] JWT parsing incomplete for P-VVP-Identity — added `parsePVVPIdentity()` and `ppt === "vvp"` validation
+   - [Medium] No global WebSocket cap — added `MAX_GLOBAL = 50`
+   - [Medium] Reconnect loops on session expiry — added close code 4001 as terminal
+
+2. **Plan Review (Revision 2)** - APPROVED
+
+3. **Code Review (Initial)** - CHANGES_REQUESTED
+   - [Medium] Polling status overwritten by `updateConnectionStatus('connected')` in `refreshEvents()`/`pollEvents()` — gated behind `state.wsMode` checks
+   - [Medium] Idle timeout not enforced based on client activity only — rewrote to track `last_client_msg` with remaining-time computation
+
+4. **Code Review (Revision 2)** - APPROVED

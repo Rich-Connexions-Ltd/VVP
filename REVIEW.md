@@ -1,12 +1,9 @@
-## Code Review: Sprint 47 - Revision 2
+## Code Re-Review: Sprint 48 - Revision 2
 
 **Verdict:** APPROVED
 
-### Fixes Assessment
-The fixes address the prior High/Medium findings. `SIPRequest` now includes `headers` and `source_addr`, the parser populates the headers dict, the transport sets `source_addr` for UDP/TCP, and `_capture_event()` includes the `service` field. This restores the end‑to‑end data flow for event capture. The polling‑only approach is acknowledged for MVP and consistent with the current implementation.
+### Changes Assessment
+The polling status gating now preserves WebSocket status and only shows polling/error while in polling mode. The idle timeout logic is correctly tied to client messages only, with a remaining-time calculation and timeout recheck, so server-to-client queue activity no longer masks inactivity. Both prior issues are adequately fixed.
 
-### Remaining Issues
+### Findings
 - None.
-
-### Required Changes (if not APPROVED)
-1. N/A
