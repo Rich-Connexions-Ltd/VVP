@@ -13,8 +13,7 @@ from common.vvp.sip.transport import run_servers, stop_servers, TransportConfig
 from .config import (
     VVP_SIP_VERIFY_HOST,
     VVP_SIP_VERIFY_PORT,
-    VVP_SIP_VERIFY_UDP_ENABLED,
-    VVP_SIP_VERIFY_TCP_ENABLED,
+    VVP_SIP_VERIFY_TRANSPORT,
     VVP_LOG_LEVEL,
 )
 from .verify.handler import handle_verify_invite
@@ -32,15 +31,13 @@ async def main() -> None:
     log.info("Starting VVP SIP Verify Service")
     log.info(f"  Host: {VVP_SIP_VERIFY_HOST}")
     log.info(f"  Port: {VVP_SIP_VERIFY_PORT}")
-    log.info(f"  UDP: {'enabled' if VVP_SIP_VERIFY_UDP_ENABLED else 'disabled'}")
-    log.info(f"  TCP: {'enabled' if VVP_SIP_VERIFY_TCP_ENABLED else 'disabled'}")
+    log.info(f"  Transport: {VVP_SIP_VERIFY_TRANSPORT}")
 
     # Configure transport
     config = TransportConfig(
         host=VVP_SIP_VERIFY_HOST,
         port=VVP_SIP_VERIFY_PORT,
-        udp_enabled=VVP_SIP_VERIFY_UDP_ENABLED,
-        tcp_enabled=VVP_SIP_VERIFY_TCP_ENABLED,
+        transport=VVP_SIP_VERIFY_TRANSPORT,
     )
 
     # Set up signal handlers for graceful shutdown

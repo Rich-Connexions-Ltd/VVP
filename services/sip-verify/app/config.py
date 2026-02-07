@@ -11,11 +11,10 @@ import os
 
 # SIP listening address
 VVP_SIP_VERIFY_HOST = os.getenv("VVP_SIP_VERIFY_HOST", "0.0.0.0")
-VVP_SIP_VERIFY_PORT = int(os.getenv("VVP_SIP_VERIFY_PORT", "5061"))
+VVP_SIP_VERIFY_PORT = int(os.getenv("VVP_SIP_VERIFY_PORT", "5071"))
 
-# Enable/disable UDP and TCP transports
-VVP_SIP_VERIFY_UDP_ENABLED = os.getenv("VVP_SIP_VERIFY_UDP_ENABLED", "true").lower() == "true"
-VVP_SIP_VERIFY_TCP_ENABLED = os.getenv("VVP_SIP_VERIFY_TCP_ENABLED", "true").lower() == "true"
+# Transport type: "udp", "tcp", "both"
+VVP_SIP_VERIFY_TRANSPORT = os.getenv("VVP_SIP_VERIFY_TRANSPORT", "udp")
 
 # =============================================================================
 # Verifier API Configuration
