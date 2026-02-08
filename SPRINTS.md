@@ -2771,7 +2771,7 @@ services/verifier/benchmarks/
 
 
 
-## Sprint 52: Central Service Dashboard (PENDING)
+## Sprint 52: Central Service Dashboard (COMPLETE)
 
 **Goal:** Add a single-pane-of-glass dashboard to the issuer service that aggregates health from all VVP services and provides quick navigation to every UI, with prominent SIP monitor access.
 

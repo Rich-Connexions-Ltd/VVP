@@ -1,5 +1,52 @@
 # VVP Verifier Change Log
 
+## Sprint 52: Central Service Dashboard
+
+**Date:** 2026-02-08
+**Status:** APPROVED (Pair Review)
+
+### Summary
+
+Added a central service dashboard to the issuer service at `/ui/dashboard` that aggregates health from all VVP services (verifier, issuer, witnesses, SIP redirect, SIP verify) via a backend proxy endpoint. Features configurable per-service health paths, 2xx acceptance, safe JSON parsing, parallel checks with timeout, and 30-second auto-refresh UI.
+
+### Files Created
+
+| File | Description |
+|------|-------------|
+| `services/issuer/app/api/dashboard.py` | Health aggregation API with parallel httpx checks |
+| `services/issuer/web/dashboard.html` | Dashboard UI with auto-refresh and grouped service cards |
+| `services/issuer/tests/test_dashboard.py` | 23 tests (unit + integration) |
+
+### Files Modified
+
+| File | Description |
+|------|-------------|
+| `services/issuer/app/config.py` | Dashboard env vars (VVP_DASHBOARD_SERVICES, SIP URLs, timeout) + auth exemption |
+| `services/issuer/app/main.py` | Dashboard router + /ui/dashboard route registration |
+| `services/issuer/web/index.html` | Added "Dashboard" nav link |
+
+### Key Features
+
+- **Configurable services**: JSON array env var with per-service name, URL, health_path, category
+- **2xx acceptance**: Any 2xx status treated as healthy (not just 200)
+- **Safe JSON parsing**: Non-JSON health responses don't crash — version stays null
+- **URL normalization**: Handles trailing/leading slash edge cases
+- **Auth alignment**: Follows existing UI_AUTH_ENABLED pattern (Microsoft SSO, password, API key)
+
+### Test Results
+
+```
+23 passed (test_dashboard.py)
+422 passed, 5 skipped (full issuer suite)
+```
+
+### Commits
+
+- `dc118a9` Sprint 52: Central Service Dashboard
+- `32aecb2` Sprint 52: HTML-escape dynamic content in dashboard cards
+
+---
+
 ## Sprint 34: Schema Management
 
 **Date:** 2026-02-01
