@@ -7,10 +7,14 @@
 # Example:
 #   ./scripts/archive-plan.sh 35 "Credential Issuance"
 #
+# Files (namespaced by sprint number for concurrent safety):
+#   Plan file:    PLAN_Sprint<N>.md    → Documentation/archive/PLAN_Sprint<N>.md
+#   Review file:  REVIEW_Sprint<N>.md  (deleted after archival)
+#
 # What it does:
-#   1. Appends PLAN.md content to Documentation/PLAN_history.md under a sprint header
-#   2. Moves PLAN.md to Documentation/archive/PLAN_Sprint<N>.md
-#   3. Clears REVIEW.md for the next phase
+#   1. Appends PLAN_Sprint<N>.md content to Documentation/PLAN_history.md under a sprint header
+#   2. Moves PLAN_Sprint<N>.md to Documentation/archive/PLAN_Sprint<N>.md
+#   3. Removes REVIEW_Sprint<N>.md
 #   4. Prints a reminder to update CHANGES.md (left manual since it needs human-written summary)
 
 set -euo pipefail
@@ -26,16 +30,19 @@ shift
 TITLE="$*"
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
-PLAN_FILE="$REPO_ROOT/PLAN.md"
+PLAN_FILE="$REPO_ROOT/PLAN_Sprint${SPRINT_NUM}.md"
 HISTORY_FILE="$REPO_ROOT/Documentation/PLAN_history.md"
 ARCHIVE_DIR="$REPO_ROOT/Documentation/archive"
 ARCHIVE_FILE="$ARCHIVE_DIR/PLAN_Sprint${SPRINT_NUM}.md"
-REVIEW_FILE="$REPO_ROOT/REVIEW.md"
+REVIEW_FILE="$REPO_ROOT/REVIEW_Sprint${SPRINT_NUM}.md"
+
+PLAN_BASENAME="PLAN_Sprint${SPRINT_NUM}.md"
+REVIEW_BASENAME="REVIEW_Sprint${SPRINT_NUM}.md"
 
 # --- Validate ---
 
 if [ ! -f "$PLAN_FILE" ]; then
-    echo "Error: PLAN.md not found at $PLAN_FILE"
+    echo "Error: $PLAN_BASENAME not found at $PLAN_FILE"
     echo "Nothing to archive."
     exit 1
 fi
@@ -69,20 +76,24 @@ echo "==> Appending to PLAN_history.md..."
 
 echo "    Done. Plan appended under 'Sprint ${SPRINT_NUM}: ${TITLE}'"
 
-# --- Step 2: Move PLAN.md to archive ---
+# --- Step 2: Move plan to archive ---
 
 echo ""
-echo "==> Moving PLAN.md to archive..."
+echo "==> Moving $PLAN_BASENAME to archive..."
 cp "$PLAN_FILE" "$ARCHIVE_FILE"
 rm "$PLAN_FILE"
 echo "    Done. Archived as $(basename "$ARCHIVE_FILE")"
 
-# --- Step 3: Clear REVIEW.md ---
+# --- Step 3: Remove review file ---
 
 echo ""
-echo "==> Clearing REVIEW.md..."
-: > "$REVIEW_FILE"
-echo "    Done. REVIEW.md is now empty."
+if [ -f "$REVIEW_FILE" ]; then
+    echo "==> Removing $REVIEW_BASENAME..."
+    rm "$REVIEW_FILE"
+    echo "    Done."
+else
+    echo "==> No $REVIEW_BASENAME to remove (already clean)."
+fi
 
 # --- Step 4: Remind about CHANGES.md ---
 
@@ -96,5 +107,5 @@ echo ""
 echo "Files modified:"
 echo "  - Documentation/PLAN_history.md  (appended)"
 echo "  - Documentation/archive/PLAN_Sprint${SPRINT_NUM}.md  (created)"
-echo "  - REVIEW.md  (cleared)"
-echo "  - PLAN.md  (removed)"
+echo "  - $PLAN_BASENAME  (removed)"
+[ -f "$REVIEW_FILE" ] || echo "  - $REVIEW_BASENAME  (removed)"

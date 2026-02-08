@@ -214,9 +214,9 @@ az vm run-command invoke --resource-group VVP --name vvp-pbx --command-id RunShe
 When the user says "Complete", immediately perform all of the following without asking for permission:
 
 1. **Update sprint status** - Update `SPRINTS.md` to reflect any work completed in the current sprint before committing.
-2. **Archive sprint plan** - If this sprint had a `PLAN.md`, run the archival script:
+2. **Archive sprint plan** - If this sprint had a plan file, run the archival script:
    - `./scripts/archive-plan.sh <sprint-number> "<title>"`
-   - This appends to `Documentation/PLAN_history.md`, archives to `Documentation/archive/`, and clears `REVIEW.md`
+   - This appends `PLAN_Sprint<N>.md` to `Documentation/PLAN_history.md`, archives it, and removes `REVIEW_Sprint<N>.md`
 3. **Commit all changes** - Stage all modified/new files and create a descriptive commit
 4. **Push to main** - Push the commit to the main branch
 5. **Monitor Azure deployment** - Use `gh run watch` to monitor the GitHub Actions workflow for successful deployment
@@ -238,18 +238,18 @@ When the user says "Sprint N" (e.g., "Sprint 27"), begin pair programming on tha
    - Phase breakdown with detailed designs
    - Risk assessment and mitigations
 
-3. **Draft the plan** - Write `PLAN.md` in the repo root with:
+3. **Draft the plan** - Write `PLAN_Sprint<N>.md` in the repo root with:
    - Detailed implementation plan based on sprint deliverables
    - Specific file paths, code structure, and test strategy
    - Dependencies from previous sprints
 
 4. **Follow pair programming workflow** - As defined in the "Pair Programming Workflow" section:
-   - Draft plan in `PLAN.md` with sufficient detail for review
+   - Draft plan in `PLAN_Sprint<N>.md` with sufficient detail for review
    - Request plan review: `./scripts/request-review.sh plan <N> "<title>"`
-   - Read `REVIEW.md` for verdict; iterate until APPROVED
+   - Read `REVIEW_Sprint<N>.md` for verdict; iterate until APPROVED
    - Implement according to plan
    - Request code review: `./scripts/request-review.sh code <N> "<title>"`
-   - Archive completed plan using `./scripts/archive-plan.sh`
+   - Archive completed plan using `./scripts/archive-plan.sh <N> "<title>"`
 
 **Sprint Definitions:** See `SPRINTS.md` for the full sprint roadmap (Sprints 1-25 were verifier implementation, Sprints 26+ are issuer implementation).
 
@@ -257,12 +257,12 @@ When the user says "Sprint N" (e.g., "Sprint 27"), begin pair programming on tha
 ```
 User: Sprint 27
 Agent: [Reads SPRINTS.md for Sprint 27 details]
-Agent: [Writes PLAN.md with implementation plan for Local Witness Infrastructure]
+Agent: [Writes PLAN_Sprint27.md with implementation plan]
 Agent: [Runs ./scripts/request-review.sh plan 27 "Local Witness Infrastructure"]
-Agent: [Reads REVIEW.md — Codex verdict: APPROVED]
+Agent: [Reads REVIEW_Sprint27.md — Codex verdict: APPROVED]
 Agent: [Implements according to plan]
 Agent: [Runs ./scripts/request-review.sh code 27 "Local Witness Infrastructure"]
-Agent: [Reads REVIEW.md — Codex verdict: APPROVED]
+Agent: [Reads REVIEW_Sprint27.md — Codex verdict: APPROVED]
 Agent: [Runs ./scripts/archive-plan.sh 27 "Local Witness Infrastructure"]
 ```
 
@@ -324,14 +324,16 @@ VVP_REVIEWER="claude -p" ./scripts/request-review.sh plan 35 "Title"  # Use Clau
 
 ### Working Files
 
+Files are **namespaced by sprint number** so multiple sprints can run concurrently without conflicts:
+
 | File | Purpose | Owner |
 |------|---------|-------|
-| `PLAN.md` | Current phase design with rationale | Editor |
-| `REVIEW.md` | Reviewer feedback on plans and code | Reviewer |
-| `Documentation/PLAN_PhaseN.md` | Archive of accepted plans | Both |
+| `PLAN_Sprint<N>.md` | Current phase design with rationale | Editor |
+| `REVIEW_Sprint<N>.md` | Reviewer feedback on plans and code | Reviewer (Codex) |
+| `Documentation/archive/PLAN_Sprint<N>.md` | Archive of accepted plans | Both |
 | `CHANGES.md` | Change log with commit SHAs | Both |
 
-**Note:** Plans are written to `PLAN.md` in the repository root. This file is the single source of truth for the current plan — both the Editor and Reviewer read/write from it. After approval and implementation, the plan content is archived to `Documentation/` (see Phase 3).
+**Concurrency:** Sprint 35 uses `PLAN_Sprint35.md` / `REVIEW_Sprint35.md`, Sprint 36 uses `PLAN_Sprint36.md` / `REVIEW_Sprint36.md`, etc. Two sprints can be in-flight simultaneously without clobbering each other's files. The scripts derive filenames from the sprint number argument automatically.
 
 ---
 
@@ -339,7 +341,7 @@ VVP_REVIEWER="claude -p" ./scripts/request-review.sh plan 35 "Title"  # Use Clau
 
 #### Step 1.1: Draft the Plan
 
-The Editor writes `PLAN.md` with sufficient detail for the Reviewer to understand:
+The Editor writes `PLAN_Sprint<N>.md` with sufficient detail for the Reviewer to understand:
 
 ```markdown
 # Phase N: [Title]
@@ -411,17 +413,17 @@ Run the review script to invoke the Reviewer (Codex) automatically:
 ```
 
 The script:
-1. Assembles a prompt instructing the Reviewer to read `CHANGES.md`, `Documentation/PLAN_history.md`, and `PLAN.md`
+1. Assembles a prompt instructing the Reviewer to read `CHANGES.md`, `Documentation/PLAN_history.md`, and `PLAN_Sprint<N>.md`
 2. Invokes Codex (or the configured `VVP_REVIEWER`) with the prompt
-3. Codex writes its verdict and findings to `REVIEW.md`
+3. Codex writes its verdict and findings to `REVIEW_Sprint<N>.md`
 4. Reports the verdict and next steps
 
-After the script completes, read `REVIEW.md` to see the verdict.
+After the script completes, read `REVIEW_Sprint<N>.md` to see the verdict.
 
 #### Step 1.3: Iterate Until Approved
 
 If Reviewer returns `CHANGES_REQUESTED`:
-1. Editor revises `PLAN.md` addressing all required changes
+1. Editor revises `PLAN_Sprint<N>.md` addressing all required changes
 2. Re-run `./scripts/request-review.sh plan <N> "<title>"`
 3. Repeat until `APPROVED`
 
@@ -442,7 +444,7 @@ After receiving `APPROVED` verdict:
 
 #### Step 2.2: Document Implementation
 
-The Editor updates `PLAN.md` with an implementation appendix:
+The Editor updates `PLAN_Sprint<N>.md` with an implementation appendix:
 
 ```text
 ---
@@ -476,11 +478,11 @@ Run the review script to invoke the Reviewer (Codex) automatically:
 
 The script:
 1. Detects changed files from git history
-2. Assembles a prompt instructing the Reviewer to read `CHANGES.md`, `PLAN.md`, and the changed files
-3. Invokes Codex, which writes its verdict to `REVIEW.md`
+2. Assembles a prompt instructing the Reviewer to read `CHANGES.md`, `PLAN_Sprint<N>.md`, and the changed files
+3. Invokes Codex, which writes its verdict to `REVIEW_Sprint<N>.md`
 4. Reports the verdict and next steps
 
-After the script completes, read `REVIEW.md` to see the verdict.
+After the script completes, read `REVIEW_Sprint<N>.md` to see the verdict.
 
 #### Step 2.4: Iterate Until Approved
 
@@ -502,9 +504,9 @@ Run the archival script to automate the mechanical steps:
 ```
 
 This script automatically:
-1. Appends `PLAN.md` content to `Documentation/PLAN_history.md` under a sprint header
-2. Moves `PLAN.md` to `Documentation/archive/PLAN_SprintN.md`
-3. Clears `REVIEW.md` for the next phase
+1. Appends `PLAN_Sprint<N>.md` content to `Documentation/PLAN_history.md` under a sprint header
+2. Moves `PLAN_Sprint<N>.md` to `Documentation/archive/PLAN_Sprint<N>.md`
+3. Removes `REVIEW_Sprint<N>.md`
 
 #### Step 3.2: Update CHANGES.md and Commit
 
@@ -619,6 +621,7 @@ VVP/
 ├── pyproject.toml                   # Workspace definition
 ├── SPRINTS.md                       # Sprint roadmap (say "Sprint N" to start)
 ├── CHANGES.md                       # Change log with commit SHAs
-├── REVIEW.md                        # Reviewer feedback during pair programming
+├── PLAN_Sprint<N>.md                # Active plan (per-sprint, transient)
+├── REVIEW_Sprint<N>.md              # Reviewer feedback (per-sprint, transient)
 └── .github/workflows/deploy.yml     # CI/CD pipeline
 ```

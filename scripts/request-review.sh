@@ -9,6 +9,11 @@
 #   ./scripts/request-review.sh plan 35 "Credential Issuance"
 #   ./scripts/request-review.sh code 35 "Credential Issuance"
 #
+# Files:
+#   Plan file:   PLAN_Sprint<N>.md   (read by reviewer)
+#   Review file:  REVIEW_Sprint<N>.md (written by reviewer)
+#   Namespaced by sprint number so multiple sprints can run concurrently.
+#
 # Environment:
 #   VVP_REVIEWER       - Reviewer command (default: "codex exec --auto-edit")
 #   VVP_REVIEWER_MODEL - Model flag if supported (default: unset)
@@ -24,7 +29,7 @@ set -euo pipefail
 if [ $# -lt 3 ]; then
     echo "Usage: $0 <plan|code> <sprint-number> <title>"
     echo ""
-    echo "  plan  — Review the implementation plan in PLAN.md"
+    echo "  plan  — Review the implementation plan in PLAN_Sprint<N>.md"
     echo "  code  — Review the implementation (changed files since plan approval)"
     echo ""
     echo "Examples:"
@@ -44,10 +49,13 @@ if [[ "$REVIEW_TYPE" != "plan" && "$REVIEW_TYPE" != "code" ]]; then
 fi
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
-PLAN_FILE="$REPO_ROOT/PLAN.md"
-REVIEW_FILE="$REPO_ROOT/REVIEW.md"
+PLAN_FILE="$REPO_ROOT/PLAN_Sprint${SPRINT_NUM}.md"
+REVIEW_FILE="$REPO_ROOT/REVIEW_Sprint${SPRINT_NUM}.md"
 CHANGES_FILE="$REPO_ROOT/CHANGES.md"
 HISTORY_FILE="$REPO_ROOT/Documentation/PLAN_history.md"
+
+PLAN_BASENAME="PLAN_Sprint${SPRINT_NUM}.md"
+REVIEW_BASENAME="REVIEW_Sprint${SPRINT_NUM}.md"
 
 # ---------- validate ----------
 
@@ -61,7 +69,7 @@ if ! command -v codex &>/dev/null && [ -z "${VVP_REVIEWER:-}" ]; then
 fi
 
 if [[ "$REVIEW_TYPE" == "plan" && ! -f "$PLAN_FILE" ]]; then
-    echo "Error: PLAN.md not found at $PLAN_FILE"
+    echo "Error: $PLAN_BASENAME not found at $PLAN_FILE"
     exit 1
 fi
 
@@ -80,19 +88,19 @@ INSTRUCTIONS:
 1. Read these files for project context (in order):
    - CHANGES.md — what has been built, recent decisions
    - Documentation/PLAN_history.md — prior architectural choices
-2. Read PLAN.md — the plan under review
+2. Read ${PLAN_BASENAME} — the plan under review
 3. Evaluate the plan against these criteria:
    - Does it correctly interpret the spec requirements cited?
    - Is the proposed approach sound and well-justified?
    - Is it consistent with prior decisions, or does it justify departures?
    - Are there gaps, ambiguities, or risks not addressed?
    - Is the test strategy adequate?
-4. Write your review to REVIEW.md using the format below.
+4. Write your review to ${REVIEW_BASENAME} using the format below.
 
-IMPORTANT: You MUST write your output to the file REVIEW.md (overwrite it).
+IMPORTANT: You MUST write your output to the file ${REVIEW_BASENAME} (overwrite it).
 Do NOT modify any other files. Do NOT run tests or execute code.
 
-OUTPUT FORMAT (write exactly this structure to REVIEW.md):
+OUTPUT FORMAT (write exactly this structure to ${REVIEW_BASENAME}):
 
 ## Plan Review: Sprint ${SPRINT_NUM} - ${TITLE}
 
@@ -132,7 +140,7 @@ You are reviewing the implementation for Sprint ${SPRINT_NUM}: ${TITLE}.
 INSTRUCTIONS:
 1. Read these files for context:
    - CHANGES.md — what has been built, recent decisions
-   - PLAN.md — the approved plan this code implements
+   - ${PLAN_BASENAME} — the approved plan this code implements
 2. Review the implementation in these changed files:
 
 ${changed_files}
@@ -142,13 +150,13 @@ ${changed_files}
    - Code quality: clarity, documentation, error handling
    - Test coverage: are edge cases handled?
    - Are there security concerns?
-4. Run any test commands mentioned in PLAN.md to verify they pass.
-5. Write your review to REVIEW.md using the format below.
+4. Run any test commands mentioned in ${PLAN_BASENAME} to verify they pass.
+5. Write your review to ${REVIEW_BASENAME} using the format below.
 
-IMPORTANT: You MUST write your output to the file REVIEW.md (overwrite it).
+IMPORTANT: You MUST write your output to the file ${REVIEW_BASENAME} (overwrite it).
 Do NOT modify any source files.
 
-OUTPUT FORMAT (write exactly this structure to REVIEW.md):
+OUTPUT FORMAT (write exactly this structure to ${REVIEW_BASENAME}):
 
 ## Code Review: Sprint ${SPRINT_NUM} - ${TITLE}
 
@@ -186,6 +194,8 @@ fi
 
 echo "==> Requesting ${REVIEW_TYPE} review for Sprint ${SPRINT_NUM}: ${TITLE}"
 echo "    Reviewer: ${REVIEWER}"
+echo "    Plan:     ${PLAN_BASENAME}"
+echo "    Review:   ${REVIEW_BASENAME}"
 echo ""
 
 # Capture the review file's timestamp before invocation
@@ -205,7 +215,7 @@ if [ $REVIEW_EXIT -ne 0 ]; then
     exit $REVIEW_EXIT
 fi
 
-# Check if REVIEW.md was updated
+# Check if review file was updated
 AFTER_MTIME=""
 if [ -f "$REVIEW_FILE" ]; then
     AFTER_MTIME=$(stat -c %Y "$REVIEW_FILE" 2>/dev/null || stat -f %m "$REVIEW_FILE" 2>/dev/null || echo "")
@@ -213,7 +223,7 @@ fi
 
 echo ""
 if [[ "$BEFORE_MTIME" != "$AFTER_MTIME" && -s "$REVIEW_FILE" ]]; then
-    echo "==> Review complete. REVIEW.md has been updated."
+    echo "==> Review complete. ${REVIEW_BASENAME} has been updated."
     echo ""
     # Extract and display the verdict
     VERDICT=$(grep -m1 '^\*\*Verdict:\*\*' "$REVIEW_FILE" 2>/dev/null || echo "")
@@ -229,10 +239,10 @@ if [[ "$BEFORE_MTIME" != "$AFTER_MTIME" && -s "$REVIEW_FILE" ]]; then
             echo "  - Proceed to archival: ./scripts/archive-plan.sh $SPRINT_NUM \"$TITLE\""
         fi
     else
-        echo "  - Address the reviewer's findings"
+        echo "  - Address the reviewer's findings in ${REVIEW_BASENAME}"
         echo "  - Re-request review: $0 $REVIEW_TYPE $SPRINT_NUM \"$TITLE\""
     fi
 else
-    echo "Warning: REVIEW.md was not updated. The reviewer may not have written output."
+    echo "Warning: ${REVIEW_BASENAME} was not updated. The reviewer may not have written output."
     echo "Check the reviewer output above for errors."
 fi
