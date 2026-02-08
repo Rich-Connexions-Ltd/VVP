@@ -567,3 +567,8 @@ VVP_VERIFICATION_CACHE_TTL: float = float(
 VVP_REVOCATION_RECHECK_INTERVAL: float = float(
     os.getenv("VVP_REVOCATION_RECHECK_INTERVAL", "300")
 )
+
+# Max concurrent background revocation check tasks
+VVP_REVOCATION_CHECK_CONCURRENCY: int = int(
+    os.getenv("VVP_REVOCATION_CHECK_CONCURRENCY", "1")
+)

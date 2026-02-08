@@ -31,12 +31,13 @@ class BackgroundRevocationChecker:
         self,
         cache: VerificationResultCache,
         recheck_interval: float = 300.0,
+        concurrency: int = 1,
     ):
         self._cache = cache
         self._recheck_interval = recheck_interval
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._pending: Set[str] = set()
-        self._semaphore = asyncio.Semaphore(1)
+        self._semaphore = asyncio.Semaphore(concurrency)
         self._running = False
         self._task: Optional[asyncio.Task] = None
 
@@ -107,13 +108,11 @@ class BackgroundRevocationChecker:
     async def _check_revocations(self, dossier_url: str) -> None:
         """Perform revocation check for a dossier URL.
 
-        Checks all credential SAIDs in the cached entry against TEL.
-        Updates all kid variants atomically.
+        Checks all credential SAIDs in the cached entry against TEL
+        using the TELClient.check_revocation() API. Updates all kid
+        variants atomically.
         """
-        from app.vvp.dossier.cache import get_dossier_cache
-
-        # Get a cached entry to find credential SAIDs and DAG
-        # We need any entry for this URL to get the credential info
+        # Get a cached entry to find credential SAIDs and passport kid
         cache = self._cache
         entry = None
 
@@ -130,25 +129,37 @@ class BackgroundRevocationChecker:
 
         cache._metrics.revocation_checks += 1
 
-        # Check revocation for each credential SAID
+        # Check revocation for each credential SAID using TELClient
         from app.vvp.keri.tel_client import get_tel_client, CredentialStatus
 
         tel_client = get_tel_client()
 
+        # Extract registry SAIDs from the cached DAG for OOBI derivation
+        dag = entry.dag
+
         for said in entry.contained_saids:
             try:
-                result = await tel_client.check_credential_status(said)
-                if result and result.status == CredentialStatus.REVOKED:
+                # Get registry SAID from DAG node if available
+                registry_said = None
+                if dag and hasattr(dag, "nodes"):
+                    node = dag.nodes.get(said)
+                    if node and hasattr(node, "raw") and isinstance(node.raw, dict):
+                        registry_said = node.raw.get("ri")
+
+                result = await tel_client.check_revocation(
+                    credential_said=said,
+                    registry_said=registry_said,
+                    oobi_url=entry.passport_kid,
+                )
+                if result.status == CredentialStatus.REVOKED:
                     await cache.update_revocation_all_for_url(
                         dossier_url, said, RevocationStatus.REVOKED
                     )
-                elif result and result.status == CredentialStatus.ISSUED:
+                elif result.status == CredentialStatus.ACTIVE:
                     await cache.update_revocation_all_for_url(
                         dossier_url, said, RevocationStatus.UNREVOKED
                     )
-                else:
-                    # Keep as UNDEFINED if we can't determine status
-                    pass
+                # UNKNOWN/ERROR: keep existing status (don't downgrade UNREVOKED)
             except Exception:
                 log.exception(f"Revocation check failed for SAID {said[:20]}...")
                 # Keep existing status on failure
@@ -170,12 +181,16 @@ def get_revocation_checker() -> BackgroundRevocationChecker:
     """Get the module-level revocation checker singleton."""
     global _revocation_checker
     if _revocation_checker is None:
-        from app.core.config import VVP_REVOCATION_RECHECK_INTERVAL
+        from app.core.config import (
+            VVP_REVOCATION_RECHECK_INTERVAL,
+            VVP_REVOCATION_CHECK_CONCURRENCY,
+        )
         from app.vvp.verification_cache import get_verification_cache
 
         _revocation_checker = BackgroundRevocationChecker(
             cache=get_verification_cache(),
             recheck_interval=VVP_REVOCATION_RECHECK_INTERVAL,
+            concurrency=VVP_REVOCATION_CHECK_CONCURRENCY,
         )
     return _revocation_checker
 
