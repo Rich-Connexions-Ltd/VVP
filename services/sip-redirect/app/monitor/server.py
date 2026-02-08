@@ -352,7 +352,7 @@ async def handle_oauth_start(request):
     state = generate_state()
     nonce = generate_nonce()
 
-    redirect_after = request.query.get("redirect_after", ".")
+    redirect_after = request.query.get("redirect_after", MONITOR_COOKIE_PATH or "/")
 
     # Store server-side
     oauth_state = OAuthState(
@@ -486,7 +486,7 @@ async def handle_oauth_callback(request):
     )
 
     # Redirect to dashboard with session cookie
-    redirect_target = oauth_state.redirect_after or "."
+    redirect_target = oauth_state.redirect_after or MONITOR_COOKIE_PATH or "/"
     response = web.HTTPFound(redirect_target)
 
     # Session cookie (SameSite=Strict for security)
