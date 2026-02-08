@@ -214,10 +214,9 @@ az vm run-command invoke --resource-group VVP --name vvp-pbx --command-id RunShe
 When the user says "Complete", immediately perform all of the following without asking for permission:
 
 1. **Update sprint status** - Update `SPRINTS.md` to reflect any work completed in the current sprint before committing.
-2. **Archive sprint plan** - If this sprint had a plan (from Claude's plan mode or a PLAN_*.md file):
-   - Append the complete implementation plan to `Documentation/PLAN_history.md` with a section header like `# Sprint N: [Title]`
-   - Include the plan content, implementation notes, files changed, and test results
-   - If a separate PLAN_*.md file was created, move it to `Documentation/archive/` after appending
+2. **Archive sprint plan** - If this sprint had a `PLAN.md`, run the archival script:
+   - `./scripts/archive-plan.sh <sprint-number> "<title>"`
+   - This appends to `Documentation/PLAN_history.md`, archives to `Documentation/archive/`, and clears `REVIEW.md`
 3. **Commit all changes** - Stage all modified/new files and create a descriptive commit
 4. **Push to main** - Push the commit to the main branch
 5. **Monitor Azure deployment** - Use `gh run watch` to monitor the GitHub Actions workflow for successful deployment
@@ -239,18 +238,18 @@ When the user says "Sprint N" (e.g., "Sprint 27"), begin pair programming on tha
    - Phase breakdown with detailed designs
    - Risk assessment and mitigations
 
-3. **Enter plan mode** - Use Claude's built-in plan mode to:
-   - Draft a detailed implementation plan based on sprint deliverables
-   - Include specific file paths, code structure, and test strategy
-   - Address any dependencies from previous sprints
+3. **Draft the plan** - Write `PLAN.md` in the repo root with:
+   - Detailed implementation plan based on sprint deliverables
+   - Specific file paths, code structure, and test strategy
+   - Dependencies from previous sprints
 
 4. **Follow pair programming workflow** - As defined in the "Pair Programming Workflow" section:
-   - Draft plan with sufficient detail for review
+   - Draft plan in `PLAN.md` with sufficient detail for review
    - Request plan review from user (they may copy to a Reviewer agent)
    - Iterate until APPROVED
    - Implement according to plan
    - Request code review
-   - Archive completed plan
+   - Archive completed plan using `scripts/archive-plan.sh`
 
 **Sprint Definitions:** See `SPRINTS.md` for the full sprint roadmap (Sprints 1-25 were verifier implementation, Sprints 26+ are issuer implementation).
 
@@ -258,8 +257,7 @@ When the user says "Sprint N" (e.g., "Sprint 27"), begin pair programming on tha
 ```
 User: Sprint 27
 Agent: [Reads SPRINTS.md for Sprint 27 details]
-Agent: [Enters plan mode]
-Agent: [Drafts implementation plan for Local Witness Infrastructure]
+Agent: [Writes PLAN.md with implementation plan for Local Witness Infrastructure]
 Agent: [Requests plan review]
 ... pair programming cycle continues ...
 ```
@@ -300,17 +298,18 @@ This project uses a formal two-agent workflow with an **Editor** (implementing a
 2. **Sufficient detail for understanding** - Plans must explain not only WHAT is proposed but WHY
 3. **Formal acceptance gates** - Each phase has explicit approval checkpoints
 4. **Documented for posterity** - Accepted plans are archived in `/Documentation`
+5. **Reviewer reads prior context** - The Reviewer MUST read `CHANGES.md` and `Documentation/PLAN_history.md` before reviewing, so decisions are evaluated against the full project history, not in isolation
 
 ### Working Files
 
 | File | Purpose | Owner |
 |------|---------|-------|
-| Claude plan mode file | Current phase design with rationale | Editor |
+| `PLAN.md` | Current phase design with rationale | Editor |
 | `REVIEW.md` | Reviewer feedback on plans and code | Reviewer |
 | `Documentation/PLAN_PhaseN.md` | Archive of accepted plans | Both |
 | `CHANGES.md` | Change log with commit SHAs | Both |
 
-**Note:** Plans are now written using Claude Code's built-in plan mode rather than a separate `PLAN.md` file. The plan content is stored at `~/.claude/plans/` and archived to `Documentation/` after approval.
+**Note:** Plans are written to `PLAN.md` in the repository root. This file is the single source of truth for the current plan — both the Editor and Reviewer read/write from it. After approval and implementation, the plan content is archived to `Documentation/` (see Phase 3).
 
 ---
 
@@ -389,16 +388,29 @@ The Editor provides a **copyable prompt** for the Reviewer **directly in the con
 
 You are the Reviewer in a pair programming workflow. Please review the plan in PLAN.md and provide your assessment in REVIEW.md.
 
+PRE-CONTEXT (read before reviewing):
+1. Read CHANGES.md — understand what has been built so far and recent decisions
+2. Read Documentation/PLAN_history.md — understand prior architectural choices
+3. These files establish the baseline the plan builds upon
+
+PRIOR DECISIONS RELEVANT TO THIS REVIEW:
+- [Decision 1 from earlier sprint and its rationale]
+- [Decision 2 that constrains this plan]
+- [Any relevant context the Reviewer needs]
+
 YOUR TASK:
-1. Read PLAN.md thoroughly
-2. Evaluate against the spec references cited
-3. Assess the rationale for design decisions
-4. Answer any open questions
-5. Provide verdict and feedback in REVIEW.md
+1. Read the pre-context files above for project history
+2. Read PLAN.md thoroughly
+3. Evaluate against the spec references cited
+4. Assess the rationale for design decisions
+5. Check consistency with prior architectural decisions
+6. Answer any open questions
+7. Provide verdict and feedback in REVIEW.md
 
 EVALUATION CRITERIA:
 - Does the plan correctly interpret the spec requirements?
 - Is the proposed approach sound and well-justified?
+- Is the plan consistent with prior decisions (or does it justify departures)?
 - Are there gaps, ambiguities, or risks not addressed?
 - Is the test strategy adequate?
 
@@ -487,6 +499,10 @@ The Editor provides a **copyable prompt** for code review:
 
 You are the Reviewer in a pair programming workflow. Please review the implementation and provide your assessment in REVIEW.md.
 
+PRE-CONTEXT (read before reviewing):
+1. Read CHANGES.md — understand what has been built so far
+2. Read PLAN.md — the approved plan this code implements
+
 CONTEXT: [Brief description of what was implemented]
 
 SPEC REFERENCES:
@@ -505,10 +521,11 @@ KEY DESIGN DECISIONS:
 TEST RESULTS: [N passed in X.XXs]
 
 YOUR TASK:
-1. Review all listed files for correctness and style
-2. Verify implementation matches approved plan
-3. Check test coverage and edge cases
-4. Provide verdict and feedback in REVIEW.md
+1. Read CHANGES.md and PLAN.md for context
+2. Review all listed files for correctness and style
+3. Verify implementation matches approved plan
+4. Check test coverage and edge cases
+5. Provide verdict and feedback in REVIEW.md
 
 RESPONSE FORMAT - Write to REVIEW.md with this structure:
 
@@ -550,15 +567,22 @@ RESPONSE FORMAT - Write to REVIEW.md with this structure:
 
 #### Step 3.1: Archive the Plan
 
-Consolidate the plan into the plan history:
-1. Append plan content to `Documentation/PLAN_history.md` with a section header (e.g., `# Sprint N: [Title]`)
-2. Include implementation notes, files changed, and review history
-3. If a separate `PLAN_*.md` file exists, move it to `Documentation/archive/`
-4. Update `CHANGES.md` with phase summary
+Run the archival script to automate the mechanical steps:
 
-#### Step 3.2: Clean Up
+```bash
+./scripts/archive-plan.sh <sprint-number> "<title>"
+# Example: ./scripts/archive-plan.sh 35 "Credential Issuance"
+```
 
-1. Clear `REVIEW.md` for next phase
+This script automatically:
+1. Appends `PLAN.md` content to `Documentation/PLAN_history.md` under a sprint header
+2. Moves `PLAN.md` to `Documentation/archive/PLAN_SprintN.md`
+3. Clears `REVIEW.md` for the next phase
+
+#### Step 3.2: Update CHANGES.md and Commit
+
+After running the script, manually:
+1. Update `CHANGES.md` with the sprint summary, files changed, and commit SHA
 2. Commit all documentation updates
 
 ---
