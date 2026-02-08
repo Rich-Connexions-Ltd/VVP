@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard - VVP Issuer</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+  <style>
+    /* Status banner */
+    .status-banner {
+      text-align: center;
+      padding: 1.25rem;
+      border-radius: 8px;
+      margin-bottom: 2rem;
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: white;
+    }
+    .status-banner.healthy { background: var(--vvp-success); }
+    .status-banner.degraded { background: var(--vvp-warning); color: #333; }
+    .status-banner.unhealthy { background: var(--vvp-danger); }
+    .status-banner.unknown { background: var(--vvp-muted); }
+    .status-banner.loading { background: var(--vvp-secondary); }
+
+    .banner-sub {
+      font-size: 0.85rem;
+      font-weight: normal;
+      margin-top: 0.25rem;
+      opacity: 0.9;
+    }
+
+    /* Section headers */
+    .section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin: 1.5rem 0 0.75rem;
+    }
+    .section-header h3 {
+      margin: 0;
+      color: var(--vvp-dark-secondary);
+    }
+
+    /* Service cards grid */
+    .services-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 1rem;
+    }
+
+    .service-card {
+      background: white;
+      border-radius: 8px;
+      padding: 1.25rem;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      transition: transform 0.2s, box-shadow 0.2s;
+      border-left: 4px solid var(--vvp-muted);
+    }
+    .service-card:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+    }
+    .service-card.healthy { border-left-color: var(--vvp-success); }
+    .service-card.unhealthy { border-left-color: var(--vvp-danger); }
+
+    .service-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.5rem;
+    }
+    .service-card-header h4 {
+      margin: 0;
+      color: var(--vvp-dark);
+      font-size: 1rem;
+    }
+
+    .status-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--vvp-muted);
+      flex-shrink: 0;
+    }
+    .status-dot.healthy { background: var(--vvp-success); }
+    .status-dot.unhealthy { background: var(--vvp-danger); }
+
+    .service-meta {
+      font-size: 0.85rem;
+      color: var(--vvp-text-muted);
+    }
+    .service-meta span {
+      display: inline-block;
+      margin-right: 1rem;
+    }
+    .service-error {
+      font-size: 0.8rem;
+      color: var(--vvp-danger);
+      margin-top: 0.35rem;
+      word-break: break-word;
+    }
+
+    /* SIP section accent */
+    .sip-section {
+      background: rgba(42,157,143,0.04);
+      border: 1px solid rgba(42,157,143,0.15);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      margin-bottom: 1rem;
+    }
+
+    .sip-monitor-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: var(--vvp-primary);
+      color: white;
+      text-decoration: none;
+      padding: 0.5rem 1.25rem;
+      border-radius: 4px;
+      font-weight: 500;
+      transition: background 0.2s;
+    }
+    .sip-monitor-btn:hover {
+      background: var(--vvp-primary-hover);
+    }
+
+    /* Refresh controls */
+    .refresh-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+    .refresh-bar button {
+      padding: 0.4rem 1rem;
+      font-size: 0.9rem;
+    }
+    .refresh-info {
+      font-size: 0.85rem;
+      color: var(--vvp-text-muted);
+    }
+
+    /* Timestamp */
+    .checked-at {
+      text-align: center;
+      font-size: 0.8rem;
+      color: var(--vvp-text-muted);
+      margin-top: 1.5rem;
+    }
+
+    /* Empty state */
+    .empty-state {
+      text-align: center;
+      padding: 3rem;
+      color: var(--vvp-text-muted);
+    }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-brand">
+      <img src="/static/ovc-logo.png" alt="OVC" class="ovc-logo">
+      <a href="/ui/" class="logo">
+        <span class="service-label">VVP</span>
+        Issuer
+      </a>
+    </div>
+    <nav class="nav-links">
+      <a href="/ui/dashboard" class="active">Dashboard</a>
+      <a href="/ui/identity">Identities</a>
+      <a href="/ui/registry">Registries</a>
+      <a href="/ui/schemas">Schemas</a>
+      <a href="/ui/credentials">Credentials</a>
+      <a href="/ui/dossier">Dossiers</a>
+      <a href="/ui/vvp">VVP Headers</a>
+      <a href="/ui/tn-mappings">TN Mappings</a>
+      <a href="/ui/help">Help</a>
+      <a href="/ui/admin">Admin</a>
+      <a href="https://vvp-verifier.rcnx.io" class="verifier-link" target="_blank">Verifier &#8599;</a>
+    </nav>
+  </header>
+
+  <main>
+    <h1>Service Dashboard</h1>
+    <p class="subtitle">Central status view for all VVP services</p>
+
+    <!-- Overall status banner -->
+    <div id="statusBanner" class="status-banner loading">
+      Checking services...
+    </div>
+
+    <!-- Refresh controls -->
+    <div class="refresh-bar">
+      <button onclick="fetchStatus()" id="refreshBtn">Refresh Now</button>
+      <span class="refresh-info">Auto-refresh: <span id="countdown">30</span>s</span>
+    </div>
+
+    <!-- Core services -->
+    <div class="section-header">
+      <h3>Core Services</h3>
+    </div>
+    <div id="coreServices" class="services-grid"></div>
+
+    <!-- SIP services -->
+    <div id="sipSection" class="sip-section" style="display:none">
+      <div class="section-header" style="margin-top:0">
+        <h3>SIP Services</h3>
+        <a id="sipMonitorLink" href="#" class="sip-monitor-btn" target="_blank" style="display:none">
+          Open SIP Monitor &#8599;
+        </a>
+      </div>
+      <div id="sipServices" class="services-grid"></div>
+    </div>
+
+    <!-- Witnesses -->
+    <div id="witnessHeader" class="section-header" style="display:none">
+      <h3>KERI Witnesses</h3>
+    </div>
+    <div id="witnessServices" class="services-grid"></div>
+
+    <!-- Infrastructure -->
+    <div id="infraHeader" class="section-header" style="display:none">
+      <h3>Infrastructure</h3>
+    </div>
+    <div id="infraServices" class="services-grid"></div>
+
+    <!-- Timestamp -->
+    <div id="checkedAt" class="checked-at"></div>
+  </main>
+
+  <script src="/static/shared.js"></script>
+  <script>
+    let refreshInterval = null;
+    let countdownInterval = null;
+    let countdownValue = 30;
+    const REFRESH_SECONDS = 30;
+
+    function renderServiceCard(svc) {
+      const statusClass = svc.status || '';
+      const metaParts = [];
+      if (svc.response_time_ms != null) {
+        metaParts.push(`<span>${svc.response_time_ms}ms</span>`);
+      }
+      if (svc.version) {
+        const short = svc.version.length > 12 ? svc.version.substring(0, 7) : svc.version;
+        metaParts.push(`<span>v${short}</span>`);
+      }
+
+      let errorHtml = '';
+      if (svc.error) {
+        const safeError = svc.error.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        errorHtml = `<div class="service-error">${safeError}</div>`;
+      }
+
+      return `
+        <div class="service-card ${statusClass}">
+          <div class="service-card-header">
+            <h4>${svc.name}</h4>
+            <span class="status-dot ${statusClass}"></span>
+          </div>
+          <div class="service-meta">${metaParts.join('')}</div>
+          ${errorHtml}
+        </div>
+      `;
+    }
+
+    function renderSection(containerId, services) {
+      const container = document.getElementById(containerId);
+      if (!services || services.length === 0) {
+        container.innerHTML = '';
+        return false;
+      }
+      container.innerHTML = services.map(renderServiceCard).join('');
+      return true;
+    }
+
+    function updateBanner(status) {
+      const banner = document.getElementById('statusBanner');
+      banner.className = 'status-banner ' + (status || 'unknown');
+
+      const labels = {
+        healthy: 'All Systems Operational',
+        degraded: 'Partial Outage',
+        unhealthy: 'Major Outage',
+        unknown: 'No Services Configured',
+      };
+      banner.innerHTML = labels[status] || 'Unknown Status';
+    }
+
+    async function fetchStatus() {
+      const btn = document.getElementById('refreshBtn');
+      btn.disabled = true;
+      btn.textContent = 'Checking...';
+
+      try {
+        const res = await fetch('/api/dashboard/status');
+        const data = await res.json();
+
+        updateBanner(data.overall_status);
+
+        // Group services by category
+        const groups = { core: [], sip: [], witness: [], infrastructure: [] };
+        for (const svc of (data.services || [])) {
+          const cat = svc.category || 'core';
+          if (!groups[cat]) groups[cat] = [];
+          groups[cat].push(svc);
+        }
+
+        renderSection('coreServices', groups.core);
+
+        const hasSip = renderSection('sipServices', groups.sip);
+        document.getElementById('sipSection').style.display = hasSip ? '' : 'none';
+
+        // SIP monitor link
+        const monitorLink = document.getElementById('sipMonitorLink');
+        if (data.sip_monitor_url) {
+          monitorLink.href = data.sip_monitor_url;
+          monitorLink.style.display = '';
+        } else {
+          monitorLink.style.display = 'none';
+        }
+
+        const hasWitness = renderSection('witnessServices', groups.witness);
+        document.getElementById('witnessHeader').style.display = hasWitness ? '' : 'none';
+
+        const hasInfra = renderSection('infraServices', groups.infrastructure);
+        document.getElementById('infraHeader').style.display = hasInfra ? '' : 'none';
+
+        // Timestamp
+        if (data.checked_at) {
+          const dt = new Date(data.checked_at);
+          document.getElementById('checkedAt').textContent =
+            'Last checked: ' + dt.toLocaleTimeString();
+        }
+
+      } catch (err) {
+        updateBanner('unhealthy');
+        document.getElementById('coreServices').innerHTML =
+          '<div class="empty-state">Failed to fetch service status</div>';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Refresh Now';
+        resetCountdown();
+      }
+    }
+
+    function resetCountdown() {
+      countdownValue = REFRESH_SECONDS;
+      document.getElementById('countdown').textContent = countdownValue;
+    }
+
+    function startAutoRefresh() {
+      // Countdown ticker
+      countdownInterval = setInterval(() => {
+        countdownValue--;
+        if (countdownValue < 0) countdownValue = 0;
+        document.getElementById('countdown').textContent = countdownValue;
+      }, 1000);
+
+      // Actual refresh
+      refreshInterval = setInterval(() => {
+        fetchStatus();
+      }, REFRESH_SECONDS * 1000);
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      fetchStatus();
+      startAutoRefresh();
+    });
+  </script>
+</body>
+</html>

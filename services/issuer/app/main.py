@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.authentication import AuthenticationMiddleware
 
 from common.vvp.core.logging import configure_logging
-from app.api import admin, auth, credential, dossier, health, identity, organization, org_api_key, registry, schema, tn, user, vvp
+from app.api import admin, auth, credential, dashboard, dossier, health, identity, organization, org_api_key, registry, schema, tn, user, vvp
 from app.auth.api_key import APIKeyBackend, get_api_key_store
 from app.auth.session import get_session_store
 from app.config import (
@@ -238,6 +238,12 @@ def ui_benchmarks():
     return FileResponse(WEB_DIR / "benchmarks.html", media_type="text/html")
 
 
+@app.get("/ui/dashboard", response_class=FileResponse)
+def ui_dashboard():
+    """Serve the central service dashboard (Sprint 52)."""
+    return FileResponse(WEB_DIR / "dashboard.html", media_type="text/html")
+
+
 @app.get("/ui/tn-mappings", response_class=FileResponse)
 def ui_tn_mappings():
     """Serve the TN mapping management web UI (Sprint 42)."""
@@ -317,6 +323,7 @@ def redirect_benchmarks():
 # -----------------------------------------------------------------------------
 
 app.include_router(health.router)
+app.include_router(dashboard.router)  # Sprint 52: Central dashboard
 app.include_router(auth.router)
 app.include_router(identity.router)
 app.include_router(organization.router)  # Sprint 41: Organization management

@@ -139,6 +139,42 @@ DEFAULT_NEXT_THRESHOLD: str = os.getenv("VVP_DEFAULT_NEXT_THRESHOLD", "1")
 
 
 # =============================================================================
+# DASHBOARD CONFIGURATION (Sprint 52: Central Service Dashboard)
+# =============================================================================
+
+
+def _parse_dashboard_services(env_var: str, default: str) -> list[dict[str, str]]:
+    """Parse dashboard services JSON from environment variable."""
+    raw = os.getenv(env_var, default)
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+DASHBOARD_SERVICES: list[dict[str, str]] = _parse_dashboard_services(
+    "VVP_DASHBOARD_SERVICES",
+    json.dumps([
+        {"name": "Verifier", "url": "http://localhost:8000", "health_path": "/healthz", "category": "core"},
+        {"name": "Issuer", "url": "http://localhost:8001", "health_path": "/healthz", "category": "core"},
+        {"name": "Witness wan", "url": "http://localhost:5642", "health_path": "/health", "category": "witness"},
+        {"name": "Witness wil", "url": "http://localhost:5643", "health_path": "/health", "category": "witness"},
+        {"name": "Witness wes", "url": "http://localhost:5644", "health_path": "/health", "category": "witness"},
+    ]),
+)
+
+# SIP services (separate config — may have custom health paths)
+DASHBOARD_SIP_REDIRECT_URL: str = os.getenv("VVP_DASHBOARD_SIP_REDIRECT_URL", "")
+DASHBOARD_SIP_REDIRECT_HEALTH: str = os.getenv("VVP_DASHBOARD_SIP_REDIRECT_HEALTH", "/healthz")
+DASHBOARD_SIP_VERIFY_URL: str = os.getenv("VVP_DASHBOARD_SIP_VERIFY_URL", "")
+DASHBOARD_SIP_VERIFY_HEALTH: str = os.getenv("VVP_DASHBOARD_SIP_VERIFY_HEALTH", "/healthz")
+DASHBOARD_SIP_MONITOR_URL: str = os.getenv("VVP_DASHBOARD_SIP_MONITOR_URL", "")
+
+# Timeout for each health check (seconds)
+DASHBOARD_REQUEST_TIMEOUT: float = float(os.getenv("VVP_DASHBOARD_REQUEST_TIMEOUT", "5.0"))
+
+
+# =============================================================================
 # OPERATIONAL
 # =============================================================================
 
@@ -323,5 +359,8 @@ def get_auth_exempt_paths() -> set[str]:
         exempt.add("/profile")
         exempt.add("/users/ui")
         exempt.add("/organizations/ui")
+        # Sprint 52: Dashboard
+        exempt.add("/ui/dashboard")
+        exempt.add("/api/dashboard/status")
 
     return exempt
