@@ -254,6 +254,7 @@ def admin():
         ADMIN_ENDPOINT_ENABLED,
         DOSSIER_CACHE_TTL_SECONDS,
         DOSSIER_CACHE_MAX_ENTRIES,
+        VVP_VERIFICATION_CACHE_ENABLED,
     )
     from app.vvp.keri.tel_client import TELClient, get_tel_client
     from app.vvp.keri.witness_pool import get_witness_pool
@@ -284,6 +285,7 @@ def admin():
         "features": {
             "tier2_kel_resolution_enabled": TIER2_KEL_RESOLUTION_ENABLED,
             "admin_endpoint_enabled": ADMIN_ENDPOINT_ENABLED,
+            "verification_cache_enabled": VVP_VERIFICATION_CACHE_ENABLED,
         },
         "witnesses": {
             "legacy_default_urls": TELClient.DEFAULT_WITNESSES,
