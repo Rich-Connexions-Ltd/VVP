@@ -540,3 +540,30 @@ DEFAULT_EVD_URL_PATTERN: str = os.getenv(
     "VVP_DEFAULT_EVD_URL_PATTERN",
     "https://origin.demo.provenant.net/v1/agent/public/{SAID}/dossier.cesr"
 )
+
+# =============================================================================
+# VERIFICATION RESULT CACHING (Sprint 51)
+# =============================================================================
+# Caches dossier-derived verification artifacts (chain validation, ACDC
+# signatures, revocation status) to avoid re-running expensive phases on
+# repeated requests for the same dossier.
+
+# Feature flag to enable/disable verification result caching
+VVP_VERIFICATION_CACHE_ENABLED: bool = os.getenv(
+    "VVP_VERIFICATION_CACHE_ENABLED", "true"
+).lower() == "true"
+
+# Max cached dossier verification artifacts
+VVP_VERIFICATION_CACHE_MAX_ENTRIES: int = int(
+    os.getenv("VVP_VERIFICATION_CACHE_MAX_ENTRIES", "200")
+)
+
+# TTL for cached artifacts in seconds (handles URL content changes)
+VVP_VERIFICATION_CACHE_TTL: float = float(
+    os.getenv("VVP_VERIFICATION_CACHE_TTL", "3600")
+)
+
+# Seconds between background revocation re-checks; stale data → INDETERMINATE
+VVP_REVOCATION_RECHECK_INTERVAL: float = float(
+    os.getenv("VVP_REVOCATION_RECHECK_INTERVAL", "300")
+)

@@ -48,10 +48,16 @@ def reset_caches():
     """Reset all caches before each test to ensure isolation.
 
     This prevents cache hits from previous tests affecting subsequent tests.
-    Only resets dossier cache (not TEL/witness singletons) to match original behavior.
+    Resets dossier cache, verification result cache, and revocation checker singletons.
     """
     from app.vvp.dossier.cache import reset_dossier_cache
+    from app.vvp.verification_cache import reset_verification_cache
+    from app.vvp.revocation_checker import reset_revocation_checker
 
     reset_dossier_cache()
+    reset_verification_cache()
+    reset_revocation_checker()
     yield
     reset_dossier_cache()
+    reset_verification_cache()
+    reset_revocation_checker()

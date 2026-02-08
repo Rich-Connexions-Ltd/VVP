@@ -836,20 +836,120 @@ async def verify_vvp(
                 # Note: INDETERMINATE is recoverable, so not setting passport_fatal
 
     # -------------------------------------------------------------------------
-    # Phase 5: Dossier Fetch and Validation
+    # Sprint 51: Verification Result Cache Check
     # -------------------------------------------------------------------------
-    # Per reviewer feedback: skip dossier fetch if passport has fatal failure
-    # This reduces load and provides clearer error diagnostics
-    # Per §5.1.1-2.7: Check dossier cache before fetching
+    # Check cache BEFORE Phase 5. On hit, skip Phases 5, 5.5, and 9 —
+    # use cached dossier-derived artifacts while always re-running per-request
+    # phases (PASSporT validation, authorization, SIP context, brand, vetter).
+    from app.core.config import VVP_VERIFICATION_CACHE_ENABLED
+
+    _verification_cache_hit = False
+    _cached_verification = None
+    _revocation_pending = False
+
+    # Phase 5/5.5/9 variable defaults (overridden by cache hit or full pipeline)
     import time as _time
     raw_dossier: Optional[bytes] = None
     dag: Optional[DossierDAG] = None
     acdc_signatures: Dict[str, bytes] = {}  # SAID -> signature bytes from CESR
     has_variant_limitations: bool = False  # Track if any ACDC is compact/partial per §1.4
+
+    if VVP_VERIFICATION_CACHE_ENABLED and vvp_identity and not passport_fatal and passport:
+        _passport_kid = passport.header.kid
+        if _passport_kid:
+            from app.vvp.verification_cache import get_verification_cache
+            _ver_cache = get_verification_cache()
+            _cached_verification = await _ver_cache.get(vvp_identity.evd, _passport_kid)
+            if _cached_verification is not None:
+                _verification_cache_hit = True
+                log.info(
+                    f"Verification cache hit: {vvp_identity.evd[:50]}... "
+                    f"kid={_passport_kid[:30]}..."
+                )
+
+                # --- Phase 5 artifacts from cache ---
+                dag = _cached_verification.dag
+                raw_dossier = _cached_verification.raw_dossier
+                has_variant_limitations = _cached_verification.has_variant_limitations
+                dossier_acdcs = _cached_verification.dossier_acdcs  # deep-copied by get()
+                for _ev in _cached_verification.dossier_claim_evidence:
+                    dossier_claim.add_evidence(_ev)
+                dossier_claim.add_evidence("cache_hit:dossier_verification")
+
+                # --- Phase 5.5 artifacts from cache ---
+                # chain_node is already a ClaimNode (deep-copied by get())
+                chain_node = _cached_verification.chain_claim
+                # Append cached chain errors (deep-copied by get())
+                for _ce in _cached_verification.chain_errors:
+                    errors.append(_ce)
+
+                # Extract pss_signer_aid for later phases (authorization, brand, business)
+                pss_signer_aid = None
+                try:
+                    pss_signer_aid = _extract_aid_from_kid(passport.header.kid)
+                except ResolutionFailedError:
+                    pass
+
+                # --- Phase 9: Build revocation from cached status ---
+                from app.vvp.verification_cache import RevocationStatus
+                from app.vvp.revocation_checker import get_revocation_checker
+
+                revocation_claim = ClaimBuilder("revocation_clear")
+                revoked_saids: List[str] = []
+
+                _rev_checker = get_revocation_checker()
+                _revocation_fresh = not _rev_checker.needs_recheck(
+                    _cached_verification.revocation_last_checked
+                )
+
+                if not _revocation_fresh:
+                    # Stale data → INDETERMINATE per §5C.2
+                    revocation_claim.fail(
+                        ClaimStatus.INDETERMINATE,
+                        "Revocation data stale — background re-check pending"
+                    )
+                    revocation_claim.add_evidence("revocation_data_stale")
+                    await _rev_checker.enqueue(vvp_identity.evd)
+                else:
+                    _has_undefined = False
+                    _has_revoked = False
+                    for _said, _status in _cached_verification.credential_revocation_status.items():
+                        if _status == RevocationStatus.REVOKED:
+                            _has_revoked = True
+                            revoked_saids.append(_said)
+                        elif _status == RevocationStatus.UNDEFINED:
+                            _has_undefined = True
+
+                    if _has_revoked:
+                        revocation_claim.fail(ClaimStatus.INVALID, "Credential(s) revoked")
+                        for _rs in revoked_saids:
+                            errors.append(ErrorDetail(
+                                code=ErrorCode.CREDENTIAL_REVOKED,
+                                message=f"Credential {_rs[:20]}... is revoked",
+                                recoverable=ERROR_RECOVERABILITY.get(
+                                    ErrorCode.CREDENTIAL_REVOKED, False
+                                ),
+                            ))
+                    elif _has_undefined:
+                        revocation_claim.fail(
+                            ClaimStatus.INDETERMINATE,
+                            "Revocation check pending for one or more credentials"
+                        )
+                        revocation_claim.add_evidence("revocation_check_pending")
+                        _revocation_pending = True
+                    else:
+                        # All UNREVOKED — fresh data confirms no revocations
+                        revocation_claim.add_evidence("all_credentials_unrevoked")
+
+    # -------------------------------------------------------------------------
+    # Phase 5: Dossier Fetch and Validation
+    # -------------------------------------------------------------------------
+    # Per reviewer feedback: skip dossier fetch if passport has fatal failure
+    # Per §5.1.1-2.7: Check dossier cache before fetching
     dossier_cache = get_dossier_cache()
     cache_hit = False
 
-    if vvp_identity and not passport_fatal:
+    if vvp_identity and not passport_fatal and not _verification_cache_hit:
         # §5.1.1-2.7: Check cache first (URL available pre-fetch)
         evd_url = vvp_identity.evd
         cached = await dossier_cache.get(evd_url)
@@ -921,7 +1021,7 @@ async def verify_vvp(
     # even when PASSporT is absent (we just can't validate DE signer binding)
     chain_claim = ClaimBuilder("chain_verified")
 
-    if dag is not None:
+    if dag is not None and not _verification_cache_hit:
         from app.core.config import (
             TRUSTED_ROOT_AIDS,
             SCHEMA_VALIDATION_STRICT,
@@ -1151,7 +1251,7 @@ async def verify_vvp(
                         f"Could not resolve issuer key: {e}"
                     )
                     break
-    else:
+    elif not _verification_cache_hit:
         chain_claim.fail(
             ClaimStatus.INDETERMINATE,
             "Cannot validate chain: dossier validation failed"
@@ -1161,10 +1261,11 @@ async def verify_vvp(
     # Phase 9: Revocation Checking (§5.1.1-2.9)
     # -------------------------------------------------------------------------
     # revocation_clear is a REQUIRED child of dossier_verified per §3.3B
-    revocation_claim = ClaimBuilder("revocation_clear")
-    revoked_saids: List[str] = []
+    if not _verification_cache_hit:
+        revocation_claim = ClaimBuilder("revocation_clear")
+        revoked_saids: List[str] = []
 
-    if dag is not None:
+    if dag is not None and not _verification_cache_hit:
         # Check revocation for all credentials in dossier
         # Pass raw_dossier for inline TEL parsing (Phase 9.4)
         revocation_claim, revoked_saids = await check_dossier_revocations(
@@ -1179,11 +1280,67 @@ async def verify_vvp(
                 message=f"Credential {revoked_said[:20]}... is revoked",
                 recoverable=ERROR_RECOVERABILITY.get(ErrorCode.CREDENTIAL_REVOKED, False)
             ))
-    else:
+    elif not _verification_cache_hit:
         # Dossier failed - revocation check is INDETERMINATE
         revocation_claim.fail(
             ClaimStatus.INDETERMINATE,
             "Cannot check revocation: dossier validation failed"
+        )
+
+    # -------------------------------------------------------------------------
+    # Sprint 51: Store in verification cache on miss (VALID-only policy)
+    # -------------------------------------------------------------------------
+    if (not _verification_cache_hit
+            and VVP_VERIFICATION_CACHE_ENABLED
+            and passport and passport.header.kid
+            and dag is not None
+            and chain_claim.status == ClaimStatus.VALID):
+        from app.vvp.verification_cache import (
+            CachedDossierVerification,
+            RevocationStatus as _RevocationStatus,
+            get_verification_cache as _get_ver_cache,
+        )
+        from app.vvp.revocation_checker import get_revocation_checker as _get_rev_checker
+
+        _contained = frozenset(dag.nodes.keys())
+        _rev_status: Dict[str, _RevocationStatus] = {}
+        for _s in _contained:
+            if _s in revoked_saids:
+                _rev_status[_s] = _RevocationStatus.REVOKED
+            elif revocation_claim.status == ClaimStatus.VALID:
+                _rev_status[_s] = _RevocationStatus.UNREVOKED
+            else:
+                # INDETERMINATE or partially unknown — conservative
+                _rev_status[_s] = _RevocationStatus.UNDEFINED
+
+        _chain_node_for_cache = chain_claim.build()
+
+        _cached_entry = CachedDossierVerification(
+            dossier_url=vvp_identity.evd,
+            passport_kid=passport.header.kid,
+            dag=dag,
+            raw_dossier=raw_dossier or b"",
+            dossier_acdcs=dossier_acdcs,
+            chain_claim=_chain_node_for_cache,
+            chain_errors=[],  # Always empty for VALID chains (VALID-only policy)
+            acdc_signatures_verified=bool(acdc_signatures),
+            has_variant_limitations=has_variant_limitations,
+            dossier_claim_evidence=list(dossier_claim.evidence),
+            contained_saids=_contained,
+            credential_revocation_status=_rev_status,
+            revocation_last_checked=_time.time(),
+        )
+
+        _ver_cache_inst = _get_ver_cache()
+        await _ver_cache_inst.put(_cached_entry)
+
+        # Enqueue background revocation re-check for ongoing freshness
+        _rev_checker_inst = _get_rev_checker()
+        await _rev_checker_inst.enqueue(vvp_identity.evd)
+
+        log.info(
+            f"Stored verification cache: {vvp_identity.evd[:50]}... "
+            f"kid={passport.header.kid[:30]}... saids={len(_contained)}"
         )
 
     # -------------------------------------------------------------------------
@@ -1520,7 +1677,8 @@ async def verify_vvp(
     # Phase 6: Build Claim Tree
     # -------------------------------------------------------------------------
     passport_node = passport_claim.build()
-    chain_node = chain_claim.build()
+    if not _verification_cache_hit:
+        chain_node = chain_claim.build()
     revocation_node = revocation_claim.build()
 
     # dossier_verified has chain_verified and revocation_clear as REQUIRED children per §3.3B
@@ -1704,4 +1862,5 @@ async def verify_vvp(
         vetter_constraints=vetter_constraint_results if vetter_constraint_results else None,
         brand_name=response_brand_name,
         brand_logo_url=response_brand_logo_url,
+        revocation_pending=_revocation_pending,
     )

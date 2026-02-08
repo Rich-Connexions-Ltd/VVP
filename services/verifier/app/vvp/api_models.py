@@ -365,6 +365,7 @@ class VerifyResponse(BaseModel):
     vetter_constraints: Optional[Dict[str, VetterConstraintInfo]] = None
     brand_name: Optional[str] = None
     brand_logo_url: Optional[str] = None
+    revocation_pending: bool = False
 
 
 # =============================================================================

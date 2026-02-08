@@ -15,9 +15,15 @@ VECTORS_DIR = Path(__file__).parent / "data"
 def reset_caches():
     """Reset all caches before each test vector to ensure isolation."""
     from app.vvp.dossier.cache import reset_dossier_cache
+    from app.vvp.verification_cache import reset_verification_cache
+    from app.vvp.revocation_checker import reset_revocation_checker
     reset_dossier_cache()
+    reset_verification_cache()
+    reset_revocation_checker()
     yield
     reset_dossier_cache()
+    reset_verification_cache()
+    reset_revocation_checker()
 
 
 def load_all_vectors() -> List[VectorCase]:

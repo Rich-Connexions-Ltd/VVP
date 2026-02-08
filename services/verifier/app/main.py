@@ -16,6 +16,8 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 import httpx
 
+from contextlib import asynccontextmanager
+
 from common.vvp.core.logging import configure_logging
 from app.vvp.api_models import VerifyRequest, VerifyCalleeRequest
 from app.vvp.exceptions import PassportError
@@ -26,6 +28,23 @@ from app.vvp.dossier import get_dossier_cache, CachedDossier, fetch_dossier as c
 
 configure_logging()
 log = logging.getLogger("vvp")
+
+
+@asynccontextmanager
+async def lifespan(app):
+    """Manage application lifecycle — start/stop background workers."""
+    from app.core.config import VVP_VERIFICATION_CACHE_ENABLED
+    if VVP_VERIFICATION_CACHE_ENABLED:
+        from app.vvp.revocation_checker import get_revocation_checker
+        checker = get_revocation_checker()
+        await checker.start()
+        log.info("Background revocation checker started (lifespan)")
+    yield
+    if VVP_VERIFICATION_CACHE_ENABLED:
+        from app.vvp.revocation_checker import get_revocation_checker
+        checker = get_revocation_checker()
+        await checker.stop()
+        log.info("Background revocation checker stopped (lifespan)")
 
 # Default test JWT for simple verification page
 DEFAULT_TEST_JWT = """eyJhbGciOiJFZERTQSIsInR5cCI6InBhc3Nwb3J0IiwicHB0IjoidnZwIiwia2lkIjoiaHR0cDovL3dpdG5lc3M1LnN0YWdlLnByb3ZlbmFudC5uZXQ6NTYzMS9vb2JpL0VHYXk1dWZCcUFhbmJoRmFfcWUtS01GVVBKSG44SjBNRmJhOTZ5eVdSckxGL3dpdG5lc3MifQ.eyJvcmlnIjp7InRuIjpbIjQ0Nzg4NDY2NjIwMCJdfSwiZGVzdCI6eyJ0biI6WyI0NDc3Njk3MTAyODUiXX0sImlhdCI6MTc2OTE4MzMwMiwiY2FyZCI6WyJDQVRFR09SSUVTOiIsIkxPR087SEFTSD1zaGEyNTYtNDBiYWM2ODZhM2YwYjQ4MjUzZGU1NWIzNGY1NTJjODA3MGJhZjIyZjgxMjU1YWFjNDQ5NzIxYzg3OWM3MTZhNDtWQUxVRT1VUkk6aHR0cHM6Ly9vcmlnaW4tY2VsbC1mcmFua2Z1cnQuczMuZXUtY2VudHJhbC0xLmFtYXpvbmF3cy5jb20vYnJhbmQtYXNzZXRzL3JpY2gtY29ubmV4aW9ucy9sb2dvLnBuZyIsIk5PVEU7TEVJOjk4NDUwMERFRTc1MzdBMDdZNjE1IiwiT1JHOlJpY2ggQ29ubmV4aW9ucyJdLCJjYWxsX3JlYXNvbiI6bnVsbCwiZ29hbCI6bnVsbCwiZXZkIjoiaHR0cHM6Ly9vcmlnaW4uZGVtby5wcm92ZW5hbnQubmV0L3YxL2FnZW50L3B1YmxpYy9FSGxWWFVKLWRZS3F0UGR2enRkQ0ZKRWJreXI2elgyZFgxMmh3ZEU5eDhleS9kb3NzaWVyLmNlc3IiLCJvcmlnSWQiOiIiLCJleHAiOjE3NjkxODM2MDIsInJlcXVlc3RfaWQiOiIifQ.OvoaiAwt1dgPb6gLkK7ufWoL2qzdtmudyyiL38oqB0wfaicGSG4B_QFtHY2vS2w-PYZ6LhN9dWXpsOHtpKAXCw""".strip()
@@ -47,7 +66,7 @@ Identity: eyJhbGciOiJFZERTQSIsInR5cCI6InBhc3Nwb3J0IiwicHB0IjoidnZwIiwia2lkIjoiaH
 # Default test SAID for tabbed explorer (extracted from sample JWT evd claim)
 DEFAULT_TEST_SAID = "EHlVXUJ-dYKqtPdvztdCFJEbkyr6zX2dX12hwdE9x8ey"
 
-app = FastAPI(title="VVP Verifier", version="0.1.0")
+app = FastAPI(title="VVP Verifier", version="0.1.0", lifespan=lifespan)
 
 # Template setup
 templates_dir = Path(__file__).parent / "templates"
