@@ -34,8 +34,54 @@ VVP/
 ├── keripy/                     # Vendored KERI library
 ├── scripts/                    # Root convenience wrappers
 ├── pyproject.toml              # Workspace definition
+├── knowledge/                  # Deep reference docs (read on demand)
+│   ├── architecture.md         # Full system architecture
+│   ├── keri-primer.md          # KERI/ACDC/CESR concepts
+│   ├── verification-pipeline.md # 11-phase verification flow
+│   ├── schemas.md              # Schema SAIDs and governance
+│   ├── api-reference.md        # All API endpoints
+│   ├── data-models.md          # All Pydantic/DB models
+│   ├── test-patterns.md        # Test structure and patterns
+│   └── deployment.md           # CI/CD, Azure, Docker
 └── CLAUDE.md                   # This file
 ```
+
+## Knowledge Base
+
+This repo uses a tiered knowledge system for Claude Code context:
+
+### Tier 1: Always Loaded (automatic)
+- **CLAUDE.md** (this file) - Instructions, commands, workflow
+- **MEMORY.md** (auto-memory) - Master index, key patterns, gotchas
+
+### Tier 2: Directory-Scoped (loaded when working in directory)
+- `services/verifier/CLAUDE.md` - Verifier architecture, APIs, verification phases
+- `services/issuer/CLAUDE.md` - Issuer architecture, KERI identity, auth, multi-tenancy
+- `common/CLAUDE.md` - Shared models, schema registry, CESR, canonical
+
+### Tier 3: Deep Reference (read on demand from `knowledge/`)
+- `knowledge/architecture.md` - Full system architecture
+- `knowledge/keri-primer.md` - KERI/ACDC/CESR/SAID concepts
+- `knowledge/verification-pipeline.md` - The 11-phase verification flow
+- `knowledge/schemas.md` - All schema SAIDs, types, governance
+- `knowledge/api-reference.md` - All endpoints across services
+- `knowledge/data-models.md` - All Pydantic/SQLAlchemy models
+- `knowledge/test-patterns.md` - Test structure, fixtures, patterns
+- `knowledge/deployment.md` - CI/CD, Azure, Docker, PBX
+
+### Tier 4: External (MCP)
+- KERI/vLEI documentation via MCP server at `https://www.vlei.wiki/mcp`
+
+### Knowledge Maintenance (IMPORTANT)
+After making code changes, **always update** the relevant knowledge files:
+- Changed an API endpoint? → Update `knowledge/api-reference.md`
+- Changed a data model? → Update `knowledge/data-models.md`
+- Changed verification logic? → Update `knowledge/verification-pipeline.md`
+- Changed schemas? → Update `knowledge/schemas.md`
+- Changed architecture? → Update `knowledge/architecture.md` + subdirectory CLAUDE.md
+- New workaround or gotcha? → Update MEMORY.md "Critical Gotchas" section
+- Changed test patterns? → Update `knowledge/test-patterns.md`
+- Changed deployment? → Update `knowledge/deployment.md`
 
 ## Permissions
 
@@ -71,6 +117,8 @@ The following MCP (Model Context Protocol) services are pre-authorized for use w
   - `keri_gleif_context` - Extract GLEIF vLEI training context
 
 These MCP tools provide authoritative KERI/ACDC/vLEI documentation and should be used when researching protocol details, schema definitions, or credential chain structures.
+
+MCP Server URL: `https://www.vlei.wiki/mcp`
 
 ## Docker Environment
 
@@ -662,6 +710,15 @@ VVP/
 │       ├── pyproject.toml           # Service dependencies
 │       ├── pytest.ini               # Test configuration
 │       └── Dockerfile               # Container definition
+├── knowledge/                       # Deep reference docs (Tier 3)
+│   ├── architecture.md              # Full system architecture
+│   ├── keri-primer.md               # KERI/ACDC/CESR concepts
+│   ├── verification-pipeline.md     # 11-phase verification flow
+│   ├── schemas.md                   # Schema SAIDs and governance
+│   ├── api-reference.md             # All API endpoints
+│   ├── data-models.md               # All Pydantic/DB models
+│   ├── test-patterns.md             # Test structure and patterns
+│   └── deployment.md                # CI/CD, Azure, Docker
 ├── Documentation/                   # Specs, checklists, archived plans
 ├── keripy/                          # Vendored KERI library
 ├── scripts/                         # Root convenience wrappers
@@ -669,5 +726,7 @@ VVP/
 ├── SPRINTS.md                       # Sprint roadmap (say "Sprint N" to start)
 ├── CHANGES.md                       # Change log with commit SHAs
 ├── REVIEW.md                        # Reviewer feedback during pair programming
+├── SYSTEM_OVERVIEW.md                # Architecture diagram (legacy - see knowledge/)
+├── SYSTEM.md                        # Technical reference (legacy - see knowledge/)
 └── .github/workflows/deploy.yml     # CI/CD pipeline
 ```
