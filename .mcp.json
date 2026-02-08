@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "vlei_KERI_knowledge_base": {
+      "type": "sse",
+      "url": "https://www.vlei.wiki/mcp"
+    }
+  }
+}
