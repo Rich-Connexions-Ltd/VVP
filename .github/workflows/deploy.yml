@@ -293,6 +293,22 @@ jobs:
               "GITHUB_REPOSITORY=${{ github.repository }}" \
               "VVP_LOCAL_WITNESS_URLS=https://vvp-witness1.rcnx.io,https://vvp-witness2.rcnx.io,https://vvp-witness3.rcnx.io"
 
+      - name: Verify deployed version
+        run: |
+          EXPECTED="${{ github.sha }}"
+          for i in {1..12}; do
+            RESPONSE=$(curl -sf --max-time 10 https://vvp-verifier.rcnx.io/version || echo '{}')
+            DEPLOYED=$(echo "$RESPONSE" | jq -r '.git_sha // empty')
+            if [ "$DEPLOYED" = "$EXPECTED" ]; then
+              echo "Version verified: ${DEPLOYED:0:7}"
+              exit 0
+            fi
+            echo "Attempt $i/12: expected ${EXPECTED:0:7}, got ${DEPLOYED:-unknown}"
+            sleep 10
+          done
+          echo "::error::Verifier version mismatch after 2 minutes"
+          exit 1
+
   # =========================================================================
   # DEPLOY ISSUER
   # =========================================================================
@@ -344,18 +360,20 @@ jobs:
               "VVP_POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}" \
               "VVP_POSTGRES_DB=${{ secrets.POSTGRES_DB }}"
 
-      - name: Verify issuer deployment
+      - name: Verify deployed version
         run: |
-          echo "Waiting for issuer to be healthy..."
-          for i in {1..6}; do
-            if curl -sf https://vvp-issuer.rcnx.io/healthz; then
-              echo "Health check passed"
+          EXPECTED="${{ github.sha }}"
+          for i in {1..12}; do
+            RESPONSE=$(curl -sf --max-time 10 https://vvp-issuer.rcnx.io/version || echo '{}')
+            DEPLOYED=$(echo "$RESPONSE" | jq -r '.git_sha // empty')
+            if [ "$DEPLOYED" = "$EXPECTED" ]; then
+              echo "Version verified: ${DEPLOYED:0:7}"
               exit 0
             fi
-            echo "Attempt $i/6, waiting 10s..."
+            echo "Attempt $i/12: expected ${EXPECTED:0:7}, got ${DEPLOYED:-unknown}"
             sleep 10
           done
-          echo "Health check failed after 1 minute"
+          echo "::error::Issuer version mismatch after 2 minutes"
           exit 1
 
   # =========================================================================
@@ -758,15 +776,20 @@ jobs:
               # Update systemd unit to use venv
               echo '${UNIT_B64}' | base64 -d > /etc/systemd/system/vvp-sip-redirect.service
 
-              # Ensure env file has monitor enabled
-              if [ -f /etc/vvp/sip-redirect.env ]; then
-                if ! grep -q 'VVP_MONITOR_ENABLED' /etc/vvp/sip-redirect.env; then
-                  echo 'VVP_MONITOR_ENABLED=true' >> /etc/vvp/sip-redirect.env
-                fi
-              else
-                mkdir -p /etc/vvp
-                echo 'VVP_MONITOR_ENABLED=true' > /etc/vvp/sip-redirect.env
+              # Ensure env file exists with required vars
+              mkdir -p /etc/vvp
+              if [ ! -f /etc/vvp/sip-redirect.env ]; then
+                touch /etc/vvp/sip-redirect.env
               fi
+
+              # Ensure monitor is enabled
+              if ! grep -q 'VVP_MONITOR_ENABLED' /etc/vvp/sip-redirect.env; then
+                echo 'VVP_MONITOR_ENABLED=true' >> /etc/vvp/sip-redirect.env
+              fi
+
+              # Update GIT_SHA to current deployment
+              sed -i '/^GIT_SHA=/d' /etc/vvp/sip-redirect.env
+              echo 'GIT_SHA=${{ github.sha }}' >> /etc/vvp/sip-redirect.env
 
               # Reload and restart
               systemctl daemon-reload
@@ -777,19 +800,21 @@ jobs:
               systemctl is-active vvp-sip-redirect
             "
 
-      - name: Verify /status endpoint
+      - name: Verify deployed version
         run: |
-          sleep 10
-          # Use /status endpoint with admin auth
-          STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            --max-time 30 \
-            -H "X-Admin-Key: ${{ secrets.VVP_SIP_STATUS_ADMIN_KEY }}" \
-            http://pbx.rcnx.io:8080/status || echo "000")
-          if [ "$STATUS_CODE" != "200" ]; then
-            echo "::warning::Status endpoint returned $STATUS_CODE (expected 200)"
-          else
-            echo "Status endpoint healthy (HTTP 200)"
-          fi
+          EXPECTED="${{ github.sha }}"
+          for i in {1..12}; do
+            RESPONSE=$(curl -sf --max-time 10 http://pbx.rcnx.io:8080/version || echo '{}')
+            DEPLOYED=$(echo "$RESPONSE" | jq -r '.git_sha // empty')
+            if [ "$DEPLOYED" = "$EXPECTED" ]; then
+              echo "Version verified: ${DEPLOYED:0:7}"
+              exit 0
+            fi
+            echo "Attempt $i/12: expected ${EXPECTED:0:7}, got ${DEPLOYED:-unknown}"
+            sleep 10
+          done
+          echo "::error::SIP Redirect version mismatch after 2 minutes"
+          exit 1
 
       - name: Rollback on failure
         if: failure()

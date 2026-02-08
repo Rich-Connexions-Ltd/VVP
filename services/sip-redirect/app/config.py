@@ -64,7 +64,7 @@ MONITOR_WS_MAX_PER_IP = int(os.getenv("VVP_MONITOR_WS_MAX_PER_IP", "10"))
 MONITOR_WS_MAX_GLOBAL = int(os.getenv("VVP_MONITOR_WS_MAX_GLOBAL", "50"))
 
 # Monitor OAuth M365 Configuration
-MONITOR_OAUTH_ENABLED = os.getenv("VVP_MONITOR_OAUTH_ENABLED", "false").lower() == "true"
+MONITOR_OAUTH_ENABLED = os.getenv("VVP_MONITOR_OAUTH_ENABLED", "true").lower() == "true"
 MONITOR_OAUTH_TENANT_ID = os.getenv("VVP_MONITOR_OAUTH_TENANT_ID")
 MONITOR_OAUTH_CLIENT_ID = os.getenv("VVP_MONITOR_OAUTH_CLIENT_ID")
 MONITOR_OAUTH_CLIENT_SECRET = os.getenv("VVP_MONITOR_OAUTH_CLIENT_SECRET")
@@ -86,6 +86,9 @@ MONITOR_OAUTH_STATE_TTL = int(os.getenv("VVP_MONITOR_OAUTH_STATE_TTL", "600"))
 MONITOR_API_KEYS_FILE = os.getenv(
     "VVP_MONITOR_API_KEYS_FILE", "/opt/vvp/sip-redirect/api_keys.json"
 )
+
+# Version tracking (injected by CI/CD)
+GIT_SHA = os.getenv("GIT_SHA", "unknown")
 
 
 def validate_config() -> list[str]:

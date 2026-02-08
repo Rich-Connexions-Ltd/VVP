@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from app.audit import get_audit_logger
-from app.config import STATUS_ADMIN_KEY, STATUS_HTTP_PORT, RATE_LIMIT_RPS, RATE_LIMIT_BURST
+from app.config import STATUS_ADMIN_KEY, STATUS_HTTP_PORT, RATE_LIMIT_RPS, RATE_LIMIT_BURST, GIT_SHA
 
 log = logging.getLogger(__name__)
 
@@ -74,6 +74,8 @@ class StatusHandler:
                 await self._handle_status(writer, headers)
             elif path == "/health" and method == "GET":
                 await self._handle_health(writer)
+            elif path == "/version" and method == "GET":
+                await self._handle_version(writer)
             else:
                 await self._send_error(writer, 404, "Not Found")
 
@@ -100,6 +102,17 @@ class StatusHandler:
         """
         response = {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
         await self._send_json(writer, 200, response)
+
+    async def _handle_version(self, writer: asyncio.StreamWriter) -> None:
+        """Handle /version endpoint (no auth required).
+
+        Args:
+            writer: Response writer
+        """
+        result: dict = {"git_sha": GIT_SHA}
+        if GIT_SHA != "unknown":
+            result["short_sha"] = GIT_SHA[:7]
+        await self._send_json(writer, 200, result)
 
     async def _handle_status(
         self,
