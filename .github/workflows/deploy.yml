@@ -861,17 +861,24 @@ jobs:
       - name: Verify deployed version
         run: |
           EXPECTED="${{ github.sha }}"
-          for i in {1..12}; do
-            RESPONSE=$(curl -sf --max-time 10 http://pbx.rcnx.io:8080/version || echo '{}')
-            DEPLOYED=$(echo "$RESPONSE" | jq -r '.git_sha // empty')
+          # Status server listens on port 8085 (configured via VVP_STATUS_HTTP_PORT
+          # in /etc/vvp/sip-redirect.env). Port is not exposed externally through
+          # the Azure NSG, so we verify via az vm run-command.
+          for i in {1..6}; do
+            RESULT=$(az vm run-command invoke \
+              --resource-group VVP --name vvp-pbx \
+              --command-id RunShellScript \
+              --scripts "curl -sf --max-time 5 http://localhost:8085/version 2>/dev/null || echo '{}'" \
+              --query "value[0].message" -o tsv 2>/dev/null)
+            DEPLOYED=$(echo "$RESULT" | grep -o '"git_sha": *"[^"]*"' | head -1 | sed 's/.*"git_sha": *"//;s/"//' || echo "")
             if [ "$DEPLOYED" = "$EXPECTED" ]; then
               echo "Version verified: ${DEPLOYED:0:7}"
               exit 0
             fi
-            echo "Attempt $i/12: expected ${EXPECTED:0:7}, got ${DEPLOYED:-unknown}"
+            echo "Attempt $i/6: expected ${EXPECTED:0:7}, got ${DEPLOYED:-unknown}"
             sleep 10
           done
-          echo "::error::SIP Redirect version mismatch after 2 minutes"
+          echo "::error::SIP Redirect version mismatch after 1 minute"
           exit 1
 
       - name: Rollback on failure
