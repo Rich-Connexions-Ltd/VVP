@@ -3,7 +3,7 @@
     {
       "id": "dev-admin",
       "name": "Development Admin Key",
-      "hash": "$2b$12$bwbJGKs.pQLu/oz0eE.iPez0fKGjnJpkURZnp.qp1VjlMyBGMabTe",
+      "hash": "$2b$12$1WaIulmJLK8WmG1toB6ko.C1Q0rwGc5FYFwaAZGZIqcaa9nDfgWGu",
       "roles": ["issuer:admin", "issuer:operator", "issuer:readonly"],
       "revoked": false
     },

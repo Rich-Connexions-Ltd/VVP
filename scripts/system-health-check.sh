@@ -15,6 +15,7 @@
 #   ./scripts/system-health-check.sh                  # Check production
 #   ./scripts/system-health-check.sh --local          # Check local dev stack
 #   ./scripts/system-health-check.sh --e2e            # Include E2E issuer→verifier test
+#   ./scripts/system-health-check.sh --e2e --timing   # E2E + cache timing measurement
 #   ./scripts/system-health-check.sh --restart        # Restart all services, then check
 #   ./scripts/system-health-check.sh --json           # Output JSON summary
 #   ./scripts/system-health-check.sh --verbose        # Show full response bodies
@@ -57,6 +58,7 @@ fi
 MODE="azure"
 DO_RESTART=false
 DO_E2E=false
+DO_TIMING=false
 JSON_OUTPUT=false
 VERBOSE=false
 
@@ -115,6 +117,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --e2e)
             DO_E2E=true
+            shift
+            ;;
+        --timing)
+            DO_TIMING=true
             shift
             ;;
         --json)
@@ -671,6 +677,11 @@ check_e2e() {
         _run_freeswitch_call_test || failed=1
     fi
 
+    # Cache timing sub-phase (warn-only, does not affect exit code)
+    if [ "$DO_TIMING" = true ]; then
+        _run_timing_tests || true
+    fi
+
     return $failed
 }
 
@@ -927,6 +938,141 @@ _run_freeswitch_call_test() {
     fi
 
     return $failed
+}
+
+# Run cache timing tests via sip-call-test.py --timing on PBX
+# Called when --e2e --timing is passed. Timing failures produce warn, not fail.
+_run_timing_tests() {
+    log_check "Cache timing measurement (chained sign→verify, count=3)"
+
+    if [ "$SKIP_PBX" = "true" ]; then
+        log_info "Timing tests skipped (VVP_SKIP_PBX=true)"
+        return 0
+    fi
+
+    if [ -z "$API_KEY" ]; then
+        log_warn "Timing tests require VVP_TEST_API_KEY — skipping"
+        record_result "E2E" "cache_timing" "warn" "No API key"
+        return 0
+    fi
+
+    # Deploy sip-call-test.py to PBX and run chained timing
+    local script_b64
+    script_b64=$(base64 -w0 "$SIP_TEST_SCRIPT" 2>/dev/null || base64 "$SIP_TEST_SCRIPT" 2>/dev/null)
+
+    if [ -z "$script_b64" ]; then
+        log_fail "Could not encode SIP test script for timing"
+        return 1
+    fi
+
+    local timing_output
+    timing_output=$(pbx_run "
+        echo '$script_b64' | base64 -d > /tmp/vvp-sip-test.py
+
+        VVP_TEST_API_KEY='$API_KEY' \
+        VVP_SIP_REDIRECT_HOST=127.0.0.1 \
+        VVP_SIP_REDIRECT_PORT=5070 \
+        VVP_SIP_VERIFY_HOST=127.0.0.1 \
+        VVP_SIP_VERIFY_PORT=5071 \
+        python3 /tmp/vvp-sip-test.py \
+            --test chain --timing --timing-count 3 \
+            --verifier-url $VERIFIER_URL \
+            --json --timeout 15 2>&1
+
+        rm -f /tmp/vvp-sip-test.py
+    " 2>/dev/null) || {
+        log_warn "Could not run timing tests on PBX VM"
+        record_result "E2E" "cache_timing" "warn" "az vm run-command failed"
+        return 0  # warn, not fail
+    }
+
+    # Extract JSON from az vm run-command output
+    local json_output
+    json_output=$(echo "$timing_output" | python3 -c "
+import sys, json
+text = sys.stdin.read()
+start = text.find('{\"results\"')
+if start >= 0:
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] == '{': depth += 1
+        elif text[i] == '}': depth -= 1
+        if depth == 0:
+            print(text[start:i+1])
+            break
+" 2>/dev/null) || json_output=""
+
+    if [ "$VERBOSE" = true ] && [ "$JSON_OUTPUT" = false ]; then
+        log_info "Timing test raw output:"
+        echo "$timing_output" | while IFS= read -r line; do
+            log_info "  $line"
+        done
+    fi
+
+    if [ -z "$json_output" ]; then
+        log_warn "Could not parse timing test results"
+        record_result "E2E" "cache_timing" "warn" "No parseable output"
+        return 0
+    fi
+
+    # Parse timing results
+    local timing_data
+    timing_data=$(echo "$json_output" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+results = data.get('results', [])
+for r in results:
+    if r.get('test') == 'chain_timing':
+        status = r.get('status', 'fail')
+        speedup = r.get('speedup_ratio', 0)
+        first = r.get('first_call_ms', 0)
+        second = r.get('second_call_ms', 0)
+        cold_uncertain = r.get('cold_uncertain', False)
+        cache_metrics = r.get('cache_metrics') or {}
+        cache_confirmed = cache_metrics.get('cache_confirmed', False)
+        v_delta = cache_metrics.get('verification_hits_delta', '?')
+        detail = r.get('detail', '')
+        print(f'{status}|{speedup}|{first}|{second}|{cold_uncertain}|{cache_confirmed}|{v_delta}|{detail}')
+        break
+else:
+    print('fail|0|0|0|False|False|?|No chain_timing result found')
+" 2>/dev/null) || timing_data=""
+
+    if [ -z "$timing_data" ]; then
+        log_warn "Could not parse chain_timing result"
+        record_result "E2E" "cache_timing" "warn" "Parse error"
+        return 0
+    fi
+
+    local t_status t_speedup t_first t_second t_cold t_confirmed t_vdelta t_detail
+    IFS='|' read -r t_status t_speedup t_first t_second t_cold t_confirmed t_vdelta t_detail <<< "$timing_data"
+
+    local summary="Speedup ${t_speedup}x — cold=${t_first}ms, cached=${t_second}ms"
+    if [ "$t_confirmed" = "True" ]; then
+        summary="$summary [cache confirmed, v_hits_delta=$t_vdelta]"
+    elif [ "$t_vdelta" != "?" ]; then
+        summary="$summary [cache unconfirmed, v_hits_delta=$t_vdelta]"
+    else
+        summary="$summary [no metrics]"
+    fi
+    if [ "$t_cold" = "True" ]; then
+        summary="$summary [cold uncertain]"
+    fi
+
+    # Timing results are always warn-not-fail
+    if [ "$t_status" = "pass" ]; then
+        log_pass "Cache timing: $summary"
+        record_result "E2E" "cache_timing" "pass" "$summary"
+    elif [ "$t_status" = "warn" ]; then
+        log_warn "Cache timing: $summary"
+        record_result "E2E" "cache_timing" "warn" "$summary"
+    else
+        # Even timing failures are only warnings
+        log_warn "Cache timing: $t_detail"
+        record_result "E2E" "cache_timing" "warn" "$t_detail"
+    fi
+
+    return 0
 }
 
 # Parse JSON output from sip-call-test.py and record results
