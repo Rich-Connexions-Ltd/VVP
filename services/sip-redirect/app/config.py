@@ -41,7 +41,7 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 # Audit log directory
 AUDIT_LOG_DIR = Path(os.getenv("VVP_AUDIT_LOG_DIR", "/var/log/vvp-sip"))
 
-# Status endpoint configuration
+# Status endpoint configuration (PBX uses port 8085 via env override)
 STATUS_HTTP_PORT = int(os.getenv("VVP_STATUS_HTTP_PORT", "8080"))
 STATUS_ADMIN_KEY = os.getenv("VVP_STATUS_ADMIN_KEY", "")
 
