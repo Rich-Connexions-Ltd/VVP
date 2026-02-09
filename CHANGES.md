@@ -29,6 +29,12 @@ Comprehensive 15-section System Operator User Manual implementing Sprint 55 requ
 - Summary+Link sections within limits
 - Troubleshooting covers 30 ErrorCode values + 5 signing issues + 10 infrastructure issues + 20 historical bug fixes
 
+### Commits
+
+- `24a67fc` Sprint 56: System Operator User Manual
+- `4e5838c` Expand User Manual: operator walkthrough, more failure modes
+- `a962706` Sprint 56 complete: archive plan, update CHANGES.md and SPRINTS.md
+
 ---
 
 ## Sprint 55: README Update & User Manual Requirements
