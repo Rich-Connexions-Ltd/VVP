@@ -243,7 +243,7 @@ VVP/
 |----------|-------------|
 | [E2E Test Walkthrough](E2E_TEST.md) | Step-by-step end-to-end testing guide |
 | [CLI Tools Guide](Documentation/CLI_USAGE.md) | VVP command-line tools reference |
-| [User Manual Requirements](Documentation/archive/PLAN_Sprint55.md) | Requirements for comprehensive system operator manual (planned) |
+| [System Operator User Manual](Documentation/USER_MANUAL.md) | Comprehensive operator manual covering all VVP services |
 
 ### Infrastructure & Deployment
 
