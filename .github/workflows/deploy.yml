@@ -203,7 +203,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -e .
-          pip install pytest pytest-asyncio
+          pip install pytest pytest-asyncio aiohttp
 
       - name: Run tests
         run: |
@@ -243,7 +243,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -e .
-          pip install pytest pytest-asyncio aiohttp
+          pip install pytest pytest-asyncio aiohttp httpx
 
       - name: Run tests
         run: |
