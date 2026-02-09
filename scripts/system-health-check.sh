@@ -867,7 +867,7 @@ _run_freeswitch_call_test() {
         #   → Issuer API → 302 → loopback-inbound → bridge to user/1006
         # The final bridge will fail (1006 likely not registered), but the
         # signing flow is what we're testing.
-        ORIGINATE_RESULT=\$(fs_cli -x \"bgapi originate {origination_caller_id_number=+441923311001,origination_caller_id_name=VVP-HealthCheck,sip_h_X-VVP-API-Key=$API_KEY}sofia/internal/71006@127.0.0.1 &park()\" 2>/dev/null || echo 'ORIGINATE_FAILED')
+        ORIGINATE_RESULT=\$(fs_cli -x \"bgapi originate {origination_caller_id_number=+441923311000,origination_caller_id_name=VVP-HealthCheck,sip_h_X-VVP-API-Key=$API_KEY}sofia/internal/71006@127.0.0.1 &park()\" 2>/dev/null || echo 'ORIGINATE_FAILED')
 
         # Wait for the call to process through signing flow
         sleep 5

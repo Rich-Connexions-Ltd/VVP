@@ -44,7 +44,7 @@
         <action application="set" data="progress_timeout=30"/>
         <!-- SIP Timer B: max wait for INVITE transaction (default 32s, extend to 35s) -->
         <action application="set" data="sip_invite_timeout=35"/>
-        <!-- Map extension to test TN range: 1001->+441923311001, 1006->+441923311006 -->
+        <!-- Map extension to test TN: dest from dialed digits, caller is +441923311000 -->
         <action application="set" data="loopback_dest_tn=+44192331$1"/>
         <action application="set" data="effective_caller_id_number=+441923311000"/>
         <action application="set" data="effective_caller_id_name=VVP Loopback"/>

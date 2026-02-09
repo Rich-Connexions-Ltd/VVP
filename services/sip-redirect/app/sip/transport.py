@@ -26,7 +26,15 @@ MessageHandler = Callable[[SIPRequest], Awaitable[SIPResponse]]
 
 
 class UDPServerProtocol(asyncio.DatagramProtocol):
-    """UDP server protocol for SIP."""
+    """UDP server protocol for SIP.
+
+    Includes INVITE transaction deduplication: SIP retransmissions (same
+    Call-ID) wait for the in-flight request to complete and receive the
+    same response, rather than spawning parallel API calls.
+    """
+
+    # How long to keep completed transaction responses for late retransmissions
+    _TXN_TTL = 32.0  # RFC 3261 Timer B
 
     def __init__(self, handler: MessageHandler):
         """Initialize protocol.
@@ -36,6 +44,10 @@ class UDPServerProtocol(asyncio.DatagramProtocol):
         """
         self._handler = handler
         self._transport: Optional[asyncio.DatagramTransport] = None
+        # In-flight INVITE transactions: call_id -> asyncio.Future[SIPResponse]
+        self._inflight: dict[str, asyncio.Future] = {}
+        # Completed transaction responses: call_id -> SIPResponse
+        self._completed: dict[str, SIPResponse] = {}
 
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:
         """Called when connection is established."""
@@ -52,7 +64,7 @@ class UDPServerProtocol(asyncio.DatagramProtocol):
         asyncio.create_task(self._handle_datagram(data, addr))
 
     async def _handle_datagram(self, data: bytes, addr: tuple) -> None:
-        """Process datagram asynchronously.
+        """Process datagram with INVITE retransmission deduplication.
 
         Args:
             data: Raw SIP message
@@ -69,7 +81,56 @@ class UDPServerProtocol(asyncio.DatagramProtocol):
 
             log.debug(f"UDP {request.method} from {addr[0]}:{addr[1]}")
 
-            response = await self._handler(request)
+            # Non-INVITE methods: process directly (ACK, etc.)
+            if not request.is_invite:
+                response = await self._handler(request)
+                if self._transport and not self._transport.is_closing():
+                    self._transport.sendto(response.to_bytes(), addr)
+                return
+
+            call_id = request.call_id or ""
+
+            # Check if we already have a completed response for this Call-ID
+            if call_id and call_id in self._completed:
+                log.debug(f"Retransmit (completed): resending response for {call_id[:16]}")
+                if self._transport and not self._transport.is_closing():
+                    self._transport.sendto(self._completed[call_id].to_bytes(), addr)
+                return
+
+            # Check if there's an in-flight request for this Call-ID
+            if call_id and call_id in self._inflight:
+                log.debug(f"Retransmit (in-flight): waiting for {call_id[:16]}")
+                try:
+                    response = await self._inflight[call_id]
+                    if self._transport and not self._transport.is_closing():
+                        self._transport.sendto(response.to_bytes(), addr)
+                except Exception:
+                    pass  # Original handler failed; retransmission gets nothing
+                return
+
+            # New INVITE — create a future and process
+            fut: asyncio.Future[SIPResponse] = asyncio.get_running_loop().create_future()
+            if call_id:
+                self._inflight[call_id] = fut
+
+            try:
+                response = await self._handler(request)
+                fut.set_result(response)
+            except Exception as e:
+                fut.set_exception(e)
+                raise
+            finally:
+                if call_id:
+                    self._inflight.pop(call_id, None)
+
+            # Cache response for late retransmissions
+            if call_id:
+                self._completed[call_id] = response
+                asyncio.get_running_loop().call_later(
+                    self._TXN_TTL,
+                    self._completed.pop, call_id, None,
+                )
+
             if self._transport and not self._transport.is_closing():
                 self._transport.sendto(response.to_bytes(), addr)
 

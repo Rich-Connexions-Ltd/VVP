@@ -149,7 +149,7 @@ class TestTimingCountCap:
             "127.0.0.1", 5070,
             count=50,  # Exceeds cap — caller is responsible for min()
             threshold=2.0, delay=0.0, timeout=5,
-            api_key="test-key", orig_tn="+441923311001", dest_tn="+441923311006",
+            api_key="test-key", orig_tn="+441923311000", dest_tn="+441923311006",
         )
         # The test_timing function itself doesn't enforce the cap —
         # the cap is enforced in main() via min(). But we verify the
@@ -203,7 +203,7 @@ class TestTimingResultSchema:
             sip_call_test.test_signing, "signing",
             "127.0.0.1", 5070,
             count=2, threshold=2.0, delay=0.0, timeout=5,
-            api_key="test-key", orig_tn="+441923311001", dest_tn="+441923311006",
+            api_key="test-key", orig_tn="+441923311000", dest_tn="+441923311006",
         )
 
         # Required fields per plan
@@ -233,7 +233,7 @@ class TestTimingResultSchema:
             sip_call_test.test_signing, "signing",
             "127.0.0.1", 5070,
             count=3, threshold=2.0, delay=0.0, timeout=5,
-            api_key="test-key", orig_tn="+441923311001", dest_tn="+441923311006",
+            api_key="test-key", orig_tn="+441923311000", dest_tn="+441923311006",
         )
 
         assert result["first_call_ms"] == 2000.0
@@ -259,7 +259,7 @@ class TestWarnVsFail:
             sip_call_test.test_signing, "signing",
             "127.0.0.1", 5070,
             count=2, threshold=2.0, delay=0.0, timeout=5,
-            api_key="test-key", orig_tn="+441923311001", dest_tn="+441923311006",
+            api_key="test-key", orig_tn="+441923311000", dest_tn="+441923311006",
         )
 
         assert result["status"] == "warn"
@@ -280,7 +280,7 @@ class TestWarnVsFail:
             sip_call_test.test_signing, "signing",
             "127.0.0.1", 5070,
             count=2, threshold=2.0, delay=0.0, timeout=5,
-            api_key="test-key", orig_tn="+441923311001", dest_tn="+441923311006",
+            api_key="test-key", orig_tn="+441923311000", dest_tn="+441923311006",
         )
 
         assert result["status"] == "pass"
@@ -294,7 +294,7 @@ class TestWarnVsFail:
             sip_call_test.test_signing, "signing",
             "127.0.0.1", 5070,
             count=2, threshold=2.0, delay=0.0, timeout=5,
-            api_key="test-key", orig_tn="+441923311001", dest_tn="+441923311006",
+            api_key="test-key", orig_tn="+441923311000", dest_tn="+441923311006",
         )
 
         assert result["status"] == "fail"
@@ -319,7 +319,7 @@ class TestColdUncertainFlag:
             sip_call_test.test_signing, "signing",
             "127.0.0.1", 5070,
             count=2, threshold=2.0, delay=0.0, timeout=5,
-            api_key="test-key", orig_tn="+441923311001", dest_tn="+441923311006",
+            api_key="test-key", orig_tn="+441923311000", dest_tn="+441923311006",
         )
 
         assert result["cold_uncertain"] is True
@@ -340,7 +340,7 @@ class TestColdUncertainFlag:
             sip_call_test.test_signing, "signing",
             "127.0.0.1", 5070,
             count=2, threshold=2.0, delay=0.0, timeout=5,
-            api_key="test-key", orig_tn="+441923311001", dest_tn="+441923311006",
+            api_key="test-key", orig_tn="+441923311000", dest_tn="+441923311006",
         )
 
         assert result["cold_uncertain"] is False
@@ -388,7 +388,7 @@ class TestChainedTimingSchema:
 
         result = sip_call_test.test_chained_timing(
             "127.0.0.1", 5070, "127.0.0.1", 5071,
-            "test-key", "+441923311001", "+441923311006",
+            "test-key", "+441923311000", "+441923311006",
             count=2, threshold=2.0, delay=0.0, timeout=5,
             verifier_url="http://localhost:8000",
         )
@@ -427,7 +427,7 @@ class TestChainedTimingSchema:
 
         result = sip_call_test.test_chained_timing(
             "127.0.0.1", 5070, "127.0.0.1", 5071,
-            "test-key", "+441923311001", "+441923311006",
+            "test-key", "+441923311000", "+441923311006",
             count=3, threshold=2.0, delay=0.0, timeout=5,
             verifier_url="http://localhost:8000",
         )
@@ -451,7 +451,7 @@ class TestChainedTimingSchema:
 
         result = sip_call_test.test_chained_timing(
             "127.0.0.1", 5070, "127.0.0.1", 5071,
-            "test-key", "+441923311001", "+441923311006",
+            "test-key", "+441923311000", "+441923311006",
             count=2, threshold=2.0, delay=0.0, timeout=5,
             verifier_url="http://localhost:8000",
         )

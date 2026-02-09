@@ -29,7 +29,7 @@ Environment:
     VVP_SIP_VERIFY_HOST     SIP Verify host (default: 127.0.0.1)
     VVP_SIP_VERIFY_PORT     SIP Verify port (default: 5071)
     VVP_TEST_API_KEY        API key for signing test
-    VVP_TEST_ORIG_TN        Originating TN (default: +441923311001)
+    VVP_TEST_ORIG_TN        Originating TN (default: +441923311000)
     VVP_TEST_DEST_TN        Destination TN (default: +441923311006)
     VVP_VERIFIER_URL        Verifier URL for cache metrics (default: https://vvp-verifier.rcnx.io)
 """
@@ -54,7 +54,7 @@ REDIRECT_PORT = int(os.getenv("VVP_SIP_REDIRECT_PORT", "5070"))
 VERIFY_HOST = os.getenv("VVP_SIP_VERIFY_HOST", "127.0.0.1")
 VERIFY_PORT = int(os.getenv("VVP_SIP_VERIFY_PORT", "5071"))
 API_KEY = os.getenv("VVP_TEST_API_KEY", "")
-ORIG_TN = os.getenv("VVP_TEST_ORIG_TN", "+441923311001")
+ORIG_TN = os.getenv("VVP_TEST_ORIG_TN", "+441923311000")
 DEST_TN = os.getenv("VVP_TEST_DEST_TN", "+441923311006")
 RECV_TIMEOUT = float(os.getenv("VVP_SIP_TIMEOUT", "15"))
 VERIFIER_URL = os.getenv("VVP_VERIFIER_URL", "https://vvp-verifier.rcnx.io")

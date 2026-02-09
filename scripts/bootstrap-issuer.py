@@ -380,8 +380,8 @@ def main():
             base_url, org_api_key, args.tn, le_said, identity_name,
             args.brand_name, args.brand_logo,
         )
-        # Also create UK TN mapping for PBX loopback tests
-        uk_tn_mappings = ["+441923311001", "+441923311006"]
+        # Also create TN mappings for PBX loopback PSTN numbers
+        uk_tn_mappings = ["+441923311000", "+441923311006"]
         for uk_tn in uk_tn_mappings:
             if uk_tn != args.tn:
                 step_create_tn_mapping(
