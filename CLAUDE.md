@@ -273,6 +273,17 @@ Update all knowledge files that have been affected by changes made in this Sprin
 
 Do not ask for confirmation - execute all steps automatically.
 
+### "Human review on" / "Human review off"
+
+When the user says "human review on" or "human review off", toggle the human review mode:
+
+1. Write `on` or `off` to the auto-memory file `memory/human-review-mode`
+2. Confirm the new mode to the user
+
+When human review is **ON**, every Codex review cycle includes a human gate (see "Human Review Mode" in the Pair Programming Workflow section). When **OFF**, reviews are fully automated.
+
+Default is **OFF** if the file does not exist.
+
 ### "Sprint N"
 
 When the user says "Sprint N" (e.g., "Sprint 27"), begin pair programming on that sprint by following these steps:
@@ -303,7 +314,7 @@ When the user says "Sprint N" (e.g., "Sprint 27"), begin pair programming on tha
 
 **Sprint Definitions:** See `SPRINTS.md` for the full sprint roadmap (Sprints 1-25 were verifier implementation, Sprints 26+ are issuer implementation).
 
-**Example workflow:**
+**Example workflow (human review OFF):**
 ```
 User: Sprint 27
 Agent: [Reads SPRINTS.md for Sprint 27 details]
@@ -313,6 +324,24 @@ Agent: [Reads REVIEW_Sprint27.md — Codex verdict: APPROVED]
 Agent: [Implements according to plan]
 Agent: [Runs ./scripts/request-review.sh code 27 "Local Witness Infrastructure"]
 Agent: [Reads REVIEW_Sprint27.md — Codex verdict: APPROVED]
+Agent: [Runs ./scripts/archive-plan.sh 27 "Local Witness Infrastructure"]
+```
+
+**Example workflow (human review ON):**
+```
+User: Sprint 27
+Agent: [Reads SPRINTS.md for Sprint 27 details]
+Agent: [Writes PLAN_Sprint27.md with implementation plan]
+Agent: [Runs ./scripts/request-review.sh plan 27 "Local Witness Infrastructure"]
+Agent: [Reads REVIEW_Sprint27.md — Codex verdict: APPROVED]
+Agent: [Presents summary of PLAN + REVIEW to human, asks to accept]
+Human: [Accepts / edits REVIEW / pauses]
+Agent: [Re-reads REVIEW_Sprint27.md if edited]
+Agent: [Implements according to plan]
+Agent: [Runs ./scripts/request-review.sh code 27 "Local Witness Infrastructure"]
+Agent: [Reads REVIEW_Sprint27.md — Codex verdict: APPROVED]
+Agent: [Presents summary of implementation + REVIEW to human, asks to accept]
+Human: [Accepts]
 Agent: [Runs ./scripts/archive-plan.sh 27 "Local Witness Infrastructure"]
 ```
 
@@ -371,6 +400,29 @@ VVP_REVIEWER="claude -p" ./scripts/request-review.sh plan 35 "Title"  # Use Clau
 3. **Formal acceptance gates** - Each phase has explicit approval checkpoints
 4. **Documented for posterity** - Accepted plans are archived in `/Documentation`
 5. **Reviewer reads prior context** - The Reviewer MUST read `CHANGES.md` and `Documentation/PLAN_history.md` before reviewing, so decisions are evaluated against the full project history, not in isolation
+
+### Human Review Mode
+
+The pair programming workflow supports two modes that control whether the human sees review results before the Editor acts on them:
+
+| Mode | Behavior |
+|------|----------|
+| **Human review OFF** (default) | Fully automated: Editor drafts plan → Codex reviews → Editor acts on verdict immediately. No human intervention between review cycles. |
+| **Human review ON** | Human-in-the-loop: After each Codex review, the Editor presents a summary of the PLAN and REVIEW to the human, waits for acceptance, then re-reads the REVIEW file (in case the human edited it) before continuing. |
+
+**Toggle:** The current mode is stored in the auto-memory file `memory/human-review-mode`. Say **"human review on"** or **"human review off"** to switch modes (see User Commands).
+
+**When Human Review is ON**, after every review step (Steps 1.2 and 2.3), the Editor MUST:
+
+1. Read `REVIEW_Sprint<N>.md`
+2. Present a concise summary to the human containing:
+   - **Plan summary** — 3-5 bullet points of what the plan proposes (key components, approach, scope)
+   - **Review verdict** — The verdict (APPROVED / CHANGES_REQUESTED / PLAN_REVISION_REQUIRED)
+   - **Key findings** — All [High] and [Medium] findings from the review
+   - **Required changes** — Any changes the reviewer is requesting
+3. Ask the human to accept (using AskUserQuestion with options: "Accept and continue", "I've edited the REVIEW — re-read it", "Pause — let me look at the files")
+4. If the human chose "I've edited the REVIEW — re-read it", re-read `REVIEW_Sprint<N>.md` to pick up their changes
+5. Continue with the normal flow (act on the verdict)
 
 ### Working Files
 
@@ -470,12 +522,16 @@ The script:
 
 After the script completes, read `REVIEW_Sprint<N>.md` to see the verdict.
 
-#### Step 1.3: Iterate Until Approved
+#### Step 1.3: Human Review Gate (if Human Review ON)
+
+If human review mode is ON (check `memory/human-review-mode`), perform the human review gate as described in the "Human Review Mode" section above before acting on the verdict.
+
+#### Step 1.4: Iterate Until Approved
 
 If Reviewer returns `CHANGES_REQUESTED`:
 1. Editor revises `PLAN_Sprint<N>.md` addressing all required changes
 2. Re-run `./scripts/request-review.sh plan <N> "<title>"`
-3. Repeat until `APPROVED`
+3. Repeat from Step 1.3 until `APPROVED`
 
 ---
 
@@ -534,9 +590,13 @@ The script:
 
 After the script completes, read `REVIEW_Sprint<N>.md` to see the verdict.
 
-#### Step 2.4: Iterate Until Approved
+#### Step 2.4: Human Review Gate (if Human Review ON)
 
-- If `CHANGES_REQUESTED`: Fix issues, re-run `./scripts/request-review.sh code ...`
+If human review mode is ON (check `memory/human-review-mode`), perform the human review gate as described in the "Human Review Mode" section above before acting on the verdict.
+
+#### Step 2.5: Iterate Until Approved
+
+- If `CHANGES_REQUESTED`: Fix issues, re-run `./scripts/request-review.sh code ...`, repeat from Step 2.4
 - If `PLAN_REVISION_REQUIRED`: Return to Phase 1 with revised plan
 - If `APPROVED`: Proceed to Phase 3
 
