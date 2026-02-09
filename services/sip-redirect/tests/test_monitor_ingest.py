@@ -6,16 +6,18 @@ Tests cover:
 - Optional fields filled with defaults
 - Event appears in buffer after ingest
 - response_vvp_headers populated and retrievable
+- Non-loopback peer rejection → 403
 """
 
 import json
+from unittest.mock import MagicMock
 
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from app.monitor.buffer import SIPEventBuffer, get_event_buffer
-from app.monitor.server import create_web_app
+from app.monitor.server import create_web_app, handle_event_ingest
 
 
 def _make_ingest_payload(**overrides):
@@ -154,3 +156,17 @@ class TestEventIngest:
         event = next(e for e in events if e["id"] == event_id)
 
         assert event["response_vvp_headers"] == response_headers
+
+    async def test_non_loopback_rejected(self):
+        """Non-loopback peer IP returns 403."""
+        # Create a mock aiohttp request with non-loopback peername
+        mock_transport = MagicMock()
+        mock_transport.get_extra_info.return_value = ("10.0.0.5", 12345)
+
+        mock_request = MagicMock()
+        mock_request.transport = mock_transport
+
+        resp = await handle_event_ingest(mock_request)
+        assert resp.status == 403
+        body = json.loads(resp.body)
+        assert body["error"] == "Forbidden"

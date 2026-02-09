@@ -12,6 +12,7 @@ Sprint 48: Added event capture for monitoring dashboard via HTTP POST
 to the sip-redirect monitor's ingestion endpoint.
 """
 
+import asyncio
 import logging
 import time
 from datetime import datetime, timezone
@@ -52,6 +53,21 @@ def _get_monitor_session() -> httpx.AsyncClient:
     return _monitor_session
 
 
+async def _do_capture_event(event_data: dict, vvp_status: str, response_code: int) -> None:
+    """Post event data to the monitor ingestion endpoint.
+
+    This is the actual HTTP call — meant to be run as a background task
+    via asyncio.create_task so it doesn't block the SIP call path.
+    """
+    try:
+        session = _get_monitor_session()
+        url = f"{VVP_MONITOR_URL}/api/events/ingest"
+        resp = await session.post(url, json=event_data)
+        log.info(f"Monitor event captured: VERIFICATION {vvp_status} (code={response_code}, monitor_status={resp.status_code})")
+    except Exception as e:
+        log.warning(f"Failed to capture monitor event: {e}")
+
+
 async def _capture_event(
     request: SIPRequest,
     response: Optional[SIPResponse],
@@ -59,11 +75,10 @@ async def _capture_event(
     vvp_status: str,
     error: Optional[str] = None,
 ) -> None:
-    """Capture SIP verification event for monitoring dashboard.
+    """Capture SIP verification event for monitoring dashboard (fire-and-forget).
 
-    Posts event data to the sip-redirect monitor's ingestion endpoint.
-    Failures are logged but never propagate — monitoring must not affect
-    the SIP call path.
+    Builds the event dict and schedules the HTTP POST as a background task.
+    Never blocks the SIP call path — monitoring must not affect call latency.
 
     Args:
         request: The SIP INVITE request
@@ -75,56 +90,51 @@ async def _capture_event(
     if not VVP_MONITOR_ENABLED:
         return
 
-    try:
-        # Extract request VVP headers
-        vvp_headers = {}
-        for name, value in request.headers.items():
-            name_lower = name.lower()
-            if name_lower.startswith("x-vvp-") or name_lower.startswith("p-vvp-"):
-                vvp_headers[name] = value
-            elif name_lower == "identity":
-                vvp_headers["Identity"] = value
+    # Extract request VVP headers
+    vvp_headers = {}
+    for name, value in request.headers.items():
+        name_lower = name.lower()
+        if name_lower.startswith("x-vvp-") or name_lower.startswith("p-vvp-"):
+            vvp_headers[name] = value
+        elif name_lower == "identity":
+            vvp_headers["Identity"] = value
 
-        # Extract response VVP headers
-        response_vvp_headers = {}
-        if response is not None:
-            if response.vvp_identity:
-                response_vvp_headers["P-VVP-Identity"] = response.vvp_identity
-            if response.vvp_passport:
-                response_vvp_headers["P-VVP-Passport"] = response.vvp_passport
-            if response.vvp_status:
-                response_vvp_headers["X-VVP-Status"] = response.vvp_status
-            if response.brand_name:
-                response_vvp_headers["X-VVP-Brand-Name"] = response.brand_name
-            if response.brand_logo_url:
-                response_vvp_headers["X-VVP-Brand-Logo"] = response.brand_logo_url
-            if response.caller_id:
-                response_vvp_headers["X-VVP-Caller-ID"] = response.caller_id
-            if response.error_code:
-                response_vvp_headers["X-VVP-Error"] = response.error_code
+    # Extract response VVP headers
+    response_vvp_headers = {}
+    if response is not None:
+        if response.vvp_identity:
+            response_vvp_headers["P-VVP-Identity"] = response.vvp_identity
+        if response.vvp_passport:
+            response_vvp_headers["P-VVP-Passport"] = response.vvp_passport
+        if response.vvp_status:
+            response_vvp_headers["X-VVP-Status"] = response.vvp_status
+        if response.brand_name:
+            response_vvp_headers["X-VVP-Brand-Name"] = response.brand_name
+        if response.brand_logo_url:
+            response_vvp_headers["X-VVP-Brand-Logo"] = response.brand_logo_url
+        if response.caller_id:
+            response_vvp_headers["X-VVP-Caller-ID"] = response.caller_id
+        if response.error_code:
+            response_vvp_headers["X-VVP-Error"] = response.error_code
 
-        event_data = {
-            "service": "VERIFICATION",
-            "source_addr": request.source_addr or "unknown",
-            "method": request.method,
-            "request_uri": request.request_uri,
-            "call_id": request.call_id or "",
-            "from_tn": request.from_tn,
-            "to_tn": request.to_tn,
-            "headers": dict(request.headers),
-            "vvp_headers": vvp_headers,
-            "response_code": response_code,
-            "vvp_status": vvp_status,
-            "response_vvp_headers": response_vvp_headers,
-            "error": error,
-        }
+    event_data = {
+        "service": "VERIFICATION",
+        "source_addr": request.source_addr or "unknown",
+        "method": request.method,
+        "request_uri": request.request_uri,
+        "call_id": request.call_id or "",
+        "from_tn": request.from_tn,
+        "to_tn": request.to_tn,
+        "headers": dict(request.headers),
+        "vvp_headers": vvp_headers,
+        "response_code": response_code,
+        "vvp_status": vvp_status,
+        "response_vvp_headers": response_vvp_headers,
+        "error": error,
+    }
 
-        session = _get_monitor_session()
-        url = f"{VVP_MONITOR_URL}/api/events/ingest"
-        resp = await session.post(url, json=event_data)
-        log.info(f"Monitor event captured: VERIFICATION {vvp_status} (code={response_code}, monitor_status={resp.status_code})")
-    except Exception as e:
-        log.warning(f"Failed to capture monitor event: {e}")
+    # Fire-and-forget: schedule HTTP POST as background task
+    asyncio.create_task(_do_capture_event(event_data, vvp_status, response_code))
 
 
 async def handle_verify_invite(request: SIPRequest) -> SIPResponse:
