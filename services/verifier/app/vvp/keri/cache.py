@@ -12,6 +12,7 @@ key state that was valid at the queried time.
 
 import asyncio
 import logging
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Dict, Optional, Tuple
@@ -115,8 +116,8 @@ class KeyStateCache:
         self._entries: Dict[Tuple[str, str], _CacheEntry] = {}
         # Secondary index: (aid, reference_time) → establishment_digest
         self._time_index: Dict[Tuple[str, datetime], str] = {}
-        # Access order for LRU (most recent at end)
-        self._access_order: list[Tuple[str, str]] = []
+        # Access order for LRU (most recent at end). O(1) move_to_end.
+        self._access_order: OrderedDict[Tuple[str, str], None] = OrderedDict()
         # Lock for thread safety
         self._lock = asyncio.Lock()
         # Metrics tracking
@@ -272,28 +273,27 @@ class KeyStateCache:
     def _remove_entry(self, key: Tuple[str, str]) -> None:
         """Remove entry from all indexes (caller must hold lock)."""
         entry = self._entries.pop(key, None)
-        if entry and key in self._access_order:
-            self._access_order.remove(key)
+        self._access_order.pop(key, None)
 
         # Clean up time index entries pointing to this digest
-        aid, digest = key
-        time_keys_to_remove = [
-            tkey for tkey, d in self._time_index.items()
-            if tkey[0] == aid and d == digest
-        ]
-        for tkey in time_keys_to_remove:
-            del self._time_index[tkey]
+        if entry:
+            aid, digest = key
+            time_keys_to_remove = [
+                tkey for tkey, d in self._time_index.items()
+                if tkey[0] == aid and d == digest
+            ]
+            for tkey in time_keys_to_remove:
+                del self._time_index[tkey]
 
     def _touch_access_order(self, key: Tuple[str, str]) -> None:
-        """Move key to end of access order (caller must hold lock)."""
-        if key in self._access_order:
-            self._access_order.remove(key)
-        self._access_order.append(key)
+        """Move key to end of access order (caller must hold lock). O(1)."""
+        self._access_order[key] = None
+        self._access_order.move_to_end(key)
 
     def _evict_lru(self) -> None:
         """Evict least recently used entry (caller must hold lock)."""
         if self._access_order:
-            lru_key = self._access_order[0]
+            lru_key = next(iter(self._access_order))
             self._remove_entry(lru_key)
             self._metrics.evictions += 1
             log.debug(f"KeyState cache LRU eviction: {lru_key[0][:20]}...")

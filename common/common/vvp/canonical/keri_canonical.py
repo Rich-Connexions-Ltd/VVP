@@ -10,7 +10,11 @@ This module is shared between verifier and issuer services.
 """
 
 import json
+import re
 from typing import Any, Dict, List, Optional
+
+# Pre-compiled regex for compact form version string parsing
+_COMPACT_VERSION_RE = re.compile(r"^([A-Z]{4})(\d)(\d)([A-Z]+)([0-9a-f]{6})(_?)$")
 
 # Field orderings per event type from keripy (KERI Protocol v1.0)
 # Source: keripy/src/keri/core/serdering.py, commit 1e2bf869
@@ -130,8 +134,6 @@ def most_compact_form(event: Dict[str, Any], said_field: str = "d") -> bytes:
     Raises:
         CanonicalSerializationError: If serialization fails.
     """
-    import re
-
     # SAID for Blake3-256 is 44 characters (E prefix + 43 base64 chars)
     SAID_PLACEHOLDER = "#" * 44
 
@@ -164,7 +166,7 @@ def most_compact_form(event: Dict[str, Any], said_field: str = "d") -> bytes:
 
         # Parse version string: KERI10JSON000154_ or similar
         # Format: {PROTO}{MAJOR}{MINOR}{KIND}{SIZE:06x}{TERM}
-        match = re.match(r"^([A-Z]{4})(\d)(\d)([A-Z]+)([0-9a-f]{6})(_?)$", vs)
+        match = _COMPACT_VERSION_RE.match(vs)
         if match:
             proto, major, minor, kind, _old_size, term = match.groups()
             # Reconstruct with new size

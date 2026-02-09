@@ -244,15 +244,30 @@ class TELClient:
                 self._cache[cache_key] = result
                 return result
 
-        # Try known witnesses (with GLEIF discovery)
+        # Try known witnesses (with GLEIF discovery) — parallel first-success
         witness_urls = await self._get_witness_urls_async()
-        log.info(f"  trying_witnesses: count={len(witness_urls)}")
-        for i, witness_url in enumerate(witness_urls):
-            result = await self._query_witness(credential_said, registry_said, witness_url)
-            log.info(f"  witness[{i}] {witness_url}: status={result.status.value}")
-            if result.status != CredentialStatus.ERROR:
-                self._cache[cache_key] = result
-                return result
+        log.info(f"  trying_witnesses: count={len(witness_urls)} (parallel)")
+
+        # Launch parallel queries, return first non-ERROR result
+        tasks = [
+            asyncio.create_task(self._query_witness(credential_said, registry_said, url))
+            for url in witness_urls
+        ]
+        try:
+            for coro in asyncio.as_completed(tasks):
+                result = await coro
+                if result.status != CredentialStatus.ERROR:
+                    # Cancel remaining tasks
+                    for t in tasks:
+                        t.cancel()
+                    self._cache[cache_key] = result
+                    return result
+        finally:
+            # Ensure all tasks are cancelled on exit
+            for t in tasks:
+                t.cancel()
+            # Suppress CancelledError from cancelled tasks
+            await asyncio.gather(*tasks, return_exceptions=True)
 
         # No TEL data found
         log.info(f"  no_tel_data_found: returning UNKNOWN")
@@ -288,23 +303,24 @@ class TELClient:
                 f"/oobi/{credential_said}/tels",
             ]
 
-            async with httpx.AsyncClient(timeout=self.timeout, verify=False) as client:
-                for endpoint in endpoints:
-                    url = urljoin(base_url, endpoint)
-                    log.info(f"    oobi_query: {url}")
+            from app.vvp.http_client import get_shared_client
+            client = get_shared_client()
+            for endpoint in endpoints:
+                url = urljoin(base_url, endpoint)
+                log.info(f"    oobi_query: {url}")
 
-                    try:
-                        resp = await client.get(url)
-                        log.info(f"    oobi_response: status={resp.status_code} len={len(resp.text)}")
-                        if resp.status_code == 200:
-                            result = self._parse_tel_response(
-                                credential_said, registry_said, resp.text, "oobi"
-                            )
-                            log.info(f"    oobi_parsed: status={result.status.value}")
-                            return result
-                    except httpx.RequestError as e:
-                        log.info(f"    oobi_error: {type(e).__name__}: {e}")
-                        continue
+                try:
+                    resp = await client.get(url, timeout=self.timeout)
+                    log.info(f"    oobi_response: status={resp.status_code} len={len(resp.text)}")
+                    if resp.status_code == 200:
+                        result = self._parse_tel_response(
+                            credential_said, registry_said, resp.text, "oobi"
+                        )
+                        log.info(f"    oobi_parsed: status={result.status.value}")
+                        return result
+                except httpx.RequestError as e:
+                    log.info(f"    oobi_error: {type(e).__name__}: {e}")
+                    continue
 
             return RevocationResult(
                 status=CredentialStatus.ERROR,
@@ -341,36 +357,37 @@ class TELClient:
         2. Standard KERI TEL endpoint: /tels/<registry_said or credential_said>
         """
         try:
-            async with httpx.AsyncClient(timeout=self.timeout, verify=False) as client:
-                # Try Provenant-specific query endpoint first
-                # Format: /query?typ=tel&vcid=<credential_said>
-                provenant_url = f"{witness_url}/query?typ=tel&vcid={credential_said}"
-                log.info(f"    witness_query (provenant): {provenant_url}")
-                try:
-                    resp = await client.get(provenant_url)
-                    log.info(f"    witness_response: status={resp.status_code} len={len(resp.text)}")
-                    if resp.status_code == 200 and resp.text.strip():
-                        result = self._parse_tel_response(
-                            credential_said, registry_said, resp.text, "witness"
-                        )
-                        log.info(f"    witness_parsed: status={result.status.value}")
-                        if result.status != CredentialStatus.UNKNOWN:
-                            return result
-                except httpx.RequestError as e:
-                    log.info(f"    provenant_endpoint_error: {type(e).__name__}: {e}")
-
-                # Fall back to standard KERI TEL endpoint
-                standard_url = f"{witness_url}/tels/{registry_said or credential_said}"
-                log.info(f"    witness_query (standard): {standard_url}")
-                resp = await client.get(standard_url)
+            from app.vvp.http_client import get_shared_client
+            client = get_shared_client()
+            # Try Provenant-specific query endpoint first
+            # Format: /query?typ=tel&vcid=<credential_said>
+            provenant_url = f"{witness_url}/query?typ=tel&vcid={credential_said}"
+            log.info(f"    witness_query (provenant): {provenant_url}")
+            try:
+                resp = await client.get(provenant_url, timeout=self.timeout)
                 log.info(f"    witness_response: status={resp.status_code} len={len(resp.text)}")
-
-                if resp.status_code == 200:
+                if resp.status_code == 200 and resp.text.strip():
                     result = self._parse_tel_response(
                         credential_said, registry_said, resp.text, "witness"
                     )
                     log.info(f"    witness_parsed: status={result.status.value}")
-                    return result
+                    if result.status != CredentialStatus.UNKNOWN:
+                        return result
+            except httpx.RequestError as e:
+                log.info(f"    provenant_endpoint_error: {type(e).__name__}: {e}")
+
+            # Fall back to standard KERI TEL endpoint
+            standard_url = f"{witness_url}/tels/{registry_said or credential_said}"
+            log.info(f"    witness_query (standard): {standard_url}")
+            resp = await client.get(standard_url, timeout=self.timeout)
+            log.info(f"    witness_response: status={resp.status_code} len={len(resp.text)}")
+
+            if resp.status_code == 200:
+                result = self._parse_tel_response(
+                    credential_said, registry_said, resp.text, "witness"
+                )
+                log.info(f"    witness_parsed: status={result.status.value}")
+                return result
 
         except Exception as e:
             log.info(f"    witness_error: {type(e).__name__}: {e}")

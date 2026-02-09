@@ -66,6 +66,7 @@ from .sip_context import verify_sip_context_alignment
 from .brand import verify_brand, BrandInfo
 from .goal import verify_business_logic, GoalPolicyConfig
 from .vetter import verify_vetter_constraints, get_overall_constraint_status
+from .timing import PhaseTimer
 
 
 # =============================================================================
@@ -691,6 +692,7 @@ async def verify_vvp(
     req: VerifyRequest,
     vvp_identity_header: Optional[str] = None,
     reference_time: Optional[int] = None,
+    timer: Optional[PhaseTimer] = None,
 ) -> Tuple[str, VerifyResponse]:
     """Orchestrate VVP verification per spec §9.
 
@@ -724,18 +726,26 @@ async def verify_vvp(
     request_id = str(uuid.uuid4())
     errors: List[ErrorDetail] = []
 
+    if timer:
+        timer.start("total")
+
     passport_claim = ClaimBuilder("passport_verified")
     dossier_claim = ClaimBuilder("dossier_verified")
 
     # -------------------------------------------------------------------------
     # Phase 2: VVP-Identity Header
     # -------------------------------------------------------------------------
+    if timer:
+        timer.start("phase2_identity")
     vvp_identity: Optional[VVPIdentity] = None
     try:
         vvp_identity = parse_vvp_identity(vvp_identity_header)
     except VVPIdentityError as e:
         errors.append(to_error_detail(e))
         # Non-recoverable - return early with INVALID, no claims
+        if timer:
+            timer.stop()  # phase2_identity
+            timer.stop()  # total
         return request_id, VerifyResponse(
             request_id=request_id,
             overall_status=ClaimStatus.INVALID,
@@ -743,9 +753,14 @@ async def verify_vvp(
             errors=errors,
         )
 
+    if timer:
+        timer.stop()  # phase2_identity
+
     # -------------------------------------------------------------------------
     # Phase 3: PASSporT Parse + Binding
     # -------------------------------------------------------------------------
+    if timer:
+        timer.start("phase3_passport")
     passport: Optional[Passport] = None
     passport_fatal = False  # Track if passport has non-recoverable failure
 
@@ -766,9 +781,14 @@ async def verify_vvp(
             passport_claim.fail(ClaimStatus.INVALID, e.message)
             passport_fatal = True
 
+    if timer:
+        timer.stop()  # phase3_passport
+
     # -------------------------------------------------------------------------
     # Phase 4: KERI Signature Verification (§4.2, §5.1)
     # -------------------------------------------------------------------------
+    if timer:
+        timer.start("phase4_signature")
     # Per §4.2, kid MUST be an OOBI URL. Bare AIDs are non-compliant and
     # result in INVALID status. When kid is an OOBI URL, we use Tier 2
     # verification with historical key state resolution.
@@ -834,6 +854,9 @@ async def verify_vvp(
             else:
                 passport_claim.fail(ClaimStatus.INDETERMINATE, e.message)
                 # Note: INDETERMINATE is recoverable, so not setting passport_fatal
+
+    if timer:
+        timer.stop()  # phase4_signature
 
     # -------------------------------------------------------------------------
     # Sprint 51: Verification Result Cache Check
@@ -946,6 +969,8 @@ async def verify_vvp(
     # -------------------------------------------------------------------------
     # Per reviewer feedback: skip dossier fetch if passport has fatal failure
     # Per §5.1.1-2.7: Check dossier cache before fetching
+    if timer:
+        timer.start("phase5_dossier")
     dossier_cache = get_dossier_cache()
     cache_hit = False
 
@@ -1012,6 +1037,9 @@ async def verify_vvp(
             "Skipped due to passport verification failure",
         )
 
+    if timer:
+        timer.stop()  # phase5_dossier
+
     # -------------------------------------------------------------------------
     # Phase 5.5: ACDC Chain Verification (§6.3.x)
     # -------------------------------------------------------------------------
@@ -1019,6 +1047,8 @@ async def verify_vvp(
     # This validates credential type rules (APE/DE/TNAlloc) and chain trust
     # Per §5A Step 8: dossier cryptographic verification MUST be performed
     # even when PASSporT is absent (we just can't validate DE signer binding)
+    if timer:
+        timer.start("phase5_5_chain")
     chain_claim = ClaimBuilder("chain_verified")
 
     if dag is not None and not _verification_cache_hit:
@@ -1257,10 +1287,15 @@ async def verify_vvp(
             "Cannot validate chain: dossier validation failed"
         )
 
+    if timer:
+        timer.stop()  # phase5_5_chain
+
     # -------------------------------------------------------------------------
     # Phase 9: Revocation Checking (§5.1.1-2.9)
     # -------------------------------------------------------------------------
     # revocation_clear is a REQUIRED child of dossier_verified per §3.3B
+    if timer:
+        timer.start("phase9_revocation")
     if not _verification_cache_hit:
         revocation_claim = ClaimBuilder("revocation_clear")
         revoked_saids: List[str] = []
@@ -1342,6 +1377,9 @@ async def verify_vvp(
             f"Stored verification cache: {vvp_identity.evd[:50]}... "
             f"kid={passport.header.kid[:30]}... saids={len(_contained)}"
         )
+
+    if timer:
+        timer.stop()  # phase9_revocation
 
     # -------------------------------------------------------------------------
     # Sprint 15: Authorization Validation (§5A Steps 10-11)
@@ -1676,6 +1714,8 @@ async def verify_vvp(
     # -------------------------------------------------------------------------
     # Phase 6: Build Claim Tree
     # -------------------------------------------------------------------------
+    if timer:
+        timer.start("phase6_claim_tree")
     passport_node = passport_claim.build()
     if not _verification_cache_hit:
         chain_node = chain_claim.build()
@@ -1848,6 +1888,10 @@ async def verify_vvp(
     if brand_info and brand_claim and brand_claim.status == ClaimStatus.VALID:
         response_brand_name = brand_info.brand_name
         response_brand_logo_url = brand_info.brand_logo_url
+
+    if timer:
+        timer.stop()  # phase6_claim_tree
+        timer.stop()  # total
 
     return request_id, VerifyResponse(
         request_id=request_id,

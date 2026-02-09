@@ -185,6 +185,73 @@ Fully validated DossierDAG with:
 
 The key design principle throughout is **graceful degradation**: strict CESR parsing falls back to permissive JSON extraction; compact/partial variants produce INDETERMINATE rather than INVALID; ToIP warnings are informational rather than blocking. This reflects the VVP spec's section 2.2 principle that "uncertainty must be explicit" — the system distinguishes between definitively invalid credentials and those that simply cannot be fully verified with the available evidence.
 
+## Performance Characteristics
+
+Measured with `tests/perf/test_dossier_perf.py` (Sprint 54). All times are wall-clock milliseconds on a single core. The `verify.py` orchestrator accepts an optional `PhaseTimer` parameter for per-request instrumentation.
+
+### Per-Stage Timing (representative fixtures)
+
+| Stage | trial_dossier.json (129 KB, 6 ACDCs, Provenant wrapper) | acme_dossier.json (1.8 KB, 3 ACDCs, plain JSON) |
+|---|---|---|
+| **1. Format Detection** (`_is_cesr_stream`) | 6.1 ms | <0.01 ms |
+| **1-3. parse_dossier** (detect + parse + extract) | 58.7 ms (first call) / 12.0 ms avg (warm) | 0.07 ms |
+| **4a. DAG Construction** (`build_dag`) | 0.01 ms | 0.01 ms |
+| **4b. DAG Validation** (`validate_dag`) | 0.07 ms | 0.04 ms |
+| **5a. SAID Verification** (`validate_acdc_said`) | 124 ms | 0.01 ms |
+
+**Key observations:**
+
+- **Format detection is O(n) for JSON-then-CESR**: `_is_cesr_stream()` must scan the entire JSON body (brace-depth tracking) before checking for a trailing `-` CESR attachment code. For the 129 KB Provenant wrapper this costs ~6 ms. For bare CESR (prefix check) or short JSON (<2 KB) it is <0.01 ms.
+- **SAID verification dominates CPU time**: Blake3 hashing each credential's canonical form is the most expensive offline operation (124 ms for 6 ACDCs). This is proportional to credential count and payload size.
+- **DAG construction and validation are negligible**: Even for 50-credential chains, `build_dag` + `validate_dag` < 0.2 ms combined.
+- **First-call overhead**: The initial `parse_dossier` call includes import-time costs (~58 ms). Subsequent calls average 12 ms for the trial dossier.
+
+### Scaling by Credential Count (synthetic linear chains)
+
+| Credentials | Bytes | parse_dossier (ms) | DAG build+validate (ms) | Total (ms) |
+|---|---|---|---|---|
+| 3 | 999 | 0.018 | 0.030 | 0.048 |
+| 5 | 1,739 | 0.020 | 0.023 | 0.042 |
+| 10 | 3,589 | 0.058 | 0.049 | 0.107 |
+| 20 | 7,298 | 0.058 | 0.076 | 0.134 |
+| 50 | 18,428 | 0.141 | 0.193 | 0.334 |
+| 100 | 36,978 | 0.264 | 0.365 | 0.630 |
+
+Scaling is approximately linear. A 100-credential chain (37 KB) completes all offline stages in <1 ms.
+
+### Variance (20 iterations, trial_dossier.json)
+
+| Stage | avg (ms) | median (ms) | min (ms) | max (ms) | stdev (ms) |
+|---|---|---|---|---|---|
+| parse_dossier | 12.26 | 11.98 | 11.63 | 14.18 | 0.78 |
+| dag_build | 0.005 | 0.004 | 0.003 | 0.010 | 0.002 |
+| dag_validate | 0.048 | 0.046 | 0.039 | 0.063 | 0.007 |
+
+Low variance (CV < 7% for parse_dossier) indicates stable, predictable performance.
+
+### Timing Instrumentation
+
+The `verify.py` orchestrator is instrumented with optional `PhaseTimer` hooks at these boundaries:
+
+| Timer Phase | verify.py Section | What It Measures |
+|---|---|---|
+| `total` | Full `verify_vvp()` | End-to-end verification |
+| `phase2_identity` | VVP-Identity header parse | Header parsing (pure CPU) |
+| `phase3_passport` | PASSporT parse + binding | JWT decode + field validation |
+| `phase4_signature` | KERI signature verification | OOBI resolution (network) + Ed25519 verify |
+| `phase5_dossier` | Dossier fetch + parse + validate | HTTP fetch (network) + stages 1-4 |
+| `phase5_5_chain` | ACDC chain verification | Schema validation + edge operators |
+| `phase9_revocation` | Revocation checking | TEL queries (network) |
+| `phase6_claim_tree` | Claim tree construction | Pure CPU tree assembly |
+
+Usage:
+```python
+from app.vvp.timing import PhaseTimer
+timer = PhaseTimer()
+request_id, response = await verify_vvp(req, timer=timer)
+print(timer.to_summary_table())
+```
+
 ## Key Source Files
 
 | File | Responsibility |

@@ -11,10 +11,21 @@ Chain validation ensures:
 import base64
 import hashlib
 import json
+import math
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
+
+try:
+    import pysodium as _pysodium
+except ImportError:
+    _pysodium = None  # type: ignore[assignment]
+
+try:
+    import blake3 as _blake3
+except ImportError:
+    _blake3 = None  # type: ignore[assignment]
 
 from .cesr import CESRMessage, parse_cesr_stream as cesr_parse, is_cesr_stream
 from .exceptions import (
@@ -714,9 +725,9 @@ def _verify_signature(message: bytes, signature: bytes, public_key: bytes) -> bo
         return False
 
     try:
-        # Lazy import to avoid requiring pysodium for parsing-only operations
-        import pysodium
-        pysodium.crypto_sign_verify_detached(signature, message, public_key)
+        if _pysodium is None:
+            return False
+        _pysodium.crypto_sign_verify_detached(signature, message, public_key)
         return True
     except Exception:
         return False
@@ -749,10 +760,9 @@ def compute_said(data: Dict[str, Any], algorithm: str = "blake3-256") -> str:
 
     # Hash
     if algorithm == "blake3-256":
-        try:
-            import blake3
-            digest = blake3.blake3(canonical.encode("utf-8")).digest()
-        except ImportError:
+        if _blake3 is not None:
+            digest = _blake3.blake3(canonical.encode("utf-8")).digest()
+        else:
             # Fall back to sha256 if blake3 not available
             digest = hashlib.sha256(canonical.encode("utf-8")).digest()
     else:
@@ -863,15 +873,14 @@ def compute_said_canonical(
     canonical_bytes = most_compact_form(event, said_field=said_field)
 
     # Hash with Blake3-256
-    try:
-        import blake3
-        digest = blake3.blake3(canonical_bytes).digest()
-    except ImportError:
-        if require_blake3:
-            raise ImportError(
-                "blake3 is required for production SAID computation. "
-                "Install with: pip install blake3"
-            )
+    if _blake3 is not None:
+        digest = _blake3.blake3(canonical_bytes).digest()
+    elif require_blake3:
+        raise ImportError(
+            "blake3 is required for production SAID computation. "
+            "Install with: pip install blake3"
+        )
+    else:
         # Fall back to SHA256 in test mode
         digest = hashlib.sha256(canonical_bytes).digest()
 
@@ -953,8 +962,6 @@ def validate_witness_receipts(
         KELChainInvalidError: If insufficient valid witness signatures (KERI_STATE_INVALID).
         ResolutionFailedError: If witness AIDs cannot be resolved.
     """
-    import math
-
     if not event.witness_receipts:
         # No receipts to validate
         # Compute threshold to check if we should fail

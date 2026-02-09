@@ -48,6 +48,10 @@ htmlcov/
 PLAN_Sprint*.md
 REVIEW_Sprint*.md
 
+# Logs
+*_debug.log
+*.log
+
 # OS
 .DS_Store
 Thumbs.db
