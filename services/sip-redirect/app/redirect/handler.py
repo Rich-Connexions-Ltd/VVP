@@ -86,8 +86,9 @@ async def _capture_event(
             "redirect_uri": redirect_uri,
             "error": error,
         })
+        log.info(f"Monitor event captured: {request.method} {vvp_status} (code={response_code})")
     except Exception as e:
-        log.debug(f"Failed to capture event for monitoring: {e}")
+        log.error(f"Failed to capture event for monitoring: {e}", exc_info=True)
 
 
 async def handle_invite(request: SIPRequest) -> SIPResponse:

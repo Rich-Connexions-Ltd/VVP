@@ -16,10 +16,38 @@ Push to main
     → Health check verification
 ```
 
+### Deployment Jobs
+
+The pipeline has separate jobs triggered by path filters:
+
+| Job | Trigger Paths | Target |
+|-----|---------------|--------|
+| `deploy-verifier` | `services/verifier/**`, `common/**` | Azure Container Apps |
+| `deploy-issuer` | `services/issuer/**`, `common/**` | Azure Container Apps (LMDB single-revision) |
+| `deploy-sip-redirect` | `services/sip-redirect/**`, `common/**` | PBX VM via `az vm run-command` |
+| `deploy-dialplan` | `services/pbx/config/public-sip.xml` | PBX VM FreeSWITCH dialplan |
+
+### Issuer LMDB Constraint
+
+The issuer uses LMDB (keripy) on a shared Azure Files volume. **Two revisions CANNOT run simultaneously** — the LMDB lock blocks the new revision's startup. CI/CD must deactivate the old revision before deploying the new one (causes ~30s downtime).
+
+### SIP Redirect Deploy
+
+Deploys via tarball upload to Azure Blob Storage, then single `az vm run-command` that downloads, extracts, symlink-switches, updates systemd, and restarts. Uses a single run-command to avoid Azure serialization conflicts (only one run-command per VM at a time).
+
+Version verification uses `az vm run-command` to curl `localhost:8085/version` (port not externally accessible via NSG).
+
 ### Verifying Deployment
 ```bash
 # Verifier health check
 curl https://vvp-verifier.wittytree-2a937ccd.uksouth.azurecontainerapps.io/healthz
+
+# Issuer health check
+curl https://vvp-issuer.rcnx.io/healthz
+
+# SIP redirect version (via PBX)
+az vm run-command invoke --resource-group VVP --name vvp-pbx \
+  --command-id RunShellScript --scripts "curl -s http://localhost:8085/version"
 
 # Monitor deployment
 gh run watch
@@ -98,7 +126,7 @@ az vm run-command invoke --resource-group VVP --name vvp-pbx \
 | Path | Purpose |
 |------|---------|
 | `/etc/freeswitch/dialplan/public.xml` | Main dialplan |
-| `/etc/vvp-sip/config.env` | SIP redirect config |
+| `/etc/vvp/sip-redirect.env` | SIP redirect config (env vars including GIT_SHA, VVP_STATUS_HTTP_PORT=8085) |
 | `/var/log/vvp-sip/audit-*.jsonl` | Audit logs |
 
 ### PBX Ports
@@ -108,8 +136,9 @@ az vm run-command invoke --resource-group VVP --name vvp-pbx \
 | FreeSWITCH Internal SIP | 5060 | UDP/TCP |
 | FreeSWITCH External SIP | 5080 | UDP/TCP |
 | FreeSWITCH WebSocket | 7443 | WSS |
-| SIP Redirect | 5060 | UDP |
-| SIP Redirect Status | 8080 | HTTP |
+| SIP Redirect (Signing) | 5070 | UDP |
+| SIP Verify (Verification) | 5071 | UDP |
+| SIP Redirect Status | 8085 | HTTP (localhost only, not exposed via NSG) |
 
 ---
 
@@ -134,10 +163,15 @@ az vm run-command invoke --resource-group VVP --name vvp-pbx \
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `VVP_ISSUER_URL` | `http://localhost:8001` | Issuer API endpoint |
-| `VVP_SIP_LISTEN_PORT` | 5060 | SIP UDP listen port |
+| `VVP_SIP_LISTEN_PORT` | 5060 | SIP UDP listen port (PBX overrides to 5070) |
+| `VVP_STATUS_HTTP_PORT` | 8080 | Status endpoint port (PBX overrides to 8085) |
+| `VVP_STATUS_ADMIN_KEY` | *(none)* | Admin key for /status |
 | `VVP_RATE_LIMIT_RPS` | 10.0 | Requests per second |
 | `VVP_RATE_LIMIT_BURST` | 50 | Burst size |
-| `VVP_STATUS_ADMIN_KEY` | *(none)* | Admin key for /status |
+| `VVP_TN_CACHE_TTL` | 300 | TN lookup cache TTL (seconds) |
+| `VVP_TN_CACHE_MAX_ENTRIES` | 1000 | TN lookup cache max entries |
+| `VVP_MONITOR_ENABLED` | false | Enable monitoring dashboard |
+| `GIT_SHA` | unknown | Version tracking (injected by CI/CD) |
 
 ---
 

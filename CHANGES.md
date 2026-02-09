@@ -39,11 +39,35 @@ Validated the full VVP system health check and SIP call test scripts against pro
 
 The sip-redirect client extracted `data.get("vvp_identity")` and `data.get("passport")` from the issuer `/vvp/create` response, but the issuer returns `vvp_identity_header` and `passport_jwt`. This caused P-VVP-Identity and P-VVP-Passport headers to be silently `None` in all 302 redirect responses.
 
+### Additional Files Modified (Post-Archival Fixes)
+
+| File | Changes |
+|------|---------|
+| `.github/workflows/deploy.yml` | Combined deploy+restart into single `az vm run-command` to avoid serialization conflict; changed version verification from external curl to `az vm run-command` with `localhost:8085`; added 15s sleep before verification |
+| `scripts/system-health-check.sh` | Fixed SIP-Redirect health check to use `pbx_run` with `localhost:8085` instead of external curl; batched PBX checks into single `az vm run-command` calls; added retry logic with 15s backoff; fixed macOS `base64` compatibility |
+| `services/sip-redirect/app/redirect/handler.py` | Upgraded monitoring log levels (debug→error with traceback for failures, added info log for successful captures) |
+| `services/sip-redirect/app/sip/transport.py` | INVITE transaction deduplication (Sprint 53 fix for retransmission race) |
+| `services/pbx/config/public-sip.xml` | Extended SIP Timer B timeout to 35s, updated loopback dialplan API key |
+
+### Bug Fix: CI/CD SIP Redirect Deploy Verification
+
+The deploy pipeline verified the SIP redirect version by curling `http://pbx.rcnx.io:8080/version` externally. This failed because: (a) the status server listens on port 8085 (`VVP_STATUS_HTTP_PORT=8085`), not 8080 (occupied by FusionPBX PHP); (b) port 8085 is not exposed through Azure NSG. Fixed by using `az vm run-command` with `localhost:8085`.
+
+### Bug Fix: Azure VM Run-Command Serialization
+
+Azure allows only one `az vm run-command` per VM at a time. The deploy pipeline had separate steps for "deploy code" and "update systemd + restart", causing the second to fail with `Conflict`. Fixed by combining into a single run-command. Same issue in `system-health-check.sh` fixed by batching PBX checks and adding retry logic.
+
 ### Commits
 
 - `6389b8b` — Sprint 53: Add cache timing instrumentation and CLI regression tests
 - `a142c61` — Add admin mock-vlei reinitialize endpoint and issuer bootstrap script
 - `ca8e54f` — Fix SIP redirect VVP header extraction and enhance bootstrap script
+- `1b000f7` — Fix loopback call: INVITE deduplication, correct PSTN numbers
+- `293d091` — Add OVC brand logo to issuer static assets
+- `c801e57` — Fix issuer deploy: deactivate ALL active revisions, not just traffic>0
+- `c7f440e` — Fix SIP redirect deploy verification: use correct port via az CLI
+- `58e1971` — Fix SIP redirect deploy: combine VM commands to avoid serialization conflict
+- `c8bada0` — Fix system health check: correct PBX port, batch az commands, fix macOS base64
 
 ---
 
