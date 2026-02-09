@@ -782,10 +782,14 @@ jobs:
             --output tsv)
           echo "url=$SAS_URL" >> $GITHUB_OUTPUT
 
-      - name: Deploy with atomic symlink switch
+      - name: Deploy, update systemd, and restart
         run: |
           VERSION="${{ github.sha }}"
           SAS_URL="${{ steps.sas.outputs.url }}"
+          # Base64-encode the systemd unit to avoid YAML escaping issues
+          UNIT_B64=$(echo -e '[Unit]\nDescription=VVP SIP Redirect Signing Service\nAfter=network.target\n\n[Service]\nType=simple\nUser=root\nEnvironmentFile=/etc/vvp/sip-redirect.env\nWorkingDirectory=/opt/vvp/sip-redirect/current\nExecStart=/opt/vvp/venv/bin/python3 -m app.main\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=multi-user.target\n' | base64 -w0)
+          # Single az vm run-command to avoid serialization conflicts
+          # (Azure only allows one run-command at a time per VM)
           az vm run-command invoke \
             --resource-group VVP --name vvp-pbx \
             --command-id RunShellScript \
@@ -793,6 +797,8 @@ jobs:
               set -e
               VERSION='${VERSION}'
               DEPLOY_DIR=/opt/vvp/sip-redirect
+
+              # --- Phase 1: Deploy code ---
 
               # Ensure venv exists with required packages (Sprint 47: monitoring dashboard)
               if [ ! -d /opt/vvp/venv ]; then
@@ -818,18 +824,8 @@ jobs:
               rm -f /tmp/sip-redirect-\${VERSION}.tar.gz
 
               echo 'Deployed version: '\${VERSION}
-            "
 
-      - name: Update systemd unit and restart
-        run: |
-          # Create systemd unit that uses venv Python and enables monitor
-          UNIT_B64=$(echo -e '[Unit]\nDescription=VVP SIP Redirect Signing Service\nAfter=network.target\n\n[Service]\nType=simple\nUser=root\nEnvironmentFile=/etc/vvp/sip-redirect.env\nWorkingDirectory=/opt/vvp/sip-redirect/current\nExecStart=/opt/vvp/venv/bin/python3 -m app.main\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=multi-user.target\n' | base64 -w0)
-
-          az vm run-command invoke \
-            --resource-group VVP --name vvp-pbx \
-            --command-id RunShellScript \
-            --scripts "
-              set -e
+              # --- Phase 2: Update systemd and restart ---
 
               # Update systemd unit to use venv
               echo '${UNIT_B64}' | base64 -d > /etc/systemd/system/vvp-sip-redirect.service
@@ -847,7 +843,7 @@ jobs:
 
               # Update GIT_SHA to current deployment
               sed -i '/^GIT_SHA=/d' /etc/vvp/sip-redirect.env
-              echo 'GIT_SHA=${{ github.sha }}' >> /etc/vvp/sip-redirect.env
+              echo 'GIT_SHA=${VERSION}' >> /etc/vvp/sip-redirect.env
 
               # Reload and restart
               systemctl daemon-reload
@@ -864,6 +860,8 @@ jobs:
           # Status server listens on port 8085 (configured via VVP_STATUS_HTTP_PORT
           # in /etc/vvp/sip-redirect.env). Port is not exposed externally through
           # the Azure NSG, so we verify via az vm run-command.
+          # Brief pause to let the run-command extension fully release.
+          sleep 15
           for i in {1..6}; do
             RESULT=$(az vm run-command invoke \
               --resource-group VVP --name vvp-pbx \
