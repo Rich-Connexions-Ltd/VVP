@@ -69,7 +69,7 @@ WITNESS1_URL="https://vvp-witness1.rcnx.io"
 WITNESS2_URL="https://vvp-witness2.rcnx.io"
 WITNESS3_URL="https://vvp-witness3.rcnx.io"
 PBX_HOST="pbx.rcnx.io"
-SIP_REDIRECT_STATUS_URL="http://pbx.rcnx.io:8080"
+SIP_REDIRECT_STATUS_PORT=8085  # VVP_STATUS_HTTP_PORT on PBX (not externally accessible)
 
 # Witness AIDs (deterministic from salts)
 WAN_AID="BBilc4-L3tFUnfM_wJr4S4OJanAv_VmF_dJNN6vkf2Ha"
@@ -108,7 +108,7 @@ while [[ $# -gt 0 ]]; do
             WITNESS1_URL="http://localhost:5642"
             WITNESS2_URL="http://localhost:5643"
             WITNESS3_URL="http://localhost:5644"
-            SIP_REDIRECT_STATUS_URL="http://localhost:8080"
+            SIP_REDIRECT_STATUS_PORT=8080  # local dev uses default port
             shift
             ;;
         --restart)
@@ -342,12 +342,29 @@ check_witness_oobi() {
 # Usage: pbx_run <command>
 pbx_run() {
     local cmd="$1"
-    az vm run-command invoke \
-        --resource-group VVP \
-        --name vvp-pbx \
-        --command-id RunShellScript \
-        --scripts "$cmd" \
-        --query "value[0].message" -o tsv 2>/dev/null
+    # Azure allows only one run-command per VM at a time. Retry on Conflict.
+    local attempt
+    for attempt in 1 2 3; do
+        local result
+        result=$(az vm run-command invoke \
+            --resource-group VVP \
+            --name vvp-pbx \
+            --command-id RunShellScript \
+            --scripts "$cmd" \
+            --query "value[0].message" -o tsv 2>&1)
+        local rc=$?
+        if [ $rc -eq 0 ]; then
+            echo "$result"
+            return 0
+        fi
+        if echo "$result" | grep -q "Conflict"; then
+            sleep 15
+            continue
+        fi
+        # Non-conflict error — fail immediately
+        return $rc
+    done
+    return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -478,22 +495,24 @@ check_pbx_services() {
 
     local failed=0
 
-    # --- SIP Redirect HTTP health (accessible externally) ---
-    check_http_health "SIP-Redirect" "$SIP_REDIRECT_STATUS_URL" "/health" || failed=1
-    check_http_version "SIP-Redirect" "$SIP_REDIRECT_STATUS_URL" || true
-
-    # --- PBX VM process checks via Azure CLI ---
+    # --- All PBX checks in a single az vm run-command (Azure allows only one at a time) ---
     log_check "PBX VM services via Azure CLI"
 
     local pbx_output
     pbx_output=$(pbx_run "
+        echo '=== SIP Redirect Health ==='
+        curl -sf --max-time 5 http://localhost:$SIP_REDIRECT_STATUS_PORT/health 2>/dev/null || echo 'HEALTH_FAIL'
+        echo ''
+        echo '=== SIP Redirect Version ==='
+        curl -sf --max-time 5 http://localhost:$SIP_REDIRECT_STATUS_PORT/version 2>/dev/null || echo '{}'
+        echo ''
         echo '=== Service Status ==='
         echo \"freeswitch:\$(systemctl is-active freeswitch 2>/dev/null || echo 'not-found')\"
         echo \"sip-redirect:\$(systemctl is-active vvp-sip-redirect 2>/dev/null || echo 'not-found')\"
         echo \"sip-verify:\$(systemctl is-active vvp-sip-verify 2>/dev/null || echo 'not-found')\"
         echo ''
         echo '=== Listening Ports ==='
-        ss -tulnp 2>/dev/null | grep -E ':(5060|5070|5071|5080|7443|8080) ' || echo 'No VVP ports found'
+        ss -tulnp 2>/dev/null | grep -E ':(5060|5070|5071|5080|7443|8085) ' || echo 'No VVP ports found'
         echo ''
         echo '=== SIP Profiles ==='
         fs_cli -x 'sofia status' 2>/dev/null | head -20 || echo 'Could not query FreeSWITCH'
@@ -502,6 +521,29 @@ check_pbx_services() {
         record_result "PBX" "vm_access" "fail" "az vm run-command failed"
         return 1
     }
+
+    # --- Parse SIP Redirect health ---
+    log_check "SIP-Redirect health at localhost:$SIP_REDIRECT_STATUS_PORT"
+    if echo "$pbx_output" | grep -q '"status".*"healthy"'; then
+        log_pass "SIP-Redirect is healthy"
+        record_result "SIP-Redirect" "health" "pass" "Healthy"
+    else
+        log_fail "SIP-Redirect health check failed"
+        record_result "SIP-Redirect" "health" "fail" "Unhealthy"
+        failed=1
+    fi
+
+    # --- Parse SIP Redirect version ---
+    log_check "SIP-Redirect version at localhost:$SIP_REDIRECT_STATUS_PORT"
+    local sip_version
+    sip_version=$(echo "$pbx_output" | grep -o '"short_sha": *"[^"]*"' | head -1 | sed 's/.*"short_sha": *"//;s/"//' || echo "")
+    if [ -n "$sip_version" ] && [ "$sip_version" != "unknown" ]; then
+        log_pass "SIP-Redirect version $sip_version"
+        record_result "SIP-Redirect" "version" "pass" "$sip_version"
+    else
+        log_warn "SIP-Redirect version unknown"
+        record_result "SIP-Redirect" "version" "warn" "unknown"
+    fi
 
     if [ "$VERBOSE" = true ] && [ "$JSON_OUTPUT" = false ]; then
         echo "$pbx_output" | while IFS= read -r line; do
@@ -608,15 +650,16 @@ for svc in data.get('services', []):
         failed=1
     fi
 
-    # PBX-to-service connectivity (via Azure CLI)
+    # PBX-to-service connectivity (single az vm run-command to avoid serialization)
     if [ "$MODE" = "azure" ] && [ "$SKIP_PBX" != "true" ]; then
-        log_check "PBX → Issuer API connectivity"
         local pbx_conn
         pbx_conn=$(pbx_run "
-            curl -sf --max-time 10 https://vvp-issuer.rcnx.io/healthz 2>/dev/null && echo 'OK' || echo 'FAIL'
+            echo \"issuer:\$(curl -sf --max-time 10 https://vvp-issuer.rcnx.io/healthz 2>/dev/null && echo 'OK' || echo 'FAIL')\"
+            echo \"verifier:\$(curl -sf --max-time 10 https://vvp-verifier.rcnx.io/healthz 2>/dev/null && echo 'OK' || echo 'FAIL')\"
         " 2>/dev/null) || pbx_conn="ERROR"
 
-        if echo "$pbx_conn" | grep -q "OK"; then
+        log_check "PBX → Issuer API connectivity"
+        if echo "$pbx_conn" | grep "^issuer:" | grep -q "OK"; then
             log_pass "PBX can reach Issuer API"
             record_result "PBX" "issuer_connectivity" "pass" "Reachable"
         else
@@ -626,11 +669,7 @@ for svc in data.get('services', []):
         fi
 
         log_check "PBX → Verifier API connectivity"
-        pbx_conn=$(pbx_run "
-            curl -sf --max-time 10 https://vvp-verifier.rcnx.io/healthz 2>/dev/null && echo 'OK' || echo 'FAIL'
-        " 2>/dev/null) || pbx_conn="ERROR"
-
-        if echo "$pbx_conn" | grep -q "OK"; then
+        if echo "$pbx_conn" | grep "^verifier:" | grep -q "OK"; then
             log_pass "PBX can reach Verifier API"
             record_result "PBX" "verifier_connectivity" "pass" "Reachable"
         else
@@ -734,7 +773,8 @@ _run_sip_tests_pbx() {
     # Inline the SIP test as a Python one-liner run on the PBX.
     # We send the full test script via base64 to avoid shell escaping issues.
     local script_b64
-    script_b64=$(base64 -w0 "$SIP_TEST_SCRIPT" 2>/dev/null || base64 "$SIP_TEST_SCRIPT" 2>/dev/null)
+    # macOS base64 uses -i for file input; Linux uses positional arg + -w0
+    script_b64=$(base64 -w0 "$SIP_TEST_SCRIPT" 2>/dev/null || base64 -i "$SIP_TEST_SCRIPT" | tr -d '\n')
 
     if [ -z "$script_b64" ]; then
         log_fail "Could not encode SIP test script"
@@ -958,7 +998,8 @@ _run_timing_tests() {
 
     # Deploy sip-call-test.py to PBX and run chained timing
     local script_b64
-    script_b64=$(base64 -w0 "$SIP_TEST_SCRIPT" 2>/dev/null || base64 "$SIP_TEST_SCRIPT" 2>/dev/null)
+    # macOS base64 uses -i for file input; Linux uses positional arg + -w0
+    script_b64=$(base64 -w0 "$SIP_TEST_SCRIPT" 2>/dev/null || base64 -i "$SIP_TEST_SCRIPT" | tr -d '\n')
 
     if [ -z "$script_b64" ]; then
         log_fail "Could not encode SIP test script for timing"
