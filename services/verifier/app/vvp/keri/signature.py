@@ -11,6 +11,11 @@ Note: pysodium is imported lazily inside functions to:
 from datetime import datetime, timezone
 from typing import Optional
 
+try:
+    import pysodium as _pysodium
+except ImportError:
+    _pysodium = None  # type: ignore[assignment]
+
 from app.vvp.passport import Passport
 from .key_parser import parse_kid_to_verkey
 from .exceptions import SignatureInvalidError
@@ -43,10 +48,11 @@ def verify_passport_signature(passport: Passport) -> None:
     signing_input = f"{passport.raw_header}.{passport.raw_payload}".encode("ascii")
 
     # Step 3: Verify signature using pysodium (libsodium)
-    import pysodium
+    if _pysodium is None:
+        raise SignatureInvalidError("pysodium not available for signature verification")
     try:
         # pysodium.crypto_sign_verify_detached raises ValueError if invalid
-        pysodium.crypto_sign_verify_detached(
+        _pysodium.crypto_sign_verify_detached(
             passport.signature,
             signing_input,
             verkey.raw
@@ -229,7 +235,7 @@ async def _verify_passport_signature_tier2_impl(
 
     for signing_key in key_state.signing_keys:
         try:
-            pysodium.crypto_sign_verify_detached(
+            _pysodium.crypto_sign_verify_detached(
                 passport.signature,
                 signing_input,
                 signing_key

@@ -1,0 +1,36 @@
+{
+  "description": "Real Provenant JWTs for performance characterization (Sprint 54). All share the same kid OOBI (witness5.stage.provenant.net for AID EGay5ufBqAanbhFa_qe-KMFUPJHn8J0MFba96yyWRrLF).",
+  "jwts": {
+    "P1_valid_with_brand": {
+      "label": "Valid evidence with brand credential",
+      "orig_tn": "17043221013",
+      "dossier_said": "ECqwVDNYQN05pjpJfLDzDFXiTQOZ5ZJzI59k2P9IqjCs",
+      "has_brand": true,
+      "expected_outcome": "VALID",
+      "jwt": "eyJhbGciOiJFZERTQSIsInR5cCI6InBhc3Nwb3J0IiwicHB0IjoidnZwIiwia2lkIjoiaHR0cDovL3dpdG5lc3M1LnN0YWdlLnByb3ZlbmFudC5uZXQ6NTYzMS9vb2JpL0VHYXk1dWZCcUFhbmJoRmFfcWUtS01GVVBKSG44SjBNRmJhOTZ5eVdSckxGL3dpdG5lc3MifQ.eyJvcmlnIjp7InRuIjpbIjE3MDQzMjIxMDEzIl19LCJkZXN0Ijp7InRuIjpbIjEyMTIzMzMxMjM0Il19LCJpYXQiOjE3NzAwNDY0NDgsImNhcmQiOlsiQ0FURUdPUklFUzoiLCJMT0dPO0hBU0g9c2hhMjU2LTRkODgyMDg0NGQzZmRkMjRiZjcyODEzYWU5YmIzNTFhNTFmNzlkNTA3ZjE2YjM0NGRiYmQ4NmQ3YThjMWEzNzc7VkFMVUU9VVJJOmh0dHBzOi8vcGxhY2Vob2xkLmNvLzEwMCIsIk5PVEU7TEVJOjk4NDUwMDk4M0FENzFFNEZCQzQxIiwiT1JHOlRlc3QgRW50ZXJwcmlzZSJdLCJjYWxsX3JlYXNvbiI6bnVsbCwiZ29hbCI6bnVsbCwiZXZkIjoiaHR0cHM6Ly9vcmlnaW4uZGVtby5wcm92ZW5hbnQubmV0L3YxL2FnZW50L3B1YmxpYy9FQ3F3VkROWVFOMDVwanBKZkxEekRGWGlUUU9aNVpKekk1OWsyUDlJcWpDcy9kb3NzaWVyLmNlc3IiLCJvcmlnSWQiOiIiLCJleHAiOjE3NzAwNDY3NDgsInJlcXVlc3RfaWQiOiIifQ.b1uJzhFjFhqbWVCrbXLUMrSNhws-K-U7QNbTHa1BFdunQbcZ1rPWmxYnc68X2_DdX4tfqggrkvZJjXEsFK8wDQ"
+    },
+    "P2_valid_no_brand": {
+      "label": "Valid evidence without brand credential",
+      "orig_tn": "17043221014",
+      "dossier_said": "EEQb4RPlBr6F5huO1cXxNfK6Ni0a3fg6Y8T70c5zkT-g",
+      "has_brand": false,
+      "expected_outcome": "VALID",
+      "jwt": "eyJhbGciOiJFZERTQSIsInR5cCI6InBhc3Nwb3J0IiwicHB0IjoidnZwIiwia2lkIjoiaHR0cDovL3dpdG5lc3M1LnN0YWdlLnByb3ZlbmFudC5uZXQ6NTYzMS9vb2JpL0VHYXk1dWZCcUFhbmJoRmFfcWUtS01GVVBKSG44SjBNRmJhOTZ5eVdSckxGL3dpdG5lc3MifQ.eyJvcmlnIjp7InRuIjpbIjE3MDQzMjIxMDE0Il19LCJkZXN0Ijp7InRuIjpbIjEyMTIzMzMxMjM0Il19LCJpYXQiOjE3NzAwNDY3NjQsImNhcmQiOm51bGwsImNhbGxfcmVhc29uIjpudWxsLCJnb2FsIjpudWxsLCJldmQiOiJodHRwczovL29yaWdpbi5kZW1vLnByb3ZlbmFudC5uZXQvdjEvYWdlbnQvcHVibGljL0VFUWI0UlBsQnI2RjVodU8xY1h4TmZLNk5pMGEzZmc2WThUNzBjNXprVC1nL2Rvc3NpZXIuY2VzciIsIm9yaWdJZCI6IiIsImV4cCI6MTc3MDA0NzA2NCwicmVxdWVzdF9pZCI6IiJ9.AYeL7ELx4BhSL4AO2gy1W9Fz-srgQHc4cu2F24siSGGVU8ZESsJR97I8KpKLnnAHfsZR9PKqEHRwsi4ZA9dCAA"
+    },
+    "P3_revoked": {
+      "label": "Invalid evidence with revoked credential",
+      "orig_tn": "17043221015",
+      "dossier_said": "EN3HvhfCfi1wiORaQgIQ0yizWYUoOXcI_x5YbE3oBH4n",
+      "has_brand": true,
+      "expected_outcome": "INVALID_REVOKED",
+      "jwt": "eyJhbGciOiJFZERTQSIsInR5cCI6InBhc3Nwb3J0IiwicHB0IjoidnZwIiwia2lkIjoiaHR0cDovL3dpdG5lc3M1LnN0YWdlLnByb3ZlbmFudC5uZXQ6NTYzMS9vb2JpL0VHYXk1dWZCcUFhbmJoRmFfcWUtS01GVVBKSG44SjBNRmJhOTZ5eVdSckxGL3dpdG5lc3MifQ.eyJvcmlnIjp7InRuIjpbIjE3MDQzMjIxMDE1Il19LCJkZXN0Ijp7InRuIjpbIjEyMTIzMzMxMjM0Il19LCJpYXQiOjE3NzAwNDY4MDMsImNhcmQiOlsiQ0FURUdPUklFUzoiLCJMT0dPO0hBU0g9c2hhMjU2LTRkODgyMDg0NGQzZmRkMjRiZjcyODEzYWU5YmIzNTFhNTFmNzlkNTA3ZjE2YjM0NGRiYmQ4NmQ3YThjMWEzNzc7VkFMVUU9VVJJOmh0dHBzOi8vcGxhY2Vob2xkLmNvLzEwMCIsIk5PVEU7TEVJOjk4NDUwMDk4M0FENzFFNEZCQzQxIiwiT1JHOlRlc3QgRW50ZXJwcmlzZSJdLCJjYWxsX3JlYXNvbiI6bnVsbCwiZ29hbCI6bnVsbCwiZXZkIjoiaHR0cHM6Ly9vcmlnaW4uZGVtby5wcm92ZW5hbnQubmV0L3YxL2FnZW50L3B1YmxpYy9FTjNIdmhmQ2ZpMXdpT1JhUWdJUTB5aXpXWVVvT1hjSV94NVliRTNvQkg0bi9kb3NzaWVyLmNlc3IiLCJvcmlnSWQiOiIiLCJleHAiOjE3NzAwNDcxMDMsInJlcXVlc3RfaWQiOiIifQ.63AjkvH-jrCCnWfti_wys4qElyVuDWdCBo3Ajz1z77z7x6A_HJWbSDm4Bf7pYbU658YOaTfhgltxYu3ZfurkBw"
+    }
+  },
+  "common": {
+    "kid": "http://witness5.stage.provenant.net:5631/oobi/EGay5ufBqAanbhFa_qe-KMFUPJHn8J0MFba96yyWRrLF/witness",
+    "alg": "EdDSA",
+    "ppt": "vvp",
+    "dest_tn": "12123331234",
+    "evd_url_pattern": "https://origin.demo.provenant.net/v1/agent/public/{said}/dossier.cesr"
+  }
+}

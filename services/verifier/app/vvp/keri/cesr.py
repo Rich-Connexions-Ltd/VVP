@@ -20,6 +20,7 @@ Count code reference (CESR V1.0):
 Where `##` is a 2-character base64 count value.
 """
 
+import base64
 import json
 import re
 from dataclasses import dataclass, field
@@ -32,6 +33,13 @@ from .exceptions import (
     CESRMalformedError,
     UnsupportedSerializationKind,
 )
+
+# Pre-built B64 lookup table: char -> int value. O(1) vs O(64) linear scan.
+_B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+_B64_LOOKUP: dict = {c: i for i, c in enumerate(_B64_CHARS)}
+
+# Pre-compiled regex for version string parsing
+_VERSION_RE = re.compile(r"^([A-Z]{4})(\d)(\d)([A-Z]{4})([0-9a-f]{6})(_)$")
 
 
 class CountCode(Enum):
@@ -141,7 +149,7 @@ def _b64_to_int(b64_chars: str) -> int:
     """Convert base64 characters to integer.
 
     CESR uses a specific base64 alphabet: A-Z, a-z, 0-9, -, _
-    Each character represents 6 bits.
+    Each character represents 6 bits. Uses pre-built lookup table for O(1) per char.
 
     Args:
         b64_chars: Base64 encoded characters.
@@ -149,10 +157,9 @@ def _b64_to_int(b64_chars: str) -> int:
     Returns:
         Integer value.
     """
-    B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
     value = 0
     for char in b64_chars:
-        value = value * 64 + B64_CHARS.index(char)
+        value = value * 64 + _B64_LOOKUP[char]
     return value
 
 
@@ -187,7 +194,7 @@ def parse_version_string(data: bytes, offset: int = 0) -> Tuple[CESRVersion, int
         raise CESRMalformedError(f"Version string contains non-ASCII bytes: {e}")
 
     # Parse the version string format
-    match = re.match(r"^([A-Z]{4})(\d)(\d)([A-Z]{4})([0-9a-f]{6})(_)$", vs)
+    match = _VERSION_RE.match(vs)
     if not match:
         raise CESRMalformedError(f"Invalid version string format: {vs!r}")
 
@@ -295,8 +302,6 @@ def _parse_indexed_signature(data: bytes, offset: int) -> Tuple[bytes, int, int]
             raise ResolutionFailedError("Truncated Ed25519 signature")
 
         # Decode the FULL qb64 primitive (including code) to handle CESR alignment
-        import base64
-
         full_qb64 = data[offset : sig_end].decode("ascii")
         try:
             full_decoded = base64.urlsafe_b64decode(full_qb64)
@@ -321,8 +326,6 @@ def _parse_indexed_signature(data: bytes, offset: int) -> Tuple[bytes, int, int]
                 raise ResolutionFailedError("Truncated Ed25519 indexed signature")
 
             # Decode the FULL qb64 primitive to handle CESR alignment
-            import base64
-
             full_qb64 = data[offset : sig_end].decode("ascii")
             try:
                 full_decoded = base64.urlsafe_b64decode(full_qb64)
@@ -412,8 +415,6 @@ def _parse_trans_receipt_quadruple(
     Raises:
         CESRMalformedError: If quadruple format is invalid.
     """
-    import base64
-
     # Parse transferable AID prefix (44 chars)
     if offset + 44 > len(data):
         raise CESRMalformedError("Truncated transferable receipt: missing prefix")
@@ -872,8 +873,6 @@ def decode_pss_signature(cesr_sig: str) -> bytes:
     Raises:
         ResolutionFailedError: If format is invalid (maps to PASSPORT_PARSE_FAILED).
     """
-    import base64
-
     if not cesr_sig:
         raise ResolutionFailedError("Empty CESR signature")
 

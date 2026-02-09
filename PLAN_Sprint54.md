@@ -161,19 +161,38 @@ Performance characterization requires dossiers of varying complexity. The matrix
 | `PERF-S3` | Synthetic | Medium | 5 | 3 | JSON | Single DE | Chain with delegation edge |
 | `PERF-S4` | Synthetic | JSON+CESR | 3 | 3 | CESR | None | CESR parsing overhead |
 | `PERF-S5` | Synthetic | Compact | 3 | 3 | JSON | None | Compact variants (SAID attrs) |
-| `PERF-P1` | Provenant | Real-world | TBD | TBD | CESR | TBD | Provenant dossier — simple |
-| `PERF-P2` | Provenant | Real-world | TBD | TBD | CESR | TBD | Provenant dossier — medium |
-| `PERF-P3` | Provenant | Real-world | TBD | TBD | CESR | TBD | Provenant dossier — complex |
-| `PERF-P4` | Provenant | Real-world | TBD | TBD | CESR | TBD | Provenant dossier — edge case |
-| `PERF-E1` | Existing | Complex | 6+ | 4+ | JSON | Multi | `tests/fixtures/trial_dossier.json` |
-| `PERF-E2` | Existing | Simple | 3 | 3 | JSON | None | SIP-redirect `acme_dossier.json` |
+| `PERF-P1` | Provenant JWT | Real-world | TBD* | TBD* | CESR | TBD* | Valid + brand (TN 17043221013, SAID ECqwVDNY...) |
+| `PERF-P2` | Provenant JWT | Real-world | TBD* | TBD* | CESR | TBD* | Valid, no brand (TN 17043221014, SAID EEQb4RPl...) |
+| `PERF-P3` | Provenant JWT | Real-world | TBD* | TBD* | CESR | TBD* | Revoked credential (TN 17043221015, SAID EN3Hvhf...) |
+| `PERF-E1` | Existing | Complex | 7 | 3 | Provenant wrapper (CESR) | None | `tests/fixtures/trial_dossier.json` — 163 events, 7 ACDCs, 5 schemas |
+| `PERF-E2` | Existing | Simple | 3 | 3 | JSON array | None | SIP-redirect `acme_dossier.json` — QVI→LE→TNAlloc |
 
-The Provenant serials (`PERF-P*`) will be populated with real dossier SAIDs provided by the user. Each SAID will be resolved via the default EVD URL pattern:
-```
-https://origin.demo.provenant.net/v1/agent/public/{SAID}/dossier.cesr
-```
+*\*TBD: Provenant staging is not accessible from the CI environment. PERF-P* serials require `--run-perf-online` marker and network access to Provenant staging. Dossier complexity will be characterized on first successful fetch.*
 
-Once SAIDs are provided, the `conftest.py` will be updated with the concrete values and their known characteristics (credential count, chain depth, etc.).
+### Provenant JWT Test Data
+
+Three real Provenant JWTs are stored in `tests/perf/fixtures/provenant_jwts.json`. All share the same kid OOBI:
+- **kid**: `http://witness5.stage.provenant.net:5631/oobi/EGay5ufBqAanbhFa_qe-KMFUPJHn8J0MFba96yyWRrLF/witness`
+- **EVD URL pattern**: `https://origin.demo.provenant.net/v1/agent/public/{SAID}/dossier.cesr`
+
+| JWT | Orig TN | Dossier SAID | Brand | Expected |
+|-----|---------|-------------|-------|----------|
+| P1 | 17043221013 | ECqwVDNYQN05pjpJfLDzDFXiTQOZ5ZJzI59k2P9IqjCs | Yes (logo, LEI, org) | VALID |
+| P2 | 17043221014 | EEQb4RPlBr6F5huO1cXxNfK6Ni0a3fg6Y8T70c5zkT-g | No (card=null) | VALID |
+| P3 | 17043221015 | EN3HvhfCfi1wiORaQgIQ0yizWYUoOXcI_x5YbE3oBH4n | Yes (logo, LEI, org) | INVALID (revoked) |
+
+### Existing Fixture Analysis
+
+**PERF-E1 (`trial_dossier.json`)**: Provenant wrapper format (`{"details": "..."}`), 122KB. Contains:
+- 163 KERI events: 13 ICP, 129 IXN, 7 VCP, 7 ISS
+- 7 ACDCs with 5 unique schemas
+- Root credential has 5 edges (vetting, alloc, tnalloc, delsig, bownr)
+- Chain depth: 3 (root → delsig → issuer)
+- No key rotation events
+
+**PERF-E2 (`acme_dossier.json`)**: Plain JSON array, 1.8KB. Contains:
+- 3 ACDCs: QVI → LE → TNAlloc linear chain
+- All test SAIDs (not production-valid)
 
 ### Test Harness
 

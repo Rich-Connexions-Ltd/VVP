@@ -327,7 +327,7 @@ class TestCacheVersioning:
         key = (entry.dossier_url, entry.passport_kid)
         async with cache._lock:
             cache._cache[key] = entry
-            cache._access_order.append(key)
+            cache._access_order[key] = None
 
         result = await cache.get(entry.dossier_url, entry.passport_kid)
         assert result is None
@@ -342,7 +342,7 @@ class TestCacheVersioning:
         key = (entry.dossier_url, entry.passport_kid)
         async with cache._lock:
             cache._cache[key] = entry
-            cache._access_order.append(key)
+            cache._access_order[key] = None
 
         result = await cache.get(entry.dossier_url, entry.passport_kid)
         assert result is None

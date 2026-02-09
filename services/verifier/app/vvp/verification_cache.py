@@ -9,15 +9,15 @@ Only VALID chain results are cached. INVALID and INDETERMINATE results are not
 cached to avoid sticky failures from transient conditions.
 """
 
+import asyncio
 import copy
 import hashlib
 import logging
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, FrozenSet, List, Optional, Set, Tuple
-
-import asyncio
 
 from app.vvp.api_models import ClaimNode, ClaimStatus, ErrorDetail
 
@@ -80,14 +80,13 @@ class CachedDossierVerification:
 def compute_config_fingerprint() -> str:
     """Compute a deterministic hash of all validation-affecting config values.
 
-    Included configs:
-    - TRUSTED_ROOT_AIDS
-    - OPERATOR_VIOLATION_SEVERITY
-    - EXTERNAL_SAID_RESOLUTION_ENABLED
-    - SCHEMA_VALIDATION_STRICT
-    - TIER2_KEL_RESOLUTION_ENABLED
-    - EXTERNAL_SAID_MAX_DEPTH
+    Cached after first computation since config values are set at import time
+    from environment variables and never change at runtime.
     """
+    global _cached_config_fingerprint
+    if _cached_config_fingerprint is not None:
+        return _cached_config_fingerprint
+
     from app.core.config import (
         TRUSTED_ROOT_AIDS,
         VVP_OPERATOR_VIOLATION_SEVERITY,
@@ -106,7 +105,11 @@ def compute_config_fingerprint() -> str:
         f"said_max_depth={EXTERNAL_SAID_MAX_DEPTH}",
     ]
     fingerprint_str = "|".join(parts)
-    return hashlib.sha256(fingerprint_str.encode()).hexdigest()[:16]
+    _cached_config_fingerprint = hashlib.sha256(fingerprint_str.encode()).hexdigest()[:16]
+    return _cached_config_fingerprint
+
+
+_cached_config_fingerprint: Optional[str] = None
 
 
 # =============================================================================
@@ -155,7 +158,7 @@ class VerificationResultCache:
         self._max_entries = max_entries
         self._ttl_seconds = ttl_seconds
         self._cache: Dict[CacheKey, CachedDossierVerification] = {}
-        self._access_order: List[CacheKey] = []  # LRU tracking
+        self._access_order: OrderedDict[CacheKey, None] = OrderedDict()  # LRU: O(1) ops
         self._lock = asyncio.Lock()
         self._metrics = VerificationCacheMetrics()
 
@@ -334,23 +337,21 @@ class VerificationResultCache:
     # ---- Internal helpers (must be called with lock held) ----
 
     def _touch_locked(self, key: CacheKey) -> None:
-        """Move key to end of access order (most recently used)."""
-        if key in self._access_order:
-            self._access_order.remove(key)
-        self._access_order.append(key)
+        """Move key to end of access order (most recently used). O(1)."""
+        self._access_order[key] = None
+        self._access_order.move_to_end(key)
 
     def _evict_locked(self, key: CacheKey) -> None:
         """Remove a specific entry."""
         if key in self._cache:
             del self._cache[key]
             self._metrics.evictions += 1
-        if key in self._access_order:
-            self._access_order.remove(key)
+        self._access_order.pop(key, None)
 
     def _evict_lru_locked(self) -> None:
         """Evict the least recently used entry."""
         if self._access_order:
-            lru_key = self._access_order[0]
+            lru_key = next(iter(self._access_order))
             self._evict_locked(lru_key)
 
 
