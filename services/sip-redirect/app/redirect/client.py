@@ -249,8 +249,8 @@ class IssuerClient:
                 log.info(f"VVP create OK: orig={orig_tn}, elapsed={elapsed:.0f}ms")
                 return VVPCreateResult(
                     success=True,
-                    vvp_identity=data.get("vvp_identity"),
-                    vvp_passport=data.get("passport"),
+                    vvp_identity=data.get("vvp_identity_header"),
+                    vvp_passport=data.get("passport_jwt"),
                 )
             else:
                 try:

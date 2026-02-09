@@ -157,6 +157,42 @@ def step_create_api_key(base_url, admin_key, org_id):
     return body
 
 
+def step_issue_tn_allocation(base_url, org_api_key, org_aid, registry_name, tn_ranges):
+    """Step 3b: Issue TN Allocation credentials for ownership validation.
+
+    The TN lookup endpoint validates that TNs are covered by a TN Allocation
+    credential before allowing VVP attestation.
+    """
+    TN_ALLOC_SCHEMA = "EFvnoHDY7I-kaBBeKlbDbkjG4BaI0nKLGadxBdjMGgSQ"
+    print(f"\n[3b/5] Issuing TN Allocation credentials ({len(tn_ranges)} ranges)...")
+
+    results = []
+    for tn_range in tn_ranges:
+        status, body = api_call(
+            "POST",
+            f"{base_url}/credential/issue",
+            data={
+                "registry_name": registry_name,
+                "schema_said": TN_ALLOC_SCHEMA,
+                "attributes": {
+                    "i": org_aid,
+                    "numbers": tn_range,
+                },
+                "publish_to_witnesses": True,
+            },
+            api_key=org_api_key,
+            timeout=120,
+        )
+        if status != 200:
+            print(f"  WARNING: Failed to issue TN allocation ({status}): {body.get('detail', body)}")
+            continue
+        cred = body["credential"]
+        print(f"  TN Allocation: {cred['said'][:24]}... (range: {tn_range})")
+        results.append(cred)
+
+    return results
+
+
 def step_create_tn_mapping(base_url, org_api_key, tn, dossier_said, identity_name,
                            brand_name, brand_logo_url):
     """Step 4: Create TN mapping."""
@@ -324,14 +360,34 @@ def main():
         sys.exit(1)
 
     org_api_key = key_resp["raw_key"]
+    org_aid = org.get("aid", "")
+    registry_name = f"{identity_name}-registry"
 
-    # Step 4: Create TN mapping (uses org API key for org context)
+    # Step 3b: Issue TN Allocation credentials
+    tn_ranges = [
+        {"start": "+441923311000", "end": "+441923311099"},  # UK test range
+        {"start": "+15551001000", "end": "+15551001099"},    # US test range
+    ]
+    if org_aid:
+        step_issue_tn_allocation(
+            base_url, org_api_key, org_aid, registry_name, tn_ranges,
+        )
+
+    # Step 4: Create TN mappings (uses org API key for org context)
     tn_mapping = None
     if le_said:
         tn_mapping = step_create_tn_mapping(
             base_url, org_api_key, args.tn, le_said, identity_name,
             args.brand_name, args.brand_logo,
         )
+        # Also create UK TN mapping for PBX loopback tests
+        uk_tn_mappings = ["+441923311001", "+441923311006"]
+        for uk_tn in uk_tn_mappings:
+            if uk_tn != args.tn:
+                step_create_tn_mapping(
+                    base_url, org_api_key, uk_tn, le_said, identity_name,
+                    args.brand_name, args.brand_logo,
+                )
     else:
         print("\n[4/5] Skipping TN mapping (no LE credential SAID)")
 
