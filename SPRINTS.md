@@ -40,6 +40,7 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 51 | Verification Result Caching | COMPLETE | Sprint 50 |
 | 52 | Central Service Dashboard | COMPLETE | Sprint 49 |
 | 53 | E2E System Validation & Cache Timing | COMPLETE | Sprint 50, 52 |
+| 54 | Open-Source Standalone VVP Verifier | TODO | Sprints 1-25, 44 |
 
 ---
 
@@ -2873,3 +2874,415 @@ Sprint 49 introduced shared dossier caching (5-minute TTL, LRU 1000 entries) and
 - [ ] `sip-call-test.py --test sign --timing` shows measurable speedup on second call (≥2x)
 - [ ] `sip-call-test.py --test sign --timing --json` produces machine-readable timing data
 - [ ] All timing data is available in system health check JSON output for CI trend tracking
+
+---
+
+## Sprint 54: Open-Source Standalone VVP Verifier
+
+**Goal:** Create a new standalone repository suitable for open-source release containing a self-contained SIP redirect VVP verifier. The repository should be simple enough for anyone to take and build their own VVP verifier, with minimal documentation and logging, and no internal project tooling.
+
+**Prerequisites:** Sprints 1-25 (VVP Verifier implementation), Sprint 44 (SIP Redirect Verification Service) for SIP protocol patterns.
+
+**Background:**
+
+The VVP Verifier has been developed across 25 sprints within this monorepo, resulting in a comprehensive but complex implementation with deep ties to the monorepo's shared `common/` package, extensive UI templates, caching systems, background workers, and internal project tooling (Claude files, sprint plans, review scripts, etc.). This complexity makes it difficult for external developers to adopt.
+
+Sprint 54 extracts the essential VVP verification logic into a clean, standalone repository that:
+- Operates as a **SIP redirect server** receiving SIP INVITEs and returning 302 responses with VVP verification results
+- Provides an **HTTP API** (FastAPI) for programmatic verification and a basic web UI
+- Has **no monorepo dependencies** — all shared code is inlined
+- Uses **minimal logging** — structured but not verbose
+- Includes only the **essential documentation** (README, ARCHITECTURE, ALGORITHMS, SUPPORT)
+- Attributes all inline documentation to **Rich Connexions Ltd**
+- Contains **no internal project files** (no CLAUDE.md, no memory files, no sprint plans, no review scripts, no SPRINTS.md, no CHANGES.md, no knowledge/ directory)
+
+**Architecture:**
+
+```
+External SBC/Carrier ──SIP INVITE + Identity──> Standalone VVP Verifier (UDP 5060)
+                                                        │
+                                                        ▼
+                                                  Parse VVP-Identity
+                                                  Parse PASSporT JWT
+                                                  Verify Ed25519 signature
+                                                  Fetch & validate dossier
+                                                  Verify ACDC chain
+                                                  Check revocation
+                                                  Validate TN authorization
+                                                        │
+PBX/Endpoint <──SIP 302 + X-VVP-* headers───────────────┘
+
+Browser ──HTTP──> FastAPI (port 8000)
+                    ├── GET  /              → Basic verification UI
+                    ├── POST /verify        → JSON verification API
+                    └── GET  /healthz       → Health check
+```
+
+**Repository Structure:**
+
+```
+vvp-verifier/                          # NEW STANDALONE REPOSITORY
+├── app/
+│   ├── __init__.py
+│   ├── main.py                        # FastAPI app + SIP server startup (lifespan manages background workers)
+│   ├── config.py                      # Configuration (env vars, spec constants, cache settings)
+│   ├── sip/
+│   │   ├── __init__.py
+│   │   ├── models.py                  # SIPRequest, SIPResponse dataclasses
+│   │   ├── parser.py                  # RFC 3261 SIP message parser
+│   │   ├── builder.py                 # SIP 302/4xx response builder
+│   │   ├── transport.py               # AsyncIO UDP/TCP server
+│   │   └── handler.py                 # INVITE handler (verify → 302 redirect)
+│   ├── vvp/
+│   │   ├── __init__.py
+│   │   ├── verify.py                  # Verification pipeline orchestrator (cache-aware)
+│   │   ├── header.py                  # VVP-Identity header parser (base64url JSON)
+│   │   ├── passport.py                # PASSporT JWT parser & validator
+│   │   ├── signature.py               # Ed25519 signature verification
+│   │   ├── dossier.py                 # Dossier fetch, parse, DAG validation, LRU+TTL cache
+│   │   ├── acdc.py                    # ACDC models, SAID, chain validation
+│   │   ├── cesr.py                    # CESR encoding/decoding
+│   │   ├── canonical.py               # KERI canonical JSON serialization
+│   │   ├── schema.py                  # Schema SAID registry (vLEI schemas)
+│   │   ├── models.py                  # ClaimNode, VerifyResponse, ErrorCode
+│   │   ├── exceptions.py              # VVPIdentityError, PassportError
+│   │   ├── tel.py                     # TEL client: witness queries for revocation status
+│   │   ├── cache.py                   # Verification result cache (LRU+TTL, config-fingerprinted)
+│   │   └── revocation.py              # Background revocation checker (async worker)
+│   └── templates/
+│       └── index.html                 # Single-page verification UI
+├── tests/
+│   ├── __init__.py
+│   ├── conftest.py                    # Shared fixtures (test JWTs, SAIDs)
+│   ├── test_header.py                 # VVP-Identity parser tests
+│   ├── test_passport.py               # PASSporT parser tests
+│   ├── test_sip.py                    # SIP parser/builder tests
+│   ├── test_cache.py                  # Cache and revocation checker tests
+│   └── test_verify.py                 # Integration verification tests
+├── pyproject.toml                     # Dependencies and project metadata
+├── Dockerfile                         # Container build
+├── .dockerignore
+├── .gitignore
+├── LICENSE                            # MIT License (Rich Connexions Ltd)
+├── README.md                          # Quick start, usage, configuration
+├── ARCHITECTURE.md                    # System design and data flow
+├── ALGORITHMS.md                      # Cryptographic algorithms and spec refs
+└── SUPPORT.md                         # Getting help, contributing
+```
+
+**What to Extract (from monorepo → standalone):**
+
+| Monorepo Source | Standalone Destination | Action |
+|-----------------|------------------------|--------|
+| `services/verifier/app/vvp/header.py` | `app/vvp/header.py` | Simplify, inline config |
+| `services/verifier/app/vvp/passport.py` | `app/vvp/passport.py` | Simplify, inline config |
+| `services/verifier/app/vvp/verify.py` | `app/vvp/verify.py` | Simplify: remove caching, background workers, callee verification, vetter constraints, brand/goal verification. Keep core 8-phase pipeline |
+| `services/verifier/app/vvp/exceptions.py` | `app/vvp/exceptions.py` | Direct copy, simplify error codes |
+| `services/verifier/app/vvp/api_models.py` | `app/vvp/models.py` | Simplify: keep ClaimNode, VerifyResponse, ErrorCode. Remove vetter/delegation/brand models |
+| `services/verifier/app/vvp/keri/signature.py` | `app/vvp/signature.py` | Tier 1 only (direct Ed25519). Remove Tier 2 KEL resolution |
+| `services/verifier/app/vvp/keri/cesr.py` | `app/vvp/cesr.py` | Simplify: keep PSS signature decode, remove full CESR stream parsing |
+| `services/verifier/app/vvp/acdc/` | `app/vvp/acdc.py` | Merge into single file: ACDC model, SAID computation, basic chain validation |
+| `services/verifier/app/vvp/dossier/` | `app/vvp/dossier.py` | Merge into single file: fetch, parse, DAG build/validate. Remove caching |
+| `services/verifier/app/core/config.py` | `app/config.py` | Simplify: keep normative + core configurable constants only |
+| `common/vvp/sip/models.py` | `app/sip/models.py` | Direct extraction |
+| `common/vvp/sip/parser.py` | `app/sip/parser.py` | Direct extraction |
+| `common/vvp/sip/builder.py` | `app/sip/builder.py` | Direct extraction |
+| `common/vvp/sip/transport.py` | `app/sip/transport.py` | Direct extraction |
+| `common/vvp/canonical/keri_canonical.py` | `app/vvp/canonical.py` | Direct extraction |
+| `common/vvp/schema/registry.py` | `app/vvp/schema.py` | Simplify: keep known SAID mappings only |
+| `common/vvp/models/acdc.py` | Inline into `app/vvp/acdc.py` | Merge with ACDC module |
+| `common/vvp/models/dossier.py` | Inline into `app/vvp/dossier.py` | Merge with dossier module |
+| `common/vvp/keri/tel_client.py` | `app/vvp/tel.py` | Simplify: keep witness query, inline TEL parse, chain revocation check. Remove witness pool dependency — use configured witness list directly |
+| `services/verifier/app/vvp/verification_cache.py` | `app/vvp/cache.py` | Extract: LRU+TTL cache keyed by (dossier_url, passport_kid), config fingerprinting, deep-copy on read. Only cache VALID chain results |
+| `services/verifier/app/vvp/revocation_checker.py` | `app/vvp/revocation.py` | Extract: single async worker, dedup by URL, atomic updates across kid variants, graceful error handling |
+| `common/vvp/dossier/cache.py` | Inline into `app/vvp/dossier.py` | Merge dossier cache (LRU+TTL, SAID secondary index) with dossier fetch/parse module |
+
+**What to Exclude (monorepo features NOT carried over):**
+
+| Feature | Reason for Exclusion |
+|---------|---------------------|
+| Tier 2 KEL resolution | Complex KERI infrastructure; Tier 1 is sufficient for standalone |
+| Callee verification (`/verify-callee`) | Specialized use case, not needed for basic verifier |
+| Vetter certification constraints | Advanced governance feature |
+| Brand credential verification | Advanced feature |
+| Goal/business logic verification | Advanced feature |
+| SIP context alignment | Advanced feature |
+| OOBI-based identity discovery | Requires KERI witness infrastructure |
+| External SAID resolution | Requires witness queries |
+| vLEI chain deep resolution | Requires witness queries |
+| Schema OOBI resolution | Requires KERI infrastructure |
+| Multiple UI pages (explorer, admin, tabbed) | Single simple page is sufficient |
+| HTMX partial templates | Overkill for basic UI |
+| Witness pool (dynamic GLEIF discovery) | Simplified to static configured witness list |
+| CLI toolkit | Separate concern |
+| Knowledge directory | Internal documentation |
+| Sprint/review infrastructure | Internal workflow |
+
+**What is Simplified (carried over with reduced complexity):**
+
+| Feature | Monorepo | Standalone |
+|---------|----------|------------|
+| Witness management | Dynamic WitnessPool with GLEIF discovery, per-request witnesses, KEL-extracted witnesses | Static configured list via `VVP_WITNESS_URLS` env var |
+| TEL client | Full witness pool integration, multiple endpoint formats | Direct HTTP queries to configured witnesses, Provenant + standard KERI endpoints |
+| Dossier cache | Separate `common/` package, SAID secondary index, fire-and-forget revocation tasks | Inlined into `dossier.py`, same LRU+TTL+SAID index, simplified task management |
+| Verification cache | Config fingerprinting with 6+ config values, compound (url, kid) key | Same design, fewer config values in fingerprint |
+| Background revocation | Separate module with queue-based dedup | Same async worker pattern, simplified dependencies |
+
+**Verification Pipeline (9 phases):**
+
+The standalone verifier implements a streamlined pipeline compared to the monorepo's 11 phases, but retains caching and revocation checking:
+
+| Phase | Name | Description |
+|-------|------|-------------|
+| 1 | Parse VVP-Identity | Decode base64url JSON header, validate ppt/kid/evd/iat/exp |
+| 2 | Parse PASSporT | Decode JWT, validate alg=EdDSA, ppt=vvp, extract orig/dest/evd |
+| 3 | Bind PASSporT ↔ Identity | Validate ppt/kid match, iat drift ≤5s, exp consistency |
+| 4 | Verify Signature | Ed25519 signature verification (Tier 1: direct key from AID) |
+| 5 | Fetch Dossier | HTTP GET evd URL (with LRU+TTL cache), parse CESR or JSON stream of ACDCs |
+| 6 | Validate DAG | Build directed graph, detect cycles, find single root |
+| 7 | Verify ACDC Chain | Recompute SAIDs, validate signatures, check schema SAIDs (cache VALID results) |
+| 8 | Check Revocation | Query witnesses for TEL events; inline dossier TEL → witness fallback. Background re-check for cached results |
+| 9 | Validate Authorization | Check TN allocation in credential chain |
+
+**Caching Strategy:**
+
+The standalone verifier uses the same two-tier caching architecture as the monorepo:
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  Verification Result Cache (app/vvp/cache.py)            │
+│  Key: (dossier_url, passport_kid)                        │
+│  Stores: DAG, chain validation, ACDC signatures,         │
+│          revocation status, variant limitations           │
+│  TTL: 3600s (1 hour), LRU eviction at capacity           │
+│  Only VALID chain results are cached                     │
+│  Config-fingerprinted: auto-invalidates on config change │
+└──────────────────┬───────────────────────────────────────┘
+                   │ revocation updates
+                   ↓
+┌──────────────────────────────────────────────────────────┐
+│  Background Revocation Checker (app/vvp/revocation.py)   │
+│  Single async worker, queue-based, dedup by URL          │
+│  Recheck interval: 300s (configurable)                   │
+│  Updates ALL (url, kid) variants atomically              │
+│  Enqueued automatically on cache hit with stale data     │
+└──────────────────┬───────────────────────────────────────┘
+                   │ check_chain_revocation()
+                   ↓
+┌──────────────────────────────────────────────────────────┐
+│  TEL Client (app/vvp/tel.py)                             │
+│  Queries configured witnesses for revocation status      │
+│  Inline TEL (dossier) checked first → witness fallback   │
+│  Parallel check for all credentials in chain             │
+│  Per-credential result cache (in-memory)                 │
+└──────────────────────────────────────────────────────────┘
+```
+
+**Cache behaviour on verification request:**
+
+1. Phases 1-4 always run (per-request: header, PASSporT, signature are unique)
+2. Phase 5 checks dossier cache → cache hit skips HTTP fetch
+3. Phases 6-7 check verification result cache → cache hit skips chain validation
+4. Phase 8 uses cached revocation status if fresh (< recheck interval)
+   - If stale: return cached status immediately + enqueue background re-check
+   - If revoked in cache: return INVALID immediately (no background check)
+5. Phase 9 always runs (per-request TN validation)
+
+**Revocation status lifecycle:**
+
+```
+UNDEFINED ──(first check)──> UNREVOKED ──(revocation detected)──> REVOKED
+                                 ↑                                    │
+                                 └──(background recheck: still ok)────┘ (never downgrades)
+```
+
+Key rules:
+- Only VALID chain results are cached (INVALID/INDETERMINATE always re-evaluated)
+- REVOKED is permanent — never downgraded back to UNREVOKED
+- Background checker preserves existing status on query errors (no false downgrades)
+- Config fingerprint (SHA256 of validation-affecting settings) triggers full cache invalidation on config change
+
+**Documentation Plan:**
+
+All documentation files should be minimal, clear, and suitable for open-source consumers.
+
+### README.md
+- Project description (2-3 sentences)
+- Quick start (Docker and local)
+- Configuration table (env vars)
+- API reference (3 endpoints)
+- SIP protocol (INVITE → 302 flow)
+- License
+
+### ARCHITECTURE.md
+- System overview diagram (SIP + HTTP)
+- Module structure (app/sip, app/vvp)
+- Verification pipeline (9 phases with brief descriptions)
+- Data flow (SIP INVITE → parse → verify → 302)
+- Caching architecture (two-tier: verification result cache + dossier cache)
+- Background revocation checking (async worker, TEL client, witness queries)
+- Configuration model (normative vs configurable vs operational)
+
+### ALGORITHMS.md
+- VVP-Identity header format (base64url JSON)
+- PASSporT JWT structure (header.payload.signature)
+- Ed25519 signature verification
+- SAID computation (Blake3-256 with CESR encoding)
+- KERI canonical serialization (field ordering)
+- CESR encoding (count codes, derivation codes)
+- ACDC credential structure
+- Claim tree status propagation (§3.3A precedence rules)
+
+### SUPPORT.md
+- Issue reporting (GitHub Issues)
+- VVP specification references
+- KERI/ACDC/CESR learning resources
+- Rich Connexions Ltd contact
+
+**Attribution:**
+
+All Python source files must include at the top:
+```python
+# Copyright (c) Rich Connexions Ltd. All rights reserved.
+# Licensed under the MIT License. See LICENSE for details.
+```
+
+LICENSE file: MIT License, copyright Rich Connexions Ltd.
+
+**Configuration (env vars):**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| **Network** | | |
+| `VVP_SIP_HOST` | `0.0.0.0` | SIP listen address |
+| `VVP_SIP_PORT` | `5060` | SIP listen port |
+| `VVP_SIP_TRANSPORT` | `udp` | Transport: udp, tcp, both |
+| `VVP_HTTP_HOST` | `0.0.0.0` | HTTP listen address |
+| `VVP_HTTP_PORT` | `8000` | HTTP listen port |
+| `VVP_REDIRECT_TARGET` | (from INVITE) | Default redirect Contact URI |
+| **Verification** | | |
+| `VVP_TRUSTED_ROOT_AIDS` | GLEIF Root | Comma-separated trusted root AIDs |
+| `VVP_CLOCK_SKEW_SECONDS` | `300` | Clock skew tolerance for iat validation |
+| `VVP_MAX_TOKEN_AGE_SECONDS` | `300` | Max token age when exp absent |
+| `VVP_DOSSIER_TIMEOUT_SECONDS` | `5` | HTTP timeout for dossier fetch |
+| `VVP_DOSSIER_MAX_SIZE_BYTES` | `1048576` | Max dossier size (1 MB) |
+| `VVP_WITNESS_URLS` | Provenant staging | Comma-separated witness URLs for TEL queries |
+| `VVP_TEL_CLIENT_TIMEOUT` | `10.0` | HTTP timeout for witness TEL queries (seconds) |
+| **Caching** | | |
+| `VVP_CACHE_ENABLED` | `true` | Enable verification result + dossier caching |
+| `VVP_CACHE_MAX_ENTRIES` | `200` | Max cached verification results |
+| `VVP_CACHE_TTL` | `3600` | Verification result cache TTL (seconds) |
+| `VVP_DOSSIER_CACHE_TTL` | `300` | Dossier cache TTL (seconds) |
+| `VVP_DOSSIER_CACHE_MAX_ENTRIES` | `100` | Max cached dossiers |
+| `VVP_REVOCATION_RECHECK_INTERVAL` | `300` | Seconds before cached revocation data is stale |
+| `VVP_REVOCATION_CHECK_CONCURRENCY` | `1` | Max concurrent background revocation checks |
+| **Logging** | | |
+| `VVP_LOG_LEVEL` | `INFO` | Logging level |
+| `VVP_LOG_FORMAT` | `json` | Log format: json or text |
+
+**Dependencies (minimal):**
+
+```
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+pydantic>=2.10.0
+pysodium>=0.7.18          # Ed25519 via libsodium
+httpx>=0.27.0              # Async HTTP client (dossier fetch)
+blake3>=0.3.0              # SAID computation
+jinja2>=3.1.0              # HTML template
+```
+
+Test dependencies:
+```
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+```
+
+**SIP Protocol:**
+
+Incoming INVITE (with VVP verification headers):
+```
+INVITE sip:+14155551234@pbx.example.com SIP/2.0
+Via: SIP/2.0/UDP 10.0.0.1:5060;branch=z9hG4bK-xyz
+From: <sip:+15551234567@carrier.com>;tag=abc123
+To: <sip:+14155551234@pbx.example.com>
+Call-ID: call-id-123@carrier.com
+CSeq: 1 INVITE
+Identity: eyJhbGciOiJFZERTQSIsInBwdCI6InZ2cCIsImtpZCI6Imh0dHA6Ly93aXRuZXNzLmV4YW1wbGUuY29tL29vYmkvRUdheTUuLi4ifQ.eyJvcmlnIjp7InRuIjpbIis0NDc4ODQ2NjYyMDAiXX0sImRlc3QiOnsidG4iOlsiKzQ0Nzc2OTcxMDI4NSJdfSwiaWF0IjoxNzA3MDAwMDAwLCJldmQiOiJodHRwczovL2lzc3Vlci5leGFtcGxlLmNvbS9kb3NzaWVyLmNlc3IifQ.signature-bytes
+Content-Length: 0
+```
+
+Outgoing 302 (VALID):
+```
+SIP/2.0 302 Moved Temporarily
+Via: SIP/2.0/UDP 10.0.0.1:5060;branch=z9hG4bK-xyz
+From: <sip:+15551234567@carrier.com>;tag=abc123
+To: <sip:+14155551234@pbx.example.com>;tag=vvp-abc123
+Call-ID: call-id-123@carrier.com
+CSeq: 1 INVITE
+Contact: <sip:+14155551234@pbx.example.com>
+X-VVP-Status: VALID
+X-VVP-Brand-Name: Example Corp
+X-VVP-Caller-ID: +15551234567
+Content-Length: 0
+```
+
+Outgoing 302 (INVALID):
+```
+SIP/2.0 302 Moved Temporarily
+...
+X-VVP-Status: INVALID
+X-VVP-Error: PASSPORT_SIG_INVALID
+Content-Length: 0
+```
+
+**Basic UI:**
+
+A single `index.html` page with:
+- Text area for PASSporT JWT input
+- "Verify" button that POSTs to `/verify`
+- Result display: overall status (color-coded), error details, claim tree
+- Minimal styling (PicoCSS or inline CSS)
+- No HTMX, no JavaScript frameworks — vanilla JS fetch()
+
+**Key Design Decisions:**
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Tier 1 signature only | Direct Ed25519 from AID | Avoids KERI KEL infrastructure complexity |
+| Two-tier caching | Verification result cache + dossier cache | Production-grade performance; same architecture as monorepo |
+| Background TEL validation | Async worker re-checks revocation | Keeps cached results fresh without blocking requests |
+| Static witness list | Configured via `VVP_WITNESS_URLS` | Avoids dynamic GLEIF discovery complexity |
+| Single-file modules | acdc.py, dossier.py, tel.py | Reduces file count and import complexity |
+| Inline common code | No separate package | Self-contained, no monorepo dependency |
+| MIT License | Standard open-source | Maximum adoption |
+| Minimal error codes | ~15 codes (vs ~30 in monorepo) | Cover essential failure modes only |
+
+**Exit Criteria:**
+
+- [ ] New repository structure created on orphan branch (no monorepo history)
+- [ ] All Python files have Rich Connexions Ltd copyright header
+- [ ] `app/sip/` modules handle SIP INVITE → 302 redirect flow
+- [ ] `app/vvp/` modules implement 9-phase verification pipeline
+- [ ] Ed25519 signature verification works (Tier 1)
+- [ ] Dossier fetch and ACDC chain validation works
+- [ ] Verification result cache stores VALID chain results with LRU+TTL eviction
+- [ ] Dossier cache stores parsed dossiers with SAID secondary index
+- [ ] TEL client queries configured witnesses for revocation status
+- [ ] Background revocation checker re-checks cached results on configurable interval
+- [ ] Cache auto-invalidates on config change (config fingerprinting)
+- [ ] Revocation status updates atomically across all (url, kid) variants
+- [ ] REVOKED status is permanent (never downgraded)
+- [ ] FastAPI app serves `/`, `/verify`, `/healthz` endpoints
+- [ ] FastAPI lifespan starts/stops background revocation checker
+- [ ] SIP UDP server listens and processes INVITEs
+- [ ] Basic HTML UI allows manual verification
+- [ ] `docker build` and `docker run` works
+- [ ] `pytest` passes all tests (including cache and revocation tests)
+- [ ] README.md provides clear quick-start instructions
+- [ ] ARCHITECTURE.md documents system design including caching architecture
+- [ ] ALGORITHMS.md documents cryptographic operations
+- [ ] SUPPORT.md provides contact and resource information
+- [ ] No CLAUDE.md, memory files, sprint files, review scripts, or internal tooling
+- [ ] No references to monorepo structure or internal services
+- [ ] Repository is fully self-contained with no external package dependencies beyond PyPI
