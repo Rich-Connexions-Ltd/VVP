@@ -1295,3 +1295,119 @@ async def get_audit_logs(
         buffer_size=stats["buffer_size"],
         max_buffer_size=stats["max_buffer_size"],
     )
+
+
+# =============================================================================
+# Mock vLEI Re-initialization
+# =============================================================================
+
+
+class MockVLEIReinitializeResponse(BaseModel):
+    """Response for mock vLEI re-initialization."""
+
+    success: bool
+    gleif_aid: str | None = None
+    qvi_aid: str | None = None
+    qvi_credential_said: str | None = None
+    tables_cleared: list[str]
+    message: str
+
+
+@router.post("/mock-vlei/reinitialize", response_model=MockVLEIReinitializeResponse)
+async def reinitialize_mock_vlei(
+    request: Request,
+    principal: Principal = require_admin,
+) -> MockVLEIReinitializeResponse:
+    """Clear stale mock vLEI state and re-initialize from scratch.
+
+    This endpoint:
+    1. Clears all Postgres tables that depend on mock vLEI state
+    2. Resets the in-memory MockVLEIManager singleton
+    3. Re-creates mock-gleif, mock-qvi identities, registries, and QVI credential
+
+    WARNING: This deletes ALL organizations, API keys, credentials, and TN mappings.
+    Use only when LMDB has been wiped and Postgres state is stale.
+
+    Requires: issuer:admin role
+    """
+    from app.db.session import get_db_session
+    from app.db.models import (
+        MockVLEIState as MockVLEIStateModel,
+        Organization,
+        OrgAPIKey,
+        OrgAPIKeyRole,
+        ManagedCredential,
+        TNMapping,
+    )
+    import app.org.mock_vlei as mock_vlei_module
+    from app.org.mock_vlei import get_mock_vlei_manager
+
+    audit = get_audit_logger()
+    tables_cleared = []
+
+    # 1. Clear Postgres tables in dependency order
+    try:
+        with get_db_session() as db:
+            count = db.query(TNMapping).delete()
+            tables_cleared.append(f"tn_mappings ({count})")
+
+            count = db.query(ManagedCredential).delete()
+            tables_cleared.append(f"managed_credentials ({count})")
+
+            count = db.query(OrgAPIKeyRole).delete()
+            tables_cleared.append(f"org_api_key_roles ({count})")
+
+            count = db.query(OrgAPIKey).delete()
+            tables_cleared.append(f"org_api_keys ({count})")
+
+            count = db.query(Organization).delete()
+            tables_cleared.append(f"organizations ({count})")
+
+            count = db.query(MockVLEIStateModel).delete()
+            tables_cleared.append(f"mock_vlei_state ({count})")
+
+        log.info(f"Cleared tables: {tables_cleared}")
+    except Exception as e:
+        log.error(f"Failed to clear Postgres tables: {e}")
+        return MockVLEIReinitializeResponse(
+            success=False,
+            tables_cleared=tables_cleared,
+            message=f"Failed to clear database: {e}",
+        )
+
+    # 2. Reset the in-memory singleton
+    mock_vlei_module._mock_vlei_manager = None
+
+    # 3. Re-initialize
+    try:
+        manager = get_mock_vlei_manager()
+        state = await manager.initialize()
+
+        audit.log_access(
+            principal_id=principal.key_id,
+            resource="admin/mock-vlei/reinitialize",
+            action="reinitialize",
+            request=request,
+            details={"tables_cleared": tables_cleared},
+        )
+
+        log.info(
+            f"Mock vLEI re-initialized: gleif={state.gleif_aid[:16]}..., "
+            f"qvi={state.qvi_aid[:16]}..."
+        )
+
+        return MockVLEIReinitializeResponse(
+            success=True,
+            gleif_aid=state.gleif_aid,
+            qvi_aid=state.qvi_aid,
+            qvi_credential_said=state.qvi_credential_said,
+            tables_cleared=tables_cleared,
+            message="Mock vLEI infrastructure re-initialized successfully",
+        )
+    except Exception as e:
+        log.error(f"Failed to re-initialize mock vLEI: {e}")
+        return MockVLEIReinitializeResponse(
+            success=False,
+            tables_cleared=tables_cleared,
+            message=f"Tables cleared but re-initialization failed: {e}",
+        )
