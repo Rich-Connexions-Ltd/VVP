@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VVP Verifier</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: #f5f7fa;
+            color: #1a1a2e;
+            line-height: 1.6;
+        }
+        .container {
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 2rem 1rem;
+        }
+        h1 {
+            font-size: 1.75rem;
+            margin-bottom: 0.25rem;
+        }
+        .subtitle {
+            color: #666;
+            margin-bottom: 2rem;
+            font-size: 0.95rem;
+        }
+        .card {
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 0.4rem;
+            font-size: 0.9rem;
+        }
+        textarea, input[type="text"] {
+            width: 100%;
+            padding: 0.6rem 0.8rem;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-family: "SF Mono", "Fira Code", monospace;
+            font-size: 0.85rem;
+            resize: vertical;
+        }
+        textarea { min-height: 120px; }
+        input[type="text"] { margin-bottom: 1rem; }
+        .hint {
+            font-size: 0.8rem;
+            color: #888;
+            margin-top: 0.25rem;
+            margin-bottom: 1rem;
+        }
+        button {
+            background: #2563eb;
+            color: #fff;
+            border: none;
+            padding: 0.7rem 1.8rem;
+            border-radius: 6px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        button:hover { background: #1d4ed8; }
+        button:disabled { background: #93c5fd; cursor: not-allowed; }
+
+        /* Result display */
+        .result { display: none; }
+        .result.visible { display: block; }
+        .badge {
+            display: inline-block;
+            padding: 0.3rem 0.9rem;
+            border-radius: 20px;
+            font-weight: 700;
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .badge-valid { background: #d1fae5; color: #065f46; }
+        .badge-invalid { background: #fee2e2; color: #991b1b; }
+        .badge-indeterminate { background: #fef3c7; color: #92400e; }
+        .badge-error { background: #fce7f3; color: #9d174d; }
+
+        .result-header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        .result-header h2 { font-size: 1.1rem; }
+
+        .error-list {
+            list-style: none;
+            padding: 0;
+        }
+        .error-list li {
+            background: #fef2f2;
+            border-left: 3px solid #ef4444;
+            padding: 0.5rem 0.75rem;
+            margin-bottom: 0.5rem;
+            border-radius: 0 4px 4px 0;
+            font-size: 0.85rem;
+        }
+        .error-list li code {
+            font-weight: 700;
+            color: #991b1b;
+        }
+
+        .meta-row {
+            display: flex;
+            gap: 2rem;
+            flex-wrap: wrap;
+            margin-top: 0.75rem;
+            font-size: 0.85rem;
+        }
+        .meta-row span { color: #555; }
+        .meta-row strong { color: #1a1a2e; }
+
+        /* Capabilities */
+        .capabilities {
+            margin-top: 1rem;
+        }
+        .capabilities h3 {
+            font-size: 0.95rem;
+            margin-bottom: 0.5rem;
+        }
+        .cap-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.3rem 1.5rem;
+            font-size: 0.8rem;
+        }
+        .cap-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.2rem 0;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        .cap-status {
+            font-weight: 600;
+        }
+        .cap-implemented { color: #059669; }
+        .cap-not_implemented { color: #d97706; }
+        .cap-rejected { color: #dc2626; }
+
+        .spinner {
+            display: inline-block;
+            width: 16px; height: 16px;
+            border: 2px solid #93c5fd;
+            border-top-color: #2563eb;
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+            margin-left: 0.5rem;
+            vertical-align: middle;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        footer {
+            text-align: center;
+            color: #999;
+            font-size: 0.8rem;
+            margin-top: 2rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>VVP Verifier</h1>
+        <p class="subtitle">Verify VVP-signed PASSporT JWTs against KERI/ACDC credential chains.</p>
+
+        <div class="card">
+            <form id="verify-form">
+                <label for="passport-jwt">PASSporT JWT</label>
+                <textarea id="passport-jwt" placeholder="eyJhbGciOiJFZERTQSIsInBwdCI6InZ2cCIs..."></textarea>
+                <p class="hint">Paste the compact-serialised JWT (header.payload.signature).</p>
+
+                <label for="dossier-url">Dossier URL (optional)</label>
+                <input type="text" id="dossier-url" placeholder="https://issuer.example.com/dossier/SAID.cesr">
+                <p class="hint">Override the evidence URL from the PASSporT. Leave blank to use the embedded evd field.</p>
+
+                <button type="submit" id="submit-btn">Verify</button>
+                <span id="spinner" class="spinner" style="display:none;"></span>
+            </form>
+        </div>
+
+        <div class="card result" id="result-card">
+            <div class="result-header">
+                <span class="badge" id="status-badge"></span>
+                <h2 id="result-title"></h2>
+            </div>
+
+            <ul class="error-list" id="error-list"></ul>
+
+            <div class="meta-row" id="meta-row">
+                <span>Request ID: <strong id="meta-request-id">-</strong></span>
+                <span>Signer: <strong id="meta-signer-aid">-</strong></span>
+                <span>Brand: <strong id="meta-brand-name">-</strong></span>
+                <span>Cache: <strong id="meta-cache-hit">-</strong></span>
+            </div>
+
+            <div class="capabilities" id="capabilities-section">
+                <h3>Capabilities</h3>
+                <div class="cap-grid" id="cap-grid"></div>
+            </div>
+        </div>
+
+        <footer>
+            VVP Verifier &mdash; Copyright &copy; Rich Connexions Ltd.
+        </footer>
+    </div>
+
+    <script>
+        const form = document.getElementById("verify-form");
+        const submitBtn = document.getElementById("submit-btn");
+        const spinner = document.getElementById("spinner");
+        const resultCard = document.getElementById("result-card");
+
+        form.addEventListener("submit", async function(e) {
+            e.preventDefault();
+
+            const jwt = document.getElementById("passport-jwt").value.trim();
+            if (!jwt) {
+                alert("Please enter a PASSporT JWT.");
+                return;
+            }
+
+            const dossierUrl = document.getElementById("dossier-url").value.trim();
+
+            submitBtn.disabled = true;
+            spinner.style.display = "inline-block";
+            resultCard.classList.remove("visible");
+
+            try {
+                const body = { passport_jwt: jwt };
+                if (dossierUrl) body.dossier_url = dossierUrl;
+
+                const resp = await fetch("/verify", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(body),
+                });
+
+                const data = await resp.json();
+                renderResult(data);
+            } catch (err) {
+                renderError(err.message);
+            } finally {
+                submitBtn.disabled = false;
+                spinner.style.display = "none";
+            }
+        });
+
+        function renderResult(data) {
+            const badge = document.getElementById("status-badge");
+            const title = document.getElementById("result-title");
+            const errorList = document.getElementById("error-list");
+            const capGrid = document.getElementById("cap-grid");
+
+            // Status badge
+            const status = data.overall_status || "UNKNOWN";
+            badge.textContent = status;
+            badge.className = "badge";
+            if (status === "VALID") badge.classList.add("badge-valid");
+            else if (status === "INVALID") badge.classList.add("badge-invalid");
+            else if (status === "INDETERMINATE") badge.classList.add("badge-indeterminate");
+            else badge.classList.add("badge-error");
+
+            title.textContent = "Verification Result";
+
+            // Errors
+            errorList.innerHTML = "";
+            if (data.errors && data.errors.length > 0) {
+                data.errors.forEach(function(err) {
+                    const li = document.createElement("li");
+                    li.innerHTML = "<code>" + escapeHtml(err.code) + "</code>: " + escapeHtml(err.message);
+                    if (err.recoverable) li.innerHTML += " <em>(recoverable)</em>";
+                    errorList.appendChild(li);
+                });
+            }
+
+            // Meta
+            document.getElementById("meta-request-id").textContent = data.request_id || "-";
+            document.getElementById("meta-signer-aid").textContent = truncate(data.signer_aid, 20) || "-";
+            document.getElementById("meta-brand-name").textContent = data.brand_name || "-";
+            document.getElementById("meta-cache-hit").textContent = data.cache_hit ? "Yes" : "No";
+
+            // Capabilities
+            capGrid.innerHTML = "";
+            if (data.capabilities) {
+                Object.entries(data.capabilities).forEach(function(pair) {
+                    var key = pair[0], val = pair[1];
+                    var item = document.createElement("div");
+                    item.className = "cap-item";
+                    item.innerHTML =
+                        "<span>" + escapeHtml(key.replace(/_/g, " ")) + "</span>" +
+                        "<span class=\"cap-status cap-" + escapeHtml(val) + "\">" + escapeHtml(val) + "</span>";
+                    capGrid.appendChild(item);
+                });
+            }
+
+            resultCard.classList.add("visible");
+        }
+
+        function renderError(message) {
+            var badge = document.getElementById("status-badge");
+            badge.textContent = "ERROR";
+            badge.className = "badge badge-error";
+            document.getElementById("result-title").textContent = "Request Failed";
+            var errorList = document.getElementById("error-list");
+            errorList.innerHTML = "<li><code>NETWORK_ERROR</code>: " + escapeHtml(message) + "</li>";
+            document.getElementById("meta-request-id").textContent = "-";
+            document.getElementById("meta-signer-aid").textContent = "-";
+            document.getElementById("meta-brand-name").textContent = "-";
+            document.getElementById("meta-cache-hit").textContent = "-";
+            document.getElementById("cap-grid").innerHTML = "";
+            resultCard.classList.add("visible");
+        }
+
+        function escapeHtml(str) {
+            if (!str) return "";
+            return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+        }
+
+        function truncate(str, max) {
+            if (!str) return "";
+            return str.length > max ? str.substring(0, max) + "..." : str;
+        }
+    </script>
+</body>
+</html>
