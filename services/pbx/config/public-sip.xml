@@ -34,7 +34,8 @@
     <!-- VVP Loopback Test: 7 + extension -> signing -> verification -> extension -->
     <!-- Dial 71006 to call 1006 through full VVP signing/verification flow -->
     <extension name="vvp-loopback-outbound">
-      <condition field="${sofia_profile_name}" expression="^internal$"/>
+      <!-- Match internal SIP profile OR loopback channels (empty profile name for fs_cli originate) -->
+      <condition field="${sofia_profile_name}" expression="^(internal)?$"/>
       <condition field="destination_number" expression="^7(10\d{2})$">
         <action application="log" data="INFO [VVP] Loopback call to extension $1 via VVP signing"/>
         <action application="set" data="hangup_after_bridge=true"/>
@@ -197,8 +198,9 @@
         <action application="export" data="nolocal:sip_h_X-VVP-Brand-Name=${vvp_brand_name}"/>
         <action application="export" data="nolocal:sip_h_X-VVP-Brand-Logo=${vvp_brand_logo}"/>
         <action application="export" data="nolocal:sip_h_X-VVP-Status=${vvp_status}"/>
-        <!-- When verification returns 302, route to public context (not back here) -->
-        <action application="set" data="sip_redirect_context=public"/>
+        <!-- When verification returns 302, route to verified context for delivery -->
+        <!-- Use export (not set) so the B-leg inherits the updated redirect context -->
+        <action application="export" data="sip_redirect_context=verified"/>
         <action application="set" data="hangup_after_bridge=true"/>
         <action application="set" data="continue_on_fail=true"/>
         <action application="set" data="bridge_timeout=30"/>
@@ -212,6 +214,47 @@
     <extension name="redirect-unmatched">
       <condition field="destination_number" expression=".*">
         <action application="log" data="WARNING [VVP] Unmatched redirect to ${destination_number}"/>
+        <action application="hangup" data="NO_ROUTE_DESTINATION"/>
+      </condition>
+    </extension>
+
+  </context>
+
+  <!-- Verified context: delivers call to extension after verification 302 -->
+  <!-- Sprint 48: Third stage of VVP call flow — signing → verification → delivery -->
+  <context name="verified">
+
+    <!-- Deliver verified call to destination extension -->
+    <extension name="vvp-deliver">
+      <condition field="destination_number" expression="^\+?4419233110(\d{2})$">
+        <action application="log" data="INFO [VVP] Verification complete — delivering to extension 10$1"/>
+        <!-- Extract VVP headers from verification 302 response -->
+        <action application="set" data="vvp_brand_name=${sip_rh_X-VVP-Brand-Name}"/>
+        <action application="set" data="vvp_brand_logo=${sip_rh_X-VVP-Brand-Logo}"/>
+        <action application="set" data="vvp_status=${sip_rh_X-VVP-Status}"/>
+        <!-- Fallback to request headers -->
+        <action application="set" data="vvp_brand_name=${vvp_brand_name:${sip_h_X-VVP-Brand-Name}}"/>
+        <action application="set" data="vvp_brand_logo=${vvp_brand_logo:${sip_h_X-VVP-Brand-Logo}}"/>
+        <action application="set" data="vvp_status=${vvp_status:${sip_h_X-VVP-Status}}"/>
+        <!-- URL decode -->
+        <action application="set" data="vvp_brand_name=${url_decode(${vvp_brand_name})}"/>
+        <action application="set" data="vvp_brand_logo=${url_decode(${vvp_brand_logo})}"/>
+        <action application="log" data="INFO [VVP] Delivering: brand=${vvp_brand_name}, status=${vvp_status}"/>
+        <!-- Export VVP headers to B-leg for WebRTC client -->
+        <action application="export" data="nolocal:sip_h_X-VVP-Brand-Name=${vvp_brand_name}"/>
+        <action application="export" data="nolocal:sip_h_X-VVP-Brand-Logo=${vvp_brand_logo}"/>
+        <action application="export" data="nolocal:sip_h_X-VVP-Status=${vvp_status}"/>
+        <action application="ring_ready"/>
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="target_ext=10$1"/>
+        <action application="bridge" data="user/${target_ext}@pbx.rcnx.io"/>
+      </condition>
+    </extension>
+
+    <!-- Fallback for unmatched verified calls -->
+    <extension name="verified-unmatched">
+      <condition field="destination_number" expression=".*">
+        <action application="log" data="WARNING [VVP] Unmatched verified call to ${destination_number}"/>
         <action application="hangup" data="NO_ROUTE_DESTINATION"/>
       </condition>
     </extension>
