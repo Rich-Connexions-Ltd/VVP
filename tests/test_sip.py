@@ -187,7 +187,7 @@ class TestHandleInvite:
 
     @pytest.mark.asyncio
     async def test_invite_missing_identity_returns_400(self):
-        """INVITE without Identity header should return 400."""
+        """INVITE without Identity/P-VVP-Passport header should return 400."""
         from app.sip.handler import handle_invite
 
         req = SIPRequest(
@@ -206,3 +206,27 @@ class TestHandleInvite:
         result = await handle_invite(req, ("127.0.0.1", 5060))
         assert result is not None
         assert result.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_invite_accepts_p_vvp_passport_fallback(self):
+        """INVITE with P-VVP-Passport (no Identity) should not return 400 for missing PASSporT."""
+        from app.sip.handler import handle_invite
+
+        req = SIPRequest(
+            method="INVITE",
+            uri="sip:alice@example.com",
+            version="SIP/2.0",
+            headers={
+                "Via": "SIP/2.0/UDP test;branch=z9hG4bK789",
+                "Call-ID": "test789",
+                "CSeq": "1 INVITE",
+                "From": "<sip:bob@example.com>;tag=xyz",
+                "To": "<sip:alice@example.com>",
+                "P-VVP-Passport": "eyJhbGciOiJFZERTQSJ9.test.sig",
+                "P-VVP-Identity": "eyJwcHQiOiJ2dnAiLCJraWQiOiJodHRwOi8vZXhhbXBsZS5jb20iLCJldmQiOiJodHRwOi8vZXhhbXBsZS5jb20vZG9zc2llciJ9",
+            },
+            body=b"",
+        )
+        result = await handle_invite(req, ("127.0.0.1", 5060))
+        # Should NOT return 400 for missing Identity — P-VVP-Passport is accepted.
+        assert result is None or result.status_code != 400

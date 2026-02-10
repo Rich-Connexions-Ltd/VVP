@@ -1,0 +1,19 @@
+[Unit]
+Description=VVP Verifier (Open-Source Standalone)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/vvp/vvp-verifier-oss.env
+WorkingDirectory=/opt/vvp/vvp-verifier-oss/current
+ExecStart=/opt/vvp/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/vvp/vvp-verifier-oss
+
+[Install]
+WantedBy=multi-user.target

@@ -18,6 +18,7 @@ ignored (returning None causes the transport to send nothing).
 
 SIP header mapping (inbound):
     - ``Identity``       -> PASSporT JWT (RFC 8224)
+    - ``P-VVP-Passport`` -> PASSporT JWT (VVP PBX extension, fallback)
     - ``P-VVP-Identity`` -> Base64url-encoded VVP-Identity JSON header
 
 SIP header mapping (outbound, via 302 redirect):
@@ -77,11 +78,13 @@ async def handle_invite(
     # ------------------------------------------------------------------
 
     # PASSporT JWT is carried in the standard SIP Identity header (RFC 8224).
-    passport_jwt = request.headers.get("Identity")
+    # Some PBX configurations forward the PASSporT as P-VVP-Passport instead;
+    # accept either header name.
+    passport_jwt = request.headers.get("Identity") or request.headers.get("P-VVP-Passport")
     if not passport_jwt:
-        logger.warning("INVITE missing Identity header (PASSporT JWT)")
+        logger.warning("INVITE missing Identity/P-VVP-Passport header (PASSporT JWT)")
         return build_error_response(
-            request, 400, "Bad Request - Missing Identity header"
+            request, 400, "Bad Request - Missing Identity/P-VVP-Passport header"
         )
 
     # VVP-Identity is a private extension header carrying the base64url

@@ -1,0 +1,56 @@
+name: VVP Verifier CI
+on:
+  push:
+    branches: [vvp-verifier]
+  pull_request:
+    branches: [vvp-verifier]
+  workflow_dispatch:
+    inputs:
+      deploy_target:
+        description: Deploy target
+        required: false
+        default: none
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: sudo apt-get update && sudo apt-get install -y libsodium-dev
+      - run: pip install -e ".[dev]"
+      - run: pytest tests/ -v --cov=app --cov-report=term-missing
+  deploy-azure:
+    needs: [test]
+    if: github.event.inputs.deploy_target == 'azure'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - run: az acr login -n "${{ secrets.ACR_NAME }}"
+      - name: Build and push
+        run: |
+          IMAGE="${{ secrets.ACR_LOGIN_SERVER }}/vvp-verifier-oss:${{ github.sha }}"
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+      - name: Deploy
+        run: |
+          az containerapp update \
+            --resource-group "${{ secrets.AZURE_RG }}" \
+            --name vvp-verifier-oss \
+            --image "$IMAGE" \
+            --min-replicas 1 \
+            --set-env-vars \
+              "GIT_SHA=${{ github.sha }}" \
+              "VVP_WITNESS_URLS=https://vvp-witness1.rcnx.io,https://vvp-witness2.rcnx.io,https://vvp-witness3.rcnx.io" \
+              "VVP_TRUSTED_ROOT_AIDS=EDP1vHcw_wc4M__Fj53-cJaBnZZASd-aMTaSyWEQ-PC2" \
+              "VVP_LOG_LEVEL=INFO"
