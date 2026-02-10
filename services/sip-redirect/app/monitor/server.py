@@ -268,6 +268,8 @@ async def handle_event_ingest(request):
         "response_vvp_headers": data.get("response_vvp_headers", {}),
         "redirect_uri": data.get("redirect_uri"),
         "error": data.get("error"),
+        "raw_request": data.get("raw_request"),
+        "raw_response": data.get("raw_response"),
     }
 
     buffer = get_event_buffer()

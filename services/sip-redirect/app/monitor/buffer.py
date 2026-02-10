@@ -43,6 +43,8 @@ class SIPEvent:
     response_vvp_headers: dict  # VVP headers from SIP response (Sprint 48)
     redirect_uri: Optional[str]  # Contact URI from 302 response
     error: Optional[str]  # Error message if any
+    raw_request: Optional[str] = None  # Raw SIP request message (Sprint 48)
+    raw_response: Optional[str] = None  # Raw SIP response message (Sprint 48)
 
 
 class SIPEventBuffer:
