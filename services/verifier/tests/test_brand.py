@@ -7,6 +7,7 @@ Tests cover:
 - Brand JL (join link) to vetting
 - Brand proxy in delegation scenarios
 - Sprint 44: Brand info extraction (brand_name, brand_logo_url)
+- Sprint 58: vCard array format (RFC 6350 property strings)
 """
 
 import pytest
@@ -21,6 +22,7 @@ from app.vvp.brand import (
     verify_brand_proxy,
     verify_brand,
     extract_brand_info,
+    parse_vcard_properties,
     BrandInfo,
     VCARD_FIELDS,
     ClaimBuilder,
@@ -56,7 +58,7 @@ class MockACDC:
 class MockPassportPayload:
     """Mock PASSporT payload for testing."""
 
-    card: Optional[Dict[str, Any]] = None
+    card: Optional[List[str]] = None
 
 
 @dataclass
@@ -64,6 +66,51 @@ class MockPassport:
     """Mock PASSporT for testing."""
 
     payload: MockPassportPayload
+
+
+# =============================================================================
+# vCard Property String Parsing Tests
+# =============================================================================
+
+
+class TestParseVCardProperties:
+    """Tests for parse_vcard_properties helper."""
+
+    def test_basic_properties(self):
+        """Parses simple NAME:value properties."""
+        card = ["ORG:ACME Corp", "NICKNAME:ACME"]
+        props = parse_vcard_properties(card)
+        assert props == {"org": "ACME Corp", "nickname": "ACME"}
+
+    def test_logo_with_params(self):
+        """Strips ;VALUE=URI parameter from LOGO property."""
+        card = ["LOGO;VALUE=URI:https://cdn.acme.com/logo.png"]
+        props = parse_vcard_properties(card)
+        assert props == {"logo": "https://cdn.acme.com/logo.png"}
+
+    def test_url_with_colon_in_value(self):
+        """Handles colons in values (URLs)."""
+        card = ["URL:https://www.acme.com"]
+        props = parse_vcard_properties(card)
+        assert props == {"url": "https://www.acme.com"}
+
+    def test_empty_list(self):
+        """Empty list returns empty dict."""
+        assert parse_vcard_properties([]) == {}
+
+    def test_skips_invalid_entries(self):
+        """Skips non-string and no-colon entries."""
+        card = ["ORG:ACME", 42, "", "nocolon", "URL:https://example.com"]
+        props = parse_vcard_properties(card)
+        assert props == {"org": "ACME", "url": "https://example.com"}
+
+    def test_case_insensitive_keys(self):
+        """Property names are lowercased."""
+        card = ["ORG:ACME", "Nickname:Display", "url:https://example.com"]
+        props = parse_vcard_properties(card)
+        assert "org" in props
+        assert "nickname" in props
+        assert "url" in props
 
 
 # =============================================================================
@@ -76,27 +123,33 @@ class TestVCardValidation:
 
     def test_valid_vcard_fields(self):
         """Known vCard fields should not produce warnings"""
-        card = {"fn": "ACME Corp", "org": "ACME", "tel": "+15551234567"}
+        card = ["FN:ACME Corp", "ORG:ACME", "TEL:+15551234567"]
         warnings = validate_vcard_format(card)
         assert len(warnings) == 0
 
     def test_unknown_fields_warn(self):
         """Unknown fields should produce warnings but not fail"""
-        card = {"fn": "ACME Corp", "customField": "value", "anotherCustom": "123"}
+        card = ["FN:ACME Corp", "CUSTOMFIELD:value", "ANOTHERCUSTOM:123"]
         warnings = validate_vcard_format(card)
         assert len(warnings) == 2
-        assert "customField" in warnings[0]
-        assert "anotherCustom" in warnings[1]
+        assert "customfield" in warnings[0]
+        assert "anothercustom" in warnings[1]
 
     def test_case_insensitive_fields(self):
         """vCard fields should be case-insensitive"""
-        card = {"FN": "ACME Corp", "ORG": "ACME"}
+        card = ["FN:ACME Corp", "ORG:ACME"]
         warnings = validate_vcard_format(card)
         assert len(warnings) == 0
 
     def test_empty_card(self):
         """Empty card should produce no warnings"""
-        warnings = validate_vcard_format({})
+        warnings = validate_vcard_format([])
+        assert len(warnings) == 0
+
+    def test_nickname_is_valid(self):
+        """NICKNAME is a known vCard field."""
+        card = ["NICKNAME:ACME Corp"]
+        warnings = validate_vcard_format(card)
         assert len(warnings) == 0
 
 
@@ -171,7 +224,7 @@ class TestBrandAttributeVerification:
 
     def test_attributes_match_credential(self):
         """Card values matching credential should pass"""
-        card = {"fn": "ACME Corp", "org": "ACME"}
+        card = ["FN:ACME Corp", "ORG:ACME"]
         brand = MockACDC(
             said="ABC123",
             issuer_aid="ISSUER1",
@@ -184,7 +237,7 @@ class TestBrandAttributeVerification:
 
     def test_attribute_mismatch_invalid(self):
         """Card values not matching credential should fail"""
-        card = {"fn": "ACME Corp", "org": "Different Org"}
+        card = ["FN:ACME Corp", "ORG:Different Org"]
         brand = MockACDC(
             said="ABC123",
             issuer_aid="ISSUER1",
@@ -197,7 +250,7 @@ class TestBrandAttributeVerification:
 
     def test_extra_card_attributes_invalid(self):
         """Card attributes not in credential should fail"""
-        card = {"fn": "ACME Corp", "email": "contact@acme.com"}
+        card = ["FN:ACME Corp", "EMAIL:contact@acme.com"]
         brand = MockACDC(
             said="ABC123",
             issuer_aid="ISSUER1",
@@ -313,6 +366,7 @@ class TestBrandVerificationIntegration:
     """Integration tests for full brand verification.
 
     Sprint 44: verify_brand now returns (claim, brand_info) tuple.
+    Sprint 58: card is a list of vCard property strings.
     """
 
     def test_no_card_no_claim(self):
@@ -326,7 +380,7 @@ class TestBrandVerificationIntegration:
     def test_brand_valid(self):
         """Valid brand verification should pass"""
         passport = MockPassport(
-            payload=MockPassportPayload(card={"fn": "ACME Corp", "org": "ACME"})
+            payload=MockPassportPayload(card=["FN:ACME Corp", "ORG:ACME"])
         )
         brand = MockACDC(
             said="BRAND123",
@@ -349,7 +403,7 @@ class TestBrandVerificationIntegration:
     def test_no_brand_credential_invalid(self):
         """Missing brand credential should be INVALID"""
         passport = MockPassport(
-            payload=MockPassportPayload(card={"fn": "ACME Corp"})
+            payload=MockPassportPayload(card=["FN:ACME Corp"])
         )
 
         claim, brand_info = verify_brand(passport, {})
@@ -363,7 +417,7 @@ class TestBrandVerificationIntegration:
     def test_brand_missing_jl_invalid(self):
         """Brand without JL to vetting should be INVALID"""
         passport = MockPassport(
-            payload=MockPassportPayload(card={"fn": "ACME Corp", "org": "ACME"})
+            payload=MockPassportPayload(card=["FN:ACME Corp", "ORG:ACME"])
         )
         brand = MockACDC(
             said="BRAND123",
@@ -380,7 +434,7 @@ class TestBrandVerificationIntegration:
     def test_brand_proxy_missing_indeterminate(self):
         """Missing brand proxy in delegation should be INDETERMINATE"""
         passport = MockPassport(
-            payload=MockPassportPayload(card={"fn": "ACME Corp", "org": "ACME"})
+            payload=MockPassportPayload(card=["FN:ACME Corp", "ORG:ACME"])
         )
         brand = MockACDC(
             said="BRAND123",
@@ -407,13 +461,13 @@ class TestBrandVerificationIntegration:
         """Unknown vCard fields should warn but not fail"""
         passport = MockPassport(
             payload=MockPassportPayload(
-                card={"fn": "ACME Corp", "org": "ACME", "customField": "value"}
+                card=["FN:ACME Corp", "ORG:ACME", "CUSTOMFIELD:value"]
             )
         )
         brand = MockACDC(
             said="BRAND123",
             issuer_aid="ISSUER1",
-            attributes={"fn": "ACME Corp", "org": "ACME", "customField": "value"},
+            attributes={"fn": "ACME Corp", "org": "ACME", "customfield": "value"},
             edges={"jl": "VETTING123"},
         )
         dossier = {
@@ -429,79 +483,58 @@ class TestBrandVerificationIntegration:
 
 
 # =============================================================================
-# Sprint 44: Brand Info Extraction Tests
+# Sprint 44/58: Brand Info Extraction Tests
 # =============================================================================
 
 
 class TestExtractBrandInfo:
-    """Tests for extract_brand_info function (Sprint 44)."""
+    """Tests for extract_brand_info function (Sprint 44/58).
+
+    Card is now a list of vCard property strings per VVP §4.1.2.
+    """
 
     def test_extract_org_as_brand_name(self):
-        """org field should be used as brand_name"""
-        card = {"fn": "John Doe", "org": "ACME Corporation"}
+        """ORG property should be used as brand_name"""
+        card = ["FN:John Doe", "ORG:ACME Corporation"]
         info = extract_brand_info(card)
         assert info.brand_name == "ACME Corporation"
 
-    def test_extract_fn_when_no_org(self):
-        """fn field should be fallback when org not present"""
-        card = {"fn": "ACME Display Name"}
+    def test_extract_nickname_when_no_org(self):
+        """NICKNAME property should be fallback when ORG not present"""
+        card = ["NICKNAME:ACME Display Name"]
         info = extract_brand_info(card)
         assert info.brand_name == "ACME Display Name"
 
-    def test_extract_logo_url_direct(self):
-        """Direct URL in logo field should be extracted"""
-        card = {"org": "ACME", "logo": "https://cdn.acme.com/logo.png"}
+    def test_extract_fn_when_no_org_or_nickname(self):
+        """FN property should be fallback when ORG and NICKNAME not present"""
+        card = ["FN:ACME Full Name"]
         info = extract_brand_info(card)
-        assert info.brand_logo_url == "https://cdn.acme.com/logo.png"
+        assert info.brand_name == "ACME Full Name"
 
-    def test_extract_logo_url_vcard_format(self):
-        """vCard LOGO;VALUE=URI: format should be parsed"""
-        card = {"org": "ACME", "logo": "LOGO;VALUE=URI:https://cdn.acme.com/logo.png"}
-        info = extract_brand_info(card)
-        assert info.brand_logo_url == "https://cdn.acme.com/logo.png"
-
-    def test_extract_logo_url_vcard_format_lowercase(self):
-        """vCard format should be case-insensitive"""
-        card = {"org": "ACME", "logo": "logo;value=uri:https://cdn.acme.com/logo.png"}
+    def test_extract_logo_url_from_property(self):
+        """LOGO;VALUE=URI: property should have URL extracted"""
+        card = ["ORG:ACME", "LOGO;VALUE=URI:https://cdn.acme.com/logo.png"]
         info = extract_brand_info(card)
         assert info.brand_logo_url == "https://cdn.acme.com/logo.png"
 
     def test_extract_empty_card(self):
         """Empty card should return empty BrandInfo"""
-        card = {}
+        card = []
         info = extract_brand_info(card)
         assert info.brand_name is None
         assert info.brand_logo_url is None
 
-    def test_extract_case_insensitive_fields(self):
-        """Fields should be case-insensitive"""
-        card = {"ORG": "ACME Corp", "LOGO": "https://acme.com/logo.png"}
-        info = extract_brand_info(card)
-        assert info.brand_name == "ACME Corp"
-        assert info.brand_logo_url == "https://acme.com/logo.png"
-
     def test_non_url_logo_ignored(self):
-        """Non-URL logo values (base64 data) should be ignored"""
-        card = {"org": "ACME", "logo": "base64,iVBORw0KGgo..."}
+        """Non-URL logo values should be ignored"""
+        card = ["ORG:ACME", "LOGO:base64,iVBORw0KGgo..."]
         info = extract_brand_info(card)
         assert info.brand_logo_url is None
 
     def test_http_logo_url(self):
         """HTTP URLs should be extracted (not just HTTPS)"""
-        card = {"org": "ACME", "logo": "http://cdn.acme.com/logo.png"}
+        card = ["ORG:ACME", "LOGO;VALUE=URI:http://cdn.acme.com/logo.png"]
         info = extract_brand_info(card)
         assert info.brand_logo_url == "http://cdn.acme.com/logo.png"
-
-    def test_vcard_format_url_search_fallback(self):
-        """vCard format fallback should find URL when split doesn't give valid URL directly.
-
-        When split(":") gives parts[1] that doesn't start with http/https,
-        the code falls back to searching for the URL anywhere in the string.
-        """
-        # After split on ":", parts[1] = "see https://..." which doesn't start with http
-        card = {"org": "ACME", "logo": "LOGO;VALUE=URI:see https://cdn.acme.com/logo.png"}
-        info = extract_brand_info(card)
-        assert info.brand_logo_url == "https://cdn.acme.com/logo.png"
 
 
 # =============================================================================
@@ -566,11 +599,14 @@ class TestExtendedBrandCredentialFinder:
 
 
 class TestVCardToCredentialMapping:
-    """Tests for vCard-to-credential field name mapping in verify_brand_attributes."""
+    """Tests for vCard-to-credential field name mapping in verify_brand_attributes.
+
+    Sprint 58: card is now a list of vCard property strings.
+    """
 
     def test_vcard_org_matches_brand_name(self):
-        """card.org should match credential brandName."""
-        card = {"org": "ACME Corporation"}
+        """card ORG: should match credential brandName."""
+        card = ["ORG:ACME Corporation"]
         brand = MockACDC(
             said="BRAND1",
             issuer_aid="VETTER1",
@@ -581,9 +617,9 @@ class TestVCardToCredentialMapping:
         assert valid is True
         assert any("org" in r for r in result)
 
-    def test_vcard_fn_matches_brand_display_name(self):
-        """card.fn should match credential brandDisplayName."""
-        card = {"fn": "ACME Corp"}
+    def test_vcard_nickname_matches_brand_display_name(self):
+        """card NICKNAME: should match credential brandDisplayName."""
+        card = ["NICKNAME:ACME Corp"]
         brand = MockACDC(
             said="BRAND1",
             issuer_aid="VETTER1",
@@ -593,9 +629,9 @@ class TestVCardToCredentialMapping:
         valid, result = verify_brand_attributes(card, brand)
         assert valid is True
 
-    def test_vcard_fn_falls_back_to_brand_name(self):
-        """card.fn should match credential brandName when brandDisplayName is absent."""
-        card = {"fn": "ACME Corporation"}
+    def test_vcard_nickname_falls_back_to_brand_name(self):
+        """card NICKNAME: should match credential brandName when brandDisplayName absent."""
+        card = ["NICKNAME:ACME Corporation"]
         brand = MockACDC(
             said="BRAND1",
             issuer_aid="VETTER1",
@@ -606,8 +642,8 @@ class TestVCardToCredentialMapping:
         assert valid is True
 
     def test_vcard_logo_matches_logo_url(self):
-        """card.logo should match credential logoUrl."""
-        card = {"logo": "https://cdn.acme.com/logo.png"}
+        """card LOGO: should match credential logoUrl."""
+        card = ["LOGO;VALUE=URI:https://cdn.acme.com/logo.png"]
         brand = MockACDC(
             said="BRAND1",
             issuer_aid="VETTER1",
@@ -618,8 +654,8 @@ class TestVCardToCredentialMapping:
         assert valid is True
 
     def test_vcard_url_matches_website_url(self):
-        """card.url should match credential websiteUrl."""
-        card = {"url": "https://www.acme.com"}
+        """card URL: should match credential websiteUrl."""
+        card = ["URL:https://www.acme.com"]
         brand = MockACDC(
             said="BRAND1",
             issuer_aid="VETTER1",
@@ -631,12 +667,12 @@ class TestVCardToCredentialMapping:
 
     def test_full_card_matches_extended_brand_credential(self):
         """Full vCard card claim should validate against Extended Brand Credential."""
-        card = {
-            "org": "ACME Corporation",
-            "fn": "ACME Corp",
-            "logo": "https://cdn.acme.com/logo.png",
-            "url": "https://www.acme.com",
-        }
+        card = [
+            "ORG:ACME Corporation",
+            "NICKNAME:ACME Corp",
+            "LOGO;VALUE=URI:https://cdn.acme.com/logo.png",
+            "URL:https://www.acme.com",
+        ]
         brand = MockACDC(
             said="BRAND1",
             issuer_aid="VETTER1",
@@ -655,7 +691,7 @@ class TestVCardToCredentialMapping:
 
     def test_value_mismatch_fails(self):
         """Mismatched values should fail even with correct field mapping."""
-        card = {"org": "Wrong Name"}
+        card = ["ORG:Wrong Name"]
         brand = MockACDC(
             said="BRAND1",
             issuer_aid="VETTER1",
@@ -665,19 +701,6 @@ class TestVCardToCredentialMapping:
         valid, result = verify_brand_attributes(card, brand)
         assert valid is False
         assert any("org" in r for r in result)
-
-    def test_vcard_format_http_fallback(self):
-        """vCard format fallback should work with HTTP URLs too."""
-        # After split on ":", parts[1] = "check http://..." which doesn't start with http
-        card = {"org": "ACME", "logo": "LOGO;VALUE=URI:check http://cdn.acme.com/logo.png"}
-        info = extract_brand_info(card)
-        assert info.brand_logo_url == "http://cdn.acme.com/logo.png"
-
-    def test_vcard_format_no_url_found(self):
-        """vCard format without valid URL should return None"""
-        card = {"org": "ACME", "logo": "LOGO;VALUE=URI:not-a-url"}
-        info = extract_brand_info(card)
-        assert info.brand_logo_url is None
 
 
 # =============================================================================
@@ -761,7 +784,7 @@ class TestVerifyBrandAttributesEdgeCases:
             issuer_aid="ISSUER1",
             raw={"a": {"fn": "ACME Corp", "org": "ACME"}},
         )
-        card = {"fn": "ACME Corp", "org": "ACME"}
+        card = ["FN:ACME Corp", "ORG:ACME"]
 
         valid, result = verify_brand_attributes(card, brand)
         assert valid is True
@@ -781,7 +804,7 @@ class TestVerifyBrandAttributesEdgeCases:
             issuer_aid="ISSUER1",
             raw={"a": "not-a-dict"},
         )
-        card = {"fn": "ACME Corp"}
+        card = ["FN:ACME Corp"]
 
         valid, result = verify_brand_attributes(card, brand)
         assert valid is False

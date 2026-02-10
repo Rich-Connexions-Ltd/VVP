@@ -16,6 +16,21 @@ _spec.loader.exec_module(_mod)
 build_card_claim = _mod.build_card_claim
 
 
+def _card_has(card, prefix):
+    """Check if a vCard property string list contains a string starting with prefix."""
+    return any(s.startswith(prefix) for s in card)
+
+
+def _card_value(card, prefix):
+    """Get the value portion of a vCard property string matching the prefix."""
+    for s in card:
+        if s.startswith(prefix):
+            # Split on first colon after the property name+params
+            _, value = s.split(":", 1)
+            return value
+    return None
+
+
 class TestBuildCardClaim:
     """Tests for build_card_claim()."""
 
@@ -35,13 +50,14 @@ class TestBuildCardClaim:
         card = build_card_claim(attrs)
 
         assert card is not None
-        assert card["org"] == "ACME Corporation"
-        assert card["fn"] == "ACME Corp"
-        assert card["logo"] == "https://cdn.acme.com/logo.png"
-        assert card["url"] == "https://www.acme.com"
+        assert isinstance(card, list)
+        assert "ORG:ACME Corporation" in card
+        assert "NICKNAME:ACME Corp" in card
+        assert "LOGO;VALUE=URI:https://cdn.acme.com/logo.png" in card
+        assert "URL:https://www.acme.com" in card
 
     def test_minimal_brand(self):
-        """Only brandName (required) produces org + fn."""
+        """Only brandName (required) produces ORG + NICKNAME."""
         attrs = {
             "brandName": "Widgets Inc",
             "assertionCountry": "GBR",
@@ -50,22 +66,22 @@ class TestBuildCardClaim:
         card = build_card_claim(attrs)
 
         assert card is not None
-        assert card["org"] == "Widgets Inc"
-        assert card["fn"] == "Widgets Inc"
-        assert "logo" not in card
-        assert "url" not in card
+        assert "ORG:Widgets Inc" in card
+        assert "NICKNAME:Widgets Inc" in card
+        assert not _card_has(card, "LOGO")
+        assert not _card_has(card, "URL:")
 
     def test_fn_falls_back_to_brand_name(self):
-        """When brandDisplayName is absent, fn falls back to brandName."""
+        """When brandDisplayName is absent, NICKNAME falls back to brandName."""
         attrs = {"brandName": "FallbackCo"}
 
         card = build_card_claim(attrs)
 
-        assert card["fn"] == "FallbackCo"
-        assert card["org"] == "FallbackCo"
+        assert "NICKNAME:FallbackCo" in card
+        assert "ORG:FallbackCo" in card
 
     def test_fn_uses_display_name_when_present(self):
-        """When brandDisplayName is present, fn uses it."""
+        """When brandDisplayName is present, NICKNAME uses it."""
         attrs = {
             "brandName": "Legal Name LLC",
             "brandDisplayName": "FriendlyBrand",
@@ -73,8 +89,8 @@ class TestBuildCardClaim:
 
         card = build_card_claim(attrs)
 
-        assert card["fn"] == "FriendlyBrand"
-        assert card["org"] == "Legal Name LLC"
+        assert "NICKNAME:FriendlyBrand" in card
+        assert "ORG:Legal Name LLC" in card
 
     def test_no_brand_attributes(self):
         """Returns None for non-brand credentials."""
@@ -110,10 +126,10 @@ class TestBuildCardClaim:
         card = build_card_claim(attrs)
 
         assert card is not None
-        assert set(card.keys()) == {"org", "fn"}
-        assert "assertionCountry" not in card
-        assert "legalEntityLEI" not in card
-        assert "d" not in card
+        # Only ORG and NICKNAME (no logo, no url, no non-brand fields)
+        assert len(card) == 2
+        assert "ORG:TestBrand" in card
+        assert "NICKNAME:TestBrand" in card
 
     def test_empty_brand_name_returns_none(self):
         """Empty string brandName is treated as absent."""
@@ -121,8 +137,8 @@ class TestBuildCardClaim:
 
         assert build_card_claim(attrs) is None
 
-    def test_card_only_has_vcard_keys(self):
-        """Card dict should only contain valid vCard field names."""
+    def test_card_is_list_of_strings(self):
+        """Card should be a list of RFC 6350 vCard property strings."""
         attrs = {
             "brandName": "ACME",
             "brandDisplayName": "ACME Inc",
@@ -132,10 +148,11 @@ class TestBuildCardClaim:
 
         card = build_card_claim(attrs)
 
-        # All keys should be lowercase vCard field names
-        for key in card:
-            assert key.islower(), f"Key '{key}' should be lowercase vCard name"
-        assert set(card.keys()) == {"org", "fn", "logo", "url"}
+        assert isinstance(card, list)
+        assert len(card) == 4
+        for item in card:
+            assert isinstance(item, str)
+            assert ":" in item  # All vCard props have NAME:value format
 
 
 class TestDossierChainCardExtraction:
@@ -177,10 +194,10 @@ class TestDossierChainCardExtraction:
                 break
 
         assert card is not None
-        assert card["org"] == "ACME Corporation"
-        assert card["fn"] == "ACME"
-        assert card["logo"] == "https://cdn.acme.com/logo.png"
-        assert card["url"] == "https://www.acme.com"
+        assert "ORG:ACME Corporation" in card
+        assert "NICKNAME:ACME" in card
+        assert "LOGO;VALUE=URI:https://cdn.acme.com/logo.png" in card
+        assert "URL:https://www.acme.com" in card
 
     def test_no_brand_credential_in_chain(self):
         """Returns None when no credential in the chain has brand attributes."""
@@ -213,7 +230,7 @@ class TestDossierChainCardExtraction:
                 break
 
         assert card is not None
-        assert card["org"] == "RootBrand"
+        assert "ORG:RootBrand" in card
 
 
 class TestCardInJWTPayload:
@@ -241,13 +258,14 @@ class TestCardInJWTPayload:
         payload_json = json.dumps(jwt_payload, separators=(",", ":"))
         payload_b64 = base64.urlsafe_b64encode(payload_json.encode()).decode().rstrip("=")
 
-        # Decode and verify card is present
+        # Decode and verify card is present as array
         padding = 4 - len(payload_b64) % 4
         decoded = json.loads(base64.urlsafe_b64decode(payload_b64 + "=" * padding))
 
         assert "card" in decoded
-        assert decoded["card"]["org"] == "ACME Corp"
-        assert decoded["card"]["logo"] == "https://cdn.acme.com/logo.png"
+        assert isinstance(decoded["card"], list)
+        assert "ORG:ACME Corp" in decoded["card"]
+        assert "LOGO;VALUE=URI:https://cdn.acme.com/logo.png" in decoded["card"]
 
     def test_no_card_when_no_brand(self):
         """JWT payload should not contain card key when no brand data."""

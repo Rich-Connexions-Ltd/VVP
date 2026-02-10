@@ -465,7 +465,7 @@ class TestPayloadFields:
         payload = valid_payload()
         payload["iss"] = "issuer"
         payload["exp"] = payload["iat"] + 300
-        payload["card"] = {"name": "Test Card"}
+        payload["card"] = ["ORG:Test Corp", "NICKNAME:Test Card"]
         payload["goal"] = "verification"
         payload["call-reason"] = "business"
         payload["origid"] = "call-123"
@@ -473,7 +473,7 @@ class TestPayloadFields:
         passport = parse_passport(jwt)
         assert passport.payload.iss == "issuer"
         assert passport.payload.exp == payload["iat"] + 300
-        assert passport.payload.card == {"name": "Test Card"}
+        assert passport.payload.card == ["ORG:Test Corp", "NICKNAME:Test Card"]
         assert passport.payload.goal == "verification"
         assert passport.payload.call_reason == "business"
         assert passport.payload.origid == "call-123"

@@ -105,7 +105,7 @@ async def create_passport(
     dossier_url: str,
     iat: int,
     exp: int,
-    card: Optional[dict] = None,
+    card: Optional[list[str]] = None,
     call_id: Optional[str] = None,
     cseq: Optional[int] = None,
 ) -> PASSporT:

@@ -50,7 +50,7 @@ class PassportPayload:
     evd: Optional[str] = None      # Required by local policy
     iss: Optional[str] = None
     exp: Optional[int] = None
-    card: Optional[dict] = None
+    card: Optional[list] = None
     goal: Optional[str] = None
     call_reason: Optional[str] = None  # Mapped from "call-reason"
     origid: Optional[str] = None
@@ -333,7 +333,7 @@ def _parse_payload(data: dict[str, Any]) -> tuple[PassportPayload, list[str]]:
         iss = None
 
     exp = _get_optional_integer(data, "exp", "payload")
-    card = data.get("card") if isinstance(data.get("card"), dict) else None
+    card = data.get("card") if isinstance(data.get("card"), list) else None
     goal = data.get("goal") if isinstance(data.get("goal"), str) else None
 
     # Map "call-reason" to call_reason

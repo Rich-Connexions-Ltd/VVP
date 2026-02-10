@@ -61,6 +61,7 @@ class BrandInfo:
 VCARD_FIELDS: Set[str] = {
     "fn",  # Full name
     "n",  # Structured name
+    "nickname",  # Display name / nickname
     "org",  # Organization
     "tel",  # Telephone
     "email",  # Email
@@ -86,87 +87,100 @@ BRAND_INDICATOR_FIELDS: Set[str] = {
 # When verifying card attributes against a brand credential, try these names in order.
 _VCARD_CREDENTIAL_MAP: Dict[str, List[str]] = {
     "org": ["org", "brandName"],
+    "nickname": ["nickname", "brandDisplayName", "brandName"],
     "fn": ["fn", "brandDisplayName", "brandName"],
     "logo": ["logo", "logoUrl"],
     "url": ["url", "websiteUrl"],
 }
 
 
-def extract_brand_info(card: Dict[str, Any]) -> BrandInfo:
+def parse_vcard_properties(card: List[str]) -> Dict[str, str]:
+    """Parse vCard property strings into a name-to-value dict.
+
+    Each string is RFC 6350 format: ``NAME[;PARAM=VALUE]*:value``
+
+    Example input::
+
+        ["ORG:ACME Corp", "LOGO;VALUE=URI:https://cdn.acme.com/logo.png"]
+
+    Returns::
+
+        {"org": "ACME Corp", "logo": "https://cdn.acme.com/logo.png"}
+
+    Property names are lowercased for case-insensitive matching.
+    Parameters (e.g. ``VALUE=URI``) are stripped from the key.
+    """
+    result: Dict[str, str] = {}
+    for prop in card:
+        if not isinstance(prop, str) or ":" not in prop:
+            continue
+        # Split on first colon to separate name+params from value
+        name_part, value = prop.split(":", 1)
+        # Extract base property name (before any parameters like ;VALUE=URI)
+        base_name = name_part.split(";")[0].strip().lower()
+        if base_name:
+            result[base_name] = value
+    return result
+
+
+def extract_brand_info(card: List[str]) -> BrandInfo:
     """Extract brand name and logo URL from PASSporT card claim.
 
-    Sprint 44: Extracts brand information for SIP header population.
+    Sprint 44/58: Extracts brand information for SIP header population.
+    Card is an array of RFC 6350 vCard property strings per VVP §4.1.2.
 
-    Brand name priority:
-    1. card.org (organization name)
-    2. card.fn (full name / display name)
-
-    Logo URL parsing:
-    - If card.logo is a simple URL string, use directly
-    - If card.logo is in vCard format (LOGO;VALUE=URI:https://...), parse URL
+    Brand name priority: ORG > NICKNAME > FN.
+    Logo URL: parsed from LOGO property value.
 
     Args:
-        card: Dictionary of card attributes from PASSporT
+        card: List of vCard property strings from PASSporT ``card`` claim.
 
     Returns:
         BrandInfo with brand_name and brand_logo_url (may be None if not found)
     """
+    props = parse_vcard_properties(card)
     info = BrandInfo()
 
-    # Extract brand name: prefer org, fall back to fn
-    org = card.get("org") or card.get("ORG")
-    fn = card.get("fn") or card.get("FN")
+    # Extract brand name: prefer ORG, fall back to NICKNAME, then FN
+    org = props.get("org")
+    nickname = props.get("nickname")
+    fn = props.get("fn")
 
     if org:
-        info.brand_name = str(org)
+        info.brand_name = org
+    elif nickname:
+        info.brand_name = nickname
     elif fn:
-        info.brand_name = str(fn)
+        info.brand_name = fn
 
     # Extract logo URL
-    logo = card.get("logo") or card.get("LOGO")
+    logo = props.get("logo")
     if logo:
-        logo_str = str(logo)
-        # Check if it's vCard format: LOGO;VALUE=URI:https://...
-        if ";VALUE=URI:" in logo_str.upper():
-            # Parse vCard LOGO field
-            parts = logo_str.split(":", 1)
-            if len(parts) == 2 and parts[1].startswith(("http://", "https://")):
-                info.brand_logo_url = parts[1]
-            else:
-                # Try to find URL in the string
-                for proto in ("https://", "http://"):
-                    if proto in logo_str:
-                        url_start = logo_str.find(proto)
-                        info.brand_logo_url = logo_str[url_start:]
-                        break
-        elif logo_str.startswith(("http://", "https://")):
-            # Direct URL
-            info.brand_logo_url = logo_str
+        if logo.startswith(("http://", "https://")):
+            info.brand_logo_url = logo
         else:
-            # Log and skip non-URL logo values (could be base64 data)
-            log.debug(f"Brand logo is not a URL: {logo_str[:50]}...")
+            log.debug(f"Brand logo is not a URL: {logo[:50]}...")
 
     return info
 
 
-def validate_vcard_format(card: Dict[str, Any]) -> List[str]:
-    """Validate card attributes conform to vCard format.
+def validate_vcard_format(card: List[str]) -> List[str]:
+    """Validate card property strings conform to vCard format.
 
     Per VVP §4.2: card attributes MUST conform to vCard format.
 
     Unknown fields log a warning but do NOT cause INVALID (per Reviewer).
 
     Args:
-        card: Dictionary of card attributes
+        card: List of vCard property strings.
 
     Returns:
         List of warning messages (empty if all fields known)
     """
+    props = parse_vcard_properties(card)
     warnings = []
-    for field_name in card.keys():
-        # Normalize field name (vCard is case-insensitive)
-        normalized = field_name.lower()
-        if normalized not in VCARD_FIELDS:
+    for field_name in props.keys():
+        if field_name not in VCARD_FIELDS:
             warnings.append(f"Unknown vCard field: {field_name}")
             log.warning(f"Brand validation: unknown vCard field '{field_name}'")
     return warnings
@@ -215,14 +229,14 @@ def find_brand_credential(dossier_acdcs: Dict[str, Any]) -> Optional[Any]:
 
 
 def verify_brand_attributes(
-    card: Dict[str, Any], brand_credential
+    card: List[str], brand_credential
 ) -> Tuple[bool, List[str]]:
     """Verify card attributes are justified by brand credential.
 
     Per §5.1.1-2.12: MUST verify brand attributes are justified.
 
     Args:
-        card: Dictionary of card attributes from PASSporT
+        card: List of vCard property strings from PASSporT ``card`` claim.
         brand_credential: ACDC brand credential from dossier
 
     Returns:
@@ -237,15 +251,13 @@ def verify_brand_attributes(
     if not isinstance(cred_attrs, dict):
         return False, ["Brand credential has no attributes"]
 
+    props = parse_vcard_properties(card)
     mismatches = []
     evidence = []
 
-    for card_field, card_value in card.items():
-        # Normalize field name
-        normalized = card_field.lower()
-
+    for card_field, card_value in props.items():
         # Sprint 58: Try vCard-to-credential mapping, then fall back to direct lookup
-        search_names = _VCARD_CREDENTIAL_MAP.get(normalized, [normalized, card_field])
+        search_names = _VCARD_CREDENTIAL_MAP.get(card_field, [card_field])
         cred_value = None
         for name in search_names:
             cred_value = cred_attrs.get(name)
