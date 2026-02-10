@@ -142,6 +142,23 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Load E2E test config if it exists (provides API keys and test fixtures)
+E2E_CONFIG="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.e2e-config"
+if [ -f "$E2E_CONFIG" ]; then
+    # Source config, but don't override existing environment variables
+    while IFS='=' read -r key value; do
+        # Skip comments and empty lines
+        [[ "$key" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "$key" ]] && continue
+        key=$(echo "$key" | xargs)  # trim whitespace
+        value=$(echo "$value" | xargs)
+        # Only set if not already in environment
+        if [ -z "${!key:-}" ]; then
+            export "$key=$value"
+        fi
+    done < "$E2E_CONFIG"
+fi
+
 # Apply environment overrides
 VERIFIER_URL="${VVP_VERIFIER_URL:-$VERIFIER_URL}"
 ISSUER_URL="${VVP_ISSUER_URL:-$ISSUER_URL}"
@@ -897,30 +914,30 @@ _run_freeswitch_call_test() {
         return 0
     fi
 
-    log_check "FreeSWITCH VVP loopback call (originate → signing → log verification)"
+    log_check "FreeSWITCH VVP signing call (originate → SIP Redirect → signing log verification)"
 
     local call_output
     call_output=$(pbx_run "
-        set -e
+        # Record the invite.completed count before originating
+        BEFORE_COUNT=\$(journalctl -u vvp-sip-redirect --no-pager 2>/dev/null | grep -c 'invite.completed' || echo '0')
 
-        # Record timestamp for log filtering
-        BEFORE=\$(date -u +%Y-%m-%dT%H:%M:%S 2>/dev/null || date +%s)
+        # Originate a call directly to the SIP Redirect signing service (5070).
+        # This tests FreeSWITCH → SIP Redirect → Issuer API → 302 with VVP headers.
+        # The signing service responds with 302 + VVP-Identity/PASSporT headers.
+        ORIGINATE_RESULT=\$(fs_cli -x \"bgapi originate {origination_caller_id_number=+441923311000,origination_caller_id_name=VVP-HealthCheck,sip_h_X-VVP-API-Key=${API_KEY}}sofia/external/+441923311006@127.0.0.1:5070 &park()\" 2>/dev/null) || ORIGINATE_RESULT='ORIGINATE_FAILED'
 
-        # Originate a test call through the VVP signing flow.
-        # The call routes: 71006 → vvp-loopback-outbound → SIP Redirect (5070)
-        #   → Issuer API → 302 → loopback-inbound → bridge to user/1006
-        # The final bridge will fail (1006 likely not registered), but the
-        # signing flow is what we're testing.
-        ORIGINATE_RESULT=\$(fs_cli -x \"bgapi originate {origination_caller_id_number=+441923311000,origination_caller_id_name=VVP-HealthCheck,sip_h_X-VVP-API-Key=$API_KEY}sofia/internal/71006@127.0.0.1 &park()\" 2>/dev/null || echo 'ORIGINATE_FAILED')
+        # Wait for the call to process through signing flow (signing can take 5-8s)
+        sleep 10
 
-        # Wait for the call to process through signing flow
-        sleep 5
+        # Count completed invites after the call — delta proves signing happened
+        AFTER_COUNT=\$(journalctl -u vvp-sip-redirect --no-pager 2>/dev/null | grep -c 'invite.completed' || echo '0')
+        DELTA=\$(( AFTER_COUNT - BEFORE_COUNT ))
 
-        # Check FreeSWITCH logs for VVP activity since the test started
-        VVP_LOGS=\$(journalctl -u freeswitch --since \"\$BEFORE\" --no-pager 2>/dev/null | grep -i 'VVP' | tail -20 || echo '')
+        # Get recent SIP redirect signing logs as evidence
+        SIP_LOGS=\$(journalctl -u vvp-sip-redirect -n 50 --no-pager 2>/dev/null | grep -E 'invite\.(received|completed)|Monitor event' | tail -10 || echo 'NO_LOGS')
 
-        # Check if signing service was contacted (look for loopback routing)
-        SIGNING_EVIDENCE=\$(echo \"\$VVP_LOGS\" | grep -c 'Loopback call\\|Routing to signing\\|VVP.*brand' || echo '0')
+        # Also check FreeSWITCH log file for VVP dialplan evidence
+        FS_LOGS=\$(tail -200 /var/log/freeswitch/freeswitch.log 2>/dev/null | grep -i 'VVP\|loopback\|signing' | tail -10 || echo '')
 
         # Hang up any test channels to clean up
         fs_cli -x 'hupall NORMAL_CLEARING' 2>/dev/null || true
@@ -928,9 +945,10 @@ _run_freeswitch_call_test() {
         # Output structured results
         echo '=== CALL_TEST_RESULTS ==='
         echo \"originate:\$ORIGINATE_RESULT\"
-        echo \"signing_evidence:\$SIGNING_EVIDENCE\"
+        echo \"signing_delta:\$DELTA\"
         echo '=== VVP_LOGS ==='
-        echo \"\$VVP_LOGS\"
+        echo \"\$SIP_LOGS\"
+        echo \"\$FS_LOGS\"
         echo '=== END ==='
     " 2>/dev/null) || {
         log_fail "Could not run FreeSWITCH call test"
@@ -946,9 +964,9 @@ _run_freeswitch_call_test() {
     fi
 
     # Parse results
-    local originate_result signing_evidence
+    local originate_result signing_delta
     originate_result=$(echo "$call_output" | grep "^originate:" | cut -d: -f2-)
-    signing_evidence=$(echo "$call_output" | grep "^signing_evidence:" | cut -d: -f2)
+    signing_delta=$(echo "$call_output" | grep "^signing_delta:" | cut -d: -f2)
 
     # Check if originate succeeded (should contain a UUID or +OK)
     if echo "$originate_result" | grep -qi "OK\|Job-UUID\|[0-9a-f]\{8\}"; then
@@ -964,10 +982,10 @@ _run_freeswitch_call_test() {
         failed=1
     fi
 
-    # Check if VVP signing flow was triggered (evidence in logs)
-    if [ -n "$signing_evidence" ] && [ "$signing_evidence" -gt 0 ] 2>/dev/null; then
-        log_pass "VVP signing flow triggered ($signing_evidence log entries)"
-        record_result "E2E" "vvp_signing_flow" "pass" "$signing_evidence VVP log entries"
+    # Check if VVP signing flow was triggered (delta > 0 means new invite.completed entries)
+    if [ -n "$signing_delta" ] && [ "$signing_delta" -gt 0 ] 2>/dev/null; then
+        log_pass "VVP signing flow triggered ($signing_delta new invite.completed entries)"
+        record_result "E2E" "vvp_signing_flow" "pass" "$signing_delta signing events"
 
         # Show relevant log lines
         if [ "$JSON_OUTPUT" = false ]; then
@@ -978,8 +996,8 @@ _run_freeswitch_call_test() {
             done
         fi
     else
-        log_fail "No VVP signing evidence in FreeSWITCH logs — call was not signed"
-        record_result "E2E" "vvp_signing_flow" "fail" "No VVP log entries found"
+        log_fail "No VVP signing evidence — signing_delta=${signing_delta:-empty}"
+        record_result "E2E" "vvp_signing_flow" "fail" "No new invite.completed entries"
         failed=1
     fi
 

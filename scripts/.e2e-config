@@ -1,0 +1,22 @@
+# =============================================================================
+# VVP E2E Test Configuration
+# =============================================================================
+# This file is loaded automatically by system-health-check.sh when running
+# E2E tests. It provides the API keys and test fixtures needed for a
+# complete signing + verification + timing test.
+#
+# Values here are defaults that can be overridden by environment variables.
+# =============================================================================
+
+# Org API key for signing tests (issued by bootstrap-issuer.py)
+VVP_TEST_API_KEY=hx9WiBzvFlDiDTZclmA2T9uylaZwuu7QMeYr3mqxD3I
+
+# Admin key for issuer admin endpoints (status, cache clear, etc.)
+VVP_ADMIN_KEY=sQO2aE-foISGVUYcY6aj3hhCiXnaE1sRqfaW87hMoeE
+
+# Test telephone numbers (must match TN allocations in issuer)
+VVP_TEST_FROM_TN=+441923311000
+VVP_TEST_TO_TN=+441923311006
+
+# FreeSWITCH VVP dial prefix (71006 = prefix 7 + extension 1006)
+VVP_TEST_DIAL_PREFIX=7
