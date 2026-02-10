@@ -14,6 +14,8 @@ from app.auth.roles import check_credential_write_role, require_auth
 from app.keri.identity import get_identity_manager
 from common.vvp.dossier.trust import TrustDecision
 
+from app.keri.issuer import get_credential_issuer
+from app.vvp.card import build_card_claim
 from app.vvp.dossier_service import check_dossier_revocation
 from app.vvp.exceptions import (
     IdentityNotAvailableError,
@@ -126,6 +128,28 @@ async def create_vvp_attestation(
         # Cap exp_seconds to normative maximum (§5.2B)
         exp_seconds = min(body.exp_seconds, MAX_VALIDITY_SECONDS)
 
+        # Sprint 58: Extract brand attributes for vCard card claim.
+        # Walk the dossier credential chain to find the brand credential
+        # (which may not be the root — e.g. root is LE credential, brand
+        # credential is a child linked via edges).
+        card = None
+        try:
+            from app.dossier.builder import get_dossier_builder
+
+            builder = await get_dossier_builder()
+            content = await builder.build(body.dossier_said, include_tel=False)
+
+            cred_issuer = await get_credential_issuer()
+            for said in content.credential_saids:
+                cred_info = await cred_issuer.get_credential(said)
+                if cred_info and cred_info.attributes:
+                    card = build_card_claim(cred_info.attributes)
+                    if card is not None:
+                        log.debug(f"Card claim from credential {said[:16]}...")
+                        break
+        except Exception as e:
+            log.warning(f"Failed to extract card claim: {e}")
+
         # Create VVP-Identity header (this sets iat/exp)
         vvp_header = create_vvp_identity_header(
             issuer_oobi=issuer_oobi,
@@ -142,6 +166,7 @@ async def create_vvp_attestation(
             dossier_url=dossier_url,
             iat=vvp_header.iat,
             exp=vvp_header.exp,
+            card=card,
         )
 
         # Build RFC 8224 Identity header (Sprint 57)

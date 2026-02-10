@@ -503,6 +503,169 @@ class TestExtractBrandInfo:
         info = extract_brand_info(card)
         assert info.brand_logo_url == "https://cdn.acme.com/logo.png"
 
+
+# =============================================================================
+# Sprint 58: Extended Brand Credential Compatibility Tests
+# =============================================================================
+
+
+class TestExtendedBrandCredentialFinder:
+    """Tests for find_brand_credential with Extended Brand Credential field names."""
+
+    def test_find_extended_brand_credential(self):
+        """Should find credential with Extended Brand Credential attributes."""
+        dossier = {
+            "BRAND1": MockACDC(
+                said="BRAND1",
+                issuer_aid="VETTER1",
+                attributes={
+                    "brandName": "ACME Corporation",
+                    "brandDisplayName": "ACME",
+                    "logoUrl": "https://cdn.acme.com/logo.png",
+                    "websiteUrl": "https://www.acme.com",
+                    "assertionCountry": "USA",
+                },
+            ),
+            "LE1": MockACDC(
+                said="LE1",
+                issuer_aid="ISSUER1",
+                attributes={"entityName": "ACME Inc", "LEI": "1234567890"},
+            ),
+        }
+
+        result = find_brand_credential(dossier)
+        assert result is not None
+        assert result.said == "BRAND1"
+
+    def test_mixed_vcard_and_credential_fields(self):
+        """Should find credential with mix of vCard and credential field names."""
+        dossier = {
+            "BRAND1": MockACDC(
+                said="BRAND1",
+                issuer_aid="VETTER1",
+                attributes={"brandName": "Test", "logoUrl": "https://example.com/logo.png"},
+            ),
+        }
+
+        result = find_brand_credential(dossier)
+        assert result is not None
+
+    def test_find_minimal_brand_name_only(self):
+        """Should find credential with only brandName (schema-required field)."""
+        dossier = {
+            "BRAND1": MockACDC(
+                said="BRAND1",
+                issuer_aid="VETTER1",
+                attributes={"brandName": "Minimal Corp", "assertionCountry": "USA"},
+            ),
+        }
+
+        result = find_brand_credential(dossier)
+        assert result is not None
+        assert result.said == "BRAND1"
+
+
+class TestVCardToCredentialMapping:
+    """Tests for vCard-to-credential field name mapping in verify_brand_attributes."""
+
+    def test_vcard_org_matches_brand_name(self):
+        """card.org should match credential brandName."""
+        card = {"org": "ACME Corporation"}
+        brand = MockACDC(
+            said="BRAND1",
+            issuer_aid="VETTER1",
+            attributes={"brandName": "ACME Corporation", "assertionCountry": "USA"},
+        )
+
+        valid, result = verify_brand_attributes(card, brand)
+        assert valid is True
+        assert any("org" in r for r in result)
+
+    def test_vcard_fn_matches_brand_display_name(self):
+        """card.fn should match credential brandDisplayName."""
+        card = {"fn": "ACME Corp"}
+        brand = MockACDC(
+            said="BRAND1",
+            issuer_aid="VETTER1",
+            attributes={"brandName": "ACME Corporation", "brandDisplayName": "ACME Corp"},
+        )
+
+        valid, result = verify_brand_attributes(card, brand)
+        assert valid is True
+
+    def test_vcard_fn_falls_back_to_brand_name(self):
+        """card.fn should match credential brandName when brandDisplayName is absent."""
+        card = {"fn": "ACME Corporation"}
+        brand = MockACDC(
+            said="BRAND1",
+            issuer_aid="VETTER1",
+            attributes={"brandName": "ACME Corporation"},
+        )
+
+        valid, result = verify_brand_attributes(card, brand)
+        assert valid is True
+
+    def test_vcard_logo_matches_logo_url(self):
+        """card.logo should match credential logoUrl."""
+        card = {"logo": "https://cdn.acme.com/logo.png"}
+        brand = MockACDC(
+            said="BRAND1",
+            issuer_aid="VETTER1",
+            attributes={"logoUrl": "https://cdn.acme.com/logo.png"},
+        )
+
+        valid, result = verify_brand_attributes(card, brand)
+        assert valid is True
+
+    def test_vcard_url_matches_website_url(self):
+        """card.url should match credential websiteUrl."""
+        card = {"url": "https://www.acme.com"}
+        brand = MockACDC(
+            said="BRAND1",
+            issuer_aid="VETTER1",
+            attributes={"websiteUrl": "https://www.acme.com"},
+        )
+
+        valid, result = verify_brand_attributes(card, brand)
+        assert valid is True
+
+    def test_full_card_matches_extended_brand_credential(self):
+        """Full vCard card claim should validate against Extended Brand Credential."""
+        card = {
+            "org": "ACME Corporation",
+            "fn": "ACME Corp",
+            "logo": "https://cdn.acme.com/logo.png",
+            "url": "https://www.acme.com",
+        }
+        brand = MockACDC(
+            said="BRAND1",
+            issuer_aid="VETTER1",
+            attributes={
+                "brandName": "ACME Corporation",
+                "brandDisplayName": "ACME Corp",
+                "logoUrl": "https://cdn.acme.com/logo.png",
+                "websiteUrl": "https://www.acme.com",
+                "assertionCountry": "USA",
+            },
+        )
+
+        valid, result = verify_brand_attributes(card, brand)
+        assert valid is True
+        assert len(result) == 4  # All 4 fields matched
+
+    def test_value_mismatch_fails(self):
+        """Mismatched values should fail even with correct field mapping."""
+        card = {"org": "Wrong Name"}
+        brand = MockACDC(
+            said="BRAND1",
+            issuer_aid="VETTER1",
+            attributes={"brandName": "ACME Corporation"},
+        )
+
+        valid, result = verify_brand_attributes(card, brand)
+        assert valid is False
+        assert any("org" in r for r in result)
+
     def test_vcard_format_http_fallback(self):
         """vCard format fallback should work with HTTP URLs too."""
         # After split on ":", parts[1] = "check http://..." which doesn't start with http

@@ -105,6 +105,7 @@ async def create_passport(
     dossier_url: str,
     iat: int,
     exp: int,
+    card: Optional[dict] = None,
 ) -> PASSporT:
     """Create a signed PASSporT JWT per §5.0-§5.4.
 
@@ -119,6 +120,7 @@ async def create_passport(
         dossier_url: Evidence URL (MUST match VVP-Identity evd)
         iat: Issued-at timestamp (MUST match VVP-Identity iat)
         exp: Expiry timestamp (MUST match VVP-Identity exp)
+        card: Optional vCard dict for brand identity (Sprint 58)
 
     Returns:
         PASSporT with JWT string and component metadata
@@ -160,6 +162,10 @@ async def create_passport(
         "dest": {"tn": dest_tn},
         "evd": dossier_url,
     }
+
+    # Sprint 58: Include vCard card claim if brand data is available
+    if card:
+        jwt_payload["card"] = card
 
     # Encode header and payload
     header_b64 = _base64url_encode(json.dumps(jwt_header, separators=(",", ":")).encode("utf-8"))

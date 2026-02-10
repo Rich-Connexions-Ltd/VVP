@@ -44,6 +44,7 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 55 | README Update & User Manual Requirements | COMPLETE | Sprint 53 |
 | 56 | System Operator User Manual | COMPLETE | Sprint 55 |
 | 57 | Complete STIR Header Compliance | COMPLETE | Sprint 44, 42 |
+| 58 | PASSporT vCard Card Claim | COMPLETE | Sprint 57 |
 
 ---
 
@@ -3319,3 +3320,19 @@ Identity: eyJhbGci...sig;info=<OOBI-URL>;alg=EdDSA;ppt=vvp
 - [x] sip-redirect monitor event capture includes Identity header
 - [x] sip-verify Identity parser fixed: body is JWT directly (no base64url decode), `info` accepts angle-bracketed URI, whitespace tolerance around semicolons
 - [x] 55 tests pass across issuer (13), sip-redirect (12), common (19), sip-verify (11)
+
+---
+
+## Sprint 58: PASSporT vCard Card Claim (COMPLETE)
+
+**Goal:** Add vCard `card` claim to PASSporT JWT, carrying brand identity per STIR spec.
+
+**Context:** Brand info was delivered via proprietary `X-VVP-Brand-*` SIP headers from TN mapping cache, but the PASSporT JWT `card` claim was never populated. The verifier already validates card claims. This sprint closes the gap on the signing side and fixes the verifier's brand credential finder to work with Extended Brand Credential field names.
+
+**Deliverables:**
+- [x] New `build_card_claim()` in `services/issuer/app/vvp/card.py` — maps Extended Brand Credential attributes to vCard fields (brandName→org, brandDisplayName→fn, logoUrl→logo, websiteUrl→url)
+- [x] `card` parameter added to `create_passport()` in `services/issuer/app/vvp/passport.py`
+- [x] `/vvp/create` endpoint extracts brand attributes from root credential and passes card to PASSporT
+- [x] Verifier `BRAND_INDICATOR_FIELDS` updated to match Extended Brand Credential field names
+- [x] Verifier `verify_brand_attributes()` uses vCard-to-credential field name mapping (`_VCARD_CREDENTIAL_MAP`)
+- [x] 158 tests pass across issuer (24), verifier brand (47), sip-verify (47), common (40)

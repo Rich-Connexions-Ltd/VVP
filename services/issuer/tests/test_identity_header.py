@@ -146,3 +146,55 @@ class TestRoundTrip:
         assert parsed.info_url == SAMPLE_OOBI
         assert parsed.algorithm == "EdDSA"
         assert parsed.ppt == "vvp"
+
+
+class TestCardClaimInPassport:
+    """Sprint 58: Test that card claim can be included in PASSporT payload."""
+
+    @staticmethod
+    def _load_card_builder():
+        """Load build_card_claim from card module."""
+        _card_spec = importlib.util.spec_from_file_location(
+            "app.vvp.card",
+            os.path.join(os.path.dirname(__file__), "..", "app", "vvp", "card.py"),
+        )
+        _card_mod = importlib.util.module_from_spec(_card_spec)
+        _card_spec.loader.exec_module(_card_mod)
+        return _card_mod.build_card_claim
+
+    def test_card_claim_from_brand_credential(self):
+        """Build card from credential attrs and verify vCard fields."""
+        build_card_claim = self._load_card_builder()
+
+        attrs = {
+            "brandName": "ACME Corp",
+            "brandDisplayName": "ACME",
+            "logoUrl": "https://cdn.acme.com/logo.png",
+            "websiteUrl": "https://www.acme.com",
+            "assertionCountry": "USA",
+        }
+
+        card = build_card_claim(attrs)
+
+        assert card is not None
+        assert card["org"] == "ACME Corp"
+        assert card["fn"] == "ACME"
+        assert card["logo"] == "https://cdn.acme.com/logo.png"
+        assert card["url"] == "https://www.acme.com"
+
+    def test_card_claim_json_serializable(self):
+        """Card claim must be JSON-serializable for JWT payload."""
+        import json
+        build_card_claim = self._load_card_builder()
+
+        attrs = {
+            "brandName": "Test Brand",
+            "logoUrl": "https://example.com/logo.png",
+        }
+
+        card = build_card_claim(attrs)
+
+        # Must round-trip through JSON
+        json_str = json.dumps(card)
+        restored = json.loads(json_str)
+        assert restored == card

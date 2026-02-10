@@ -76,7 +76,20 @@ VCARD_FIELDS: Set[str] = {
 }
 
 # Brand-indicative fields - presence of these suggests a brand credential
-BRAND_INDICATOR_FIELDS: Set[str] = {"fn", "org", "logo", "url", "photo"}
+# Includes both vCard names and Extended Brand Credential attribute names
+BRAND_INDICATOR_FIELDS: Set[str] = {
+    "fn", "org", "logo", "url", "photo",  # vCard names
+    "brandName", "brandDisplayName", "logoUrl", "websiteUrl",  # Extended Brand Credential
+}
+
+# Sprint 58: Mapping from vCard card claim field names to credential attribute names.
+# When verifying card attributes against a brand credential, try these names in order.
+_VCARD_CREDENTIAL_MAP: Dict[str, List[str]] = {
+    "org": ["org", "brandName"],
+    "fn": ["fn", "brandDisplayName", "brandName"],
+    "logo": ["logo", "logoUrl"],
+    "url": ["url", "websiteUrl"],
+}
 
 
 def extract_brand_info(card: Dict[str, Any]) -> BrandInfo:
@@ -188,8 +201,11 @@ def find_brand_credential(dossier_acdcs: Dict[str, Any]) -> Optional[Any]:
             if indicator in attrs:
                 found_indicators.add(indicator)
 
-        # Require at least 2 brand indicators to identify as brand credential
-        if len(found_indicators) >= 2:
+        # Sprint 58: brandName alone is sufficient (it's the required field in
+        # Extended Brand Credential schema).  For vCard-style credentials,
+        # still require 2+ indicators to avoid false positives.
+        has_brand_name = "brandName" in attrs
+        if has_brand_name or len(found_indicators) >= 2:
             log.debug(
                 f"Found brand credential {said[:16]}... with indicators: {found_indicators}"
             )
@@ -228,8 +244,13 @@ def verify_brand_attributes(
         # Normalize field name
         normalized = card_field.lower()
 
-        # Check if credential has this attribute
-        cred_value = cred_attrs.get(normalized) or cred_attrs.get(card_field)
+        # Sprint 58: Try vCard-to-credential mapping, then fall back to direct lookup
+        search_names = _VCARD_CREDENTIAL_MAP.get(normalized, [normalized, card_field])
+        cred_value = None
+        for name in search_names:
+            cred_value = cred_attrs.get(name)
+            if cred_value is not None:
+                break
 
         if cred_value is None:
             # Card claims attribute not in credential

@@ -1,5 +1,37 @@
 # VVP Verifier Change Log
 
+## Sprint 58: PASSporT vCard Card Claim
+
+**Date:** 2026-02-10
+**Status:** Complete
+
+### Summary
+
+Added vCard `card` claim to PASSporT JWT payload, carrying brand identity per STIR/VVP spec. Previously brand info only flowed via proprietary SIP headers populated from the TN mapping cache. Now the issuer builds a vCard card claim from the Extended Brand Credential in the dossier and embeds it directly in the PASSporT.
+
+Key changes:
+- New `build_card_claim()` maps Extended Brand Credential attributes to vCard fields (brandName→org, brandDisplayName→fn, logoUrl→logo, websiteUrl→url)
+- `/vvp/create` walks the full dossier credential chain (not just root) to locate the brand credential
+- `create_passport()` accepts optional `card` parameter, includes it in JWT payload
+- Verifier `BRAND_INDICATOR_FIELDS` updated to recognize Extended Brand Credential field names
+- Verifier `_VCARD_CREDENTIAL_MAP` bridges vCard ↔ credential naming in attribute verification
+- `find_brand_credential()` accepts `brandName` alone as sufficient indicator
+- 14 issuer card tests, 15 identity header tests, 48 verifier brand tests passing
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `services/issuer/app/vvp/card.py` | NEW: `build_card_claim()` |
+| `services/issuer/app/vvp/passport.py` | Add `card` param to `create_passport()` |
+| `services/issuer/app/api/vvp.py` | Walk dossier chain, build card, pass to passport |
+| `services/verifier/app/vvp/brand.py` | Extended Brand Credential indicators + field mapping |
+| `services/issuer/tests/test_card.py` | NEW: 14 card builder + chain + JWT tests |
+| `services/issuer/tests/test_identity_header.py` | Card claim round-trip tests |
+| `services/verifier/tests/test_brand.py` | Extended Brand Credential finder + mapping tests |
+
+---
+
 ## Sprint 57: Complete STIR Header Compliance
 
 **Date:** 2026-02-10
