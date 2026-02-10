@@ -8,7 +8,8 @@ WORKDIR /app
 
 COPY . .
 
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir .
 
 EXPOSE 5060/udp 8000
 
