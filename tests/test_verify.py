@@ -24,6 +24,7 @@ import pytest
 
 from app.vvp.models import (
     CAPABILITIES,
+    ClaimNode,
     ClaimStatus,
     ErrorCode,
     ErrorDetail,
@@ -321,3 +322,54 @@ class TestErrorCode:
         }
         actual = {e.value for e in ErrorCode}
         assert actual == expected
+
+
+# =========================================================================
+# DAG Error Propagation
+# =========================================================================
+
+class TestDossierErrorPropagation:
+    """DAG validation errors must drive dossier_verified claim status."""
+
+    def test_non_recoverable_dossier_error_overrides_valid_children(self):
+        """Non-recoverable dossier errors should make dossier_verified INVALID."""
+        chain_claim = ClaimNode(name="chain_verified", status=ClaimStatus.VALID)
+        revocation_claim = ClaimNode(name="revocation_clear", status=ClaimStatus.VALID)
+
+        # Simulate a DOSSIER_GRAPH_INVALID error (non-recoverable)
+        dossier_error = make_error(ErrorCode.DOSSIER_GRAPH_INVALID, "Cycle detected in DAG")
+        assert dossier_error.recoverable is False
+
+        # Status derivation with this error should yield INVALID
+        status = derive_overall_status(
+            claims=[chain_claim, revocation_claim],
+            errors=[dossier_error],
+        )
+        assert status == ClaimStatus.INVALID
+
+    def test_recoverable_dossier_error_yields_indeterminate(self):
+        """Recoverable dossier errors should yield at least INDETERMINATE."""
+        dossier_error = make_error(ErrorCode.DOSSIER_FETCH_FAILED, "Timeout")
+        assert dossier_error.recoverable is True
+
+        status = derive_overall_status(claims=None, errors=[dossier_error])
+        assert status == ClaimStatus.INDETERMINATE
+
+
+# =========================================================================
+# Revocation Checker Module Wiring
+# =========================================================================
+
+class TestRevocationCheckerWiring:
+    """Verify that revocation checker module imports resolve correctly."""
+
+    def test_revocation_checker_imports(self):
+        """BackgroundRevocationChecker should be importable."""
+        from app.vvp.revocation import BackgroundRevocationChecker, get_revocation_checker
+        assert BackgroundRevocationChecker is not None
+
+    def test_tel_module_exports(self):
+        """TEL module should export CredentialStatus and check_revocation."""
+        from app.vvp.tel import CredentialStatus, check_revocation
+        assert CredentialStatus is not None
+        assert callable(check_revocation)

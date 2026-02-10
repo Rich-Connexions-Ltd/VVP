@@ -161,3 +161,48 @@ class TestSIPRoundtrip:
         assert resp2.status_code == 302
         assert resp2.reason == "Moved Temporarily"
         assert resp2.headers.get("Call-ID") == req.call_id
+
+
+# =========================================================================
+# SIP Handler Tests
+# =========================================================================
+
+class TestHandleInvite:
+    """Tests for SIP INVITE handler wiring (app.sip.handler)."""
+
+    @pytest.mark.asyncio
+    async def test_non_invite_returns_none(self):
+        """Non-INVITE methods should be silently ignored."""
+        from app.sip.handler import handle_invite
+
+        req = SIPRequest(
+            method="OPTIONS",
+            uri="sip:alice@example.com",
+            version="SIP/2.0",
+            headers={"Via": "SIP/2.0/UDP test", "Call-ID": "test123", "CSeq": "1 OPTIONS"},
+            body=b"",
+        )
+        result = await handle_invite(req, ("127.0.0.1", 5060))
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_invite_missing_identity_returns_400(self):
+        """INVITE without Identity header should return 400."""
+        from app.sip.handler import handle_invite
+
+        req = SIPRequest(
+            method="INVITE",
+            uri="sip:alice@example.com",
+            version="SIP/2.0",
+            headers={
+                "Via": "SIP/2.0/UDP test;branch=z9hG4bK123",
+                "Call-ID": "test456",
+                "CSeq": "1 INVITE",
+                "From": "<sip:bob@example.com>;tag=abc",
+                "To": "<sip:alice@example.com>",
+            },
+            body=b"",
+        )
+        result = await handle_invite(req, ("127.0.0.1", 5060))
+        assert result is not None
+        assert result.status_code == 400

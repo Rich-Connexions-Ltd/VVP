@@ -1104,10 +1104,23 @@ def _build_claim_tree(
         dossier_status = ClaimStatus.INVALID
         dossier_reasons = ["Skipped due to PASSporT validation failure"]
     else:
-        dossier_status = _worst_status(
+        child_status = _worst_status(
             c.node.status for c in dossier_children
         )
-        dossier_reasons = []
+        # DAG validation errors (e.g. DOSSIER_GRAPH_INVALID) must drive
+        # the dossier claim status even when chain/revocation succeed.
+        has_non_recoverable = any(not e.recoverable for e in dossier_errors)
+        if has_non_recoverable:
+            dossier_status = ClaimStatus.INVALID
+            dossier_reasons = [e.message for e in dossier_errors if not e.recoverable]
+        elif dossier_errors:
+            # Recoverable dossier errors → at least INDETERMINATE.
+            _severity = [ClaimStatus.VALID, ClaimStatus.INDETERMINATE, ClaimStatus.INVALID]
+            dossier_status = max(child_status, ClaimStatus.INDETERMINATE, key=_severity.index)
+            dossier_reasons = [e.message for e in dossier_errors]
+        else:
+            dossier_status = child_status
+            dossier_reasons = []
 
     dossier_verified = ClaimNode(
         name="dossier_verified",

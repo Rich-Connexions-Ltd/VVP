@@ -230,12 +230,10 @@ class BackgroundRevocationChecker:
             )
             return
 
-        # Import TEL client lazily to avoid circular imports and to
-        # allow the checker to operate without keri dependencies in
+        # Import TEL module lazily to avoid circular imports and to
+        # allow the checker to operate without heavy dependencies in
         # unit tests (where _check_revocations is typically mocked).
-        from app.vvp.keri.tel_client import CredentialStatus, get_tel_client
-
-        tel_client = get_tel_client()
+        from app.vvp.tel import CredentialStatus, check_revocation
 
         # Extract registry SAIDs from the DAG for OOBI derivation.
         dag = entry.dag
@@ -254,10 +252,9 @@ class BackgroundRevocationChecker:
                     ):
                         registry_said = node.raw.get("ri")
 
-                result = await tel_client.check_revocation(
+                result = await check_revocation(
                     credential_said=said,
                     registry_said=registry_said,
-                    oobi_url=entry.passport_kid,
                 )
 
                 if result.status == CredentialStatus.REVOKED:

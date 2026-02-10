@@ -30,7 +30,6 @@ SIP header mapping (outbound, via 302 redirect):
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from typing import Optional
 
 from app.sip.builder import (
@@ -40,7 +39,7 @@ from app.sip.builder import (
     extract_contact_uri,
 )
 from app.sip.models import SIPRequest, SIPResponse
-from app.vvp.api_models import CallContext, VerifyRequest
+from app.vvp.models import VerifyRequest
 
 logger = logging.getLogger(__name__)
 
@@ -99,14 +98,10 @@ async def handle_invite(
     # ------------------------------------------------------------------
 
     call_id = request.call_id or "unknown"
-    received_at = datetime.now(timezone.utc).isoformat()
 
     verify_request = VerifyRequest(
         passport_jwt=passport_jwt,
-        context=CallContext(
-            call_id=call_id,
-            received_at=received_at,
-        ),
+        vvp_identity=vvp_identity,
     )
 
     # ------------------------------------------------------------------
@@ -117,12 +112,9 @@ async def handle_invite(
         # Import here to avoid circular dependency at module load time.
         # The verify module has heavy dependencies (KERI, HTTP clients, etc.)
         # that should not be imported until actually needed.
-        from app.vvp.verify import verify_vvp
+        from app.vvp.verify import verify
 
-        _request_id, verify_result = await verify_vvp(
-            req=verify_request,
-            vvp_identity_header=vvp_identity,
-        )
+        verify_result = await verify(verify_request)
     except Exception:
         logger.exception(
             "Verification failed for Call-ID=%s from %s:%s",
