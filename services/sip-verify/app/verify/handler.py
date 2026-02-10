@@ -139,7 +139,7 @@ async def _capture_event(
     asyncio.create_task(_do_capture_event(event_data, vvp_status, response_code))
 
 
-async def handle_verify_invite(request: SIPRequest) -> SIPResponse:
+async def handle_verify_invite(request: SIPRequest) -> Optional[SIPResponse]:
     """Handle incoming SIP INVITE with VVP verification.
 
     Flow:
@@ -153,22 +153,27 @@ async def handle_verify_invite(request: SIPRequest) -> SIPResponse:
         request: Parsed SIP INVITE request
 
     Returns:
-        SIP 302 redirect response with VVP headers
+        SIP 302 redirect response with VVP headers, or None to silently
+        drop the request (e.g. FreeSWITCH retransmit without VVP headers).
     """
     start_time = time.time()
 
-    # Determine contact URI for 302 redirect
-    contact_uri = VVP_REDIRECT_TARGET or request.request_uri
+    # Determine contact URI for 302 redirect.
+    # VVP_REDIRECT_TARGET is host:port only (e.g. "127.0.0.1:5080"),
+    # so we build a proper SIP URI with the destination TN.
+    if VVP_REDIRECT_TARGET:
+        dest = request.to_tn or request.request_uri
+        contact_uri = f"sip:{dest}@{VVP_REDIRECT_TARGET}"
+    else:
+        contact_uri = request.request_uri
 
-    # Validate required headers for verification (400 per Sprint 44)
+    # Silently ignore bare INVITEs without VVP headers.
+    # FreeSWITCH sends a second INVITE when natively following the
+    # verification 302 Contact URI; this duplicate lacks VVP headers
+    # and should be dropped rather than generating a 400 response.
     if not request.has_verification_headers:
-        log.warning(f"INVITE missing verification headers, call_id={request.call_id}")
-        resp = build_400_bad_request(
-            request,
-            reason="Missing VVP verification headers (Identity or P-VVP-Identity required)",
-        )
-        await _capture_event(request, resp, 400, "INDETERMINATE", error="Missing verification headers")
-        return resp
+        log.debug(f"Ignoring bare INVITE (no VVP headers), call_id={request.call_id}")
+        return None
 
     # Parse Identity header (RFC 8224)
     passport_jwt: Optional[str] = None

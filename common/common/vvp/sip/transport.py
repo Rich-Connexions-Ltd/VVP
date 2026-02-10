@@ -15,8 +15,9 @@ from common.vvp.sip.parser import parse_sip_request
 
 log = logging.getLogger(__name__)
 
-# Type for message handler function
-MessageHandler = Callable[[SIPRequest], Awaitable[SIPResponse]]
+# Type for message handler function.
+# Handler may return None to silently drop a request (no response sent).
+MessageHandler = Callable[[SIPRequest], Awaitable[Optional[SIPResponse]]]
 
 
 @dataclass
@@ -84,7 +85,7 @@ class UDPServerProtocol(asyncio.DatagramProtocol):
             log.debug(f"UDP {request.method} from {addr[0]}:{addr[1]}")
 
             response = await self._handler(request)
-            if self._transport and not self._transport.is_closing():
+            if response is not None and self._transport and not self._transport.is_closing():
                 self._transport.sendto(response.to_bytes(), addr)
 
         except Exception as e:
@@ -163,7 +164,7 @@ class TCPServerProtocol(asyncio.Protocol):
             log.debug(f"TCP {request.method} from {self._addr[0]}:{self._addr[1]}")
 
             response = await self._handler(request)
-            if self._transport and not self._transport.is_closing():
+            if response is not None and self._transport and not self._transport.is_closing():
                 self._transport.write(response.to_bytes())
 
         except Exception as e:
