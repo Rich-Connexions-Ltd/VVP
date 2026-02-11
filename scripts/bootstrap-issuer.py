@@ -13,7 +13,7 @@ Usage:
         --org-name    ACME Inc
         --tn          +15551001006
         --brand-name  ACME Inc
-        --brand-logo  https://vvp-issuer.rcnx.io/static/logo-placeholder.png
+        --brand-logo  https://vvp-issuer.rcnx.io/static/brand-logo.png
         --skip-reinit Skip mock vLEI re-initialization (add to existing state)
 
 Steps:
@@ -372,7 +372,7 @@ def main():
     )
     parser.add_argument(
         "--brand-logo",
-        default="https://vvp-issuer.rcnx.io/static/logo-placeholder.png",
+        default="https://vvp-issuer.rcnx.io/static/brand-logo.png",
         help="Brand logo URL for TN mapping",
     )
     parser.add_argument(
