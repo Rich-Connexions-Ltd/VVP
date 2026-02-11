@@ -254,7 +254,10 @@ async def _optional_principal(request: Request) -> Optional[Principal]:
     Sprint 59: Allows dossier GET to work both authenticated (dashboard) and
     unauthenticated (verifier fetching via evd URL).
     """
-    user = getattr(request, "user", None)
+    try:
+        user = request.user
+    except (AttributeError, AssertionError):
+        return None
     if user is not None and getattr(user, "is_authenticated", False):
         return user
     return None
