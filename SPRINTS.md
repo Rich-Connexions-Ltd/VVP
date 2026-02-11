@@ -47,6 +47,7 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 58 | PASSporT vCard Card Claim | COMPLETE | Sprint 57 |
 | 59 | Infrastructure Fixes | IN PROGRESS | Sprint 53 |
 | 60 | Spec-Compliant VVP Header Flow | COMPLETE | Sprint 58 |
+| 60b | TNAlloc in Dossier + Brand Logo Fix | COMPLETE | Sprint 60 |
 
 ---
 
@@ -3366,3 +3367,25 @@ Identity: eyJhbGci...sig;info=<OOBI-URL>;alg=EdDSA;ppt=vvp
 - [x] Added SIP monitor `GET /api/calls/recent` endpoint for evidence capture (localhost-only)
 - [x] Fixed pre-existing test issues: `dossier_issuer_aid` → `dossier_subject_aid` parameter rename in verifier tests
 - [x] 2457 tests pass across sip-redirect (116), sip-verify (47), verifier (1844), issuer (450)
+
+---
+
+## Sprint 60b: TNAlloc in Dossier + Brand Logo Fix (COMPLETE)
+
+**Goal:** Include TN Allocation credentials in the dossier so the verifier can validate callee TN rights, and fix brand logo serving.
+
+**Context:** After Sprint 60 deployed, E2E testing revealed two issues:
+1. `tn_rights_valid=INVALID` — TNAlloc credentials were issued but not linked via edges to the brand credential, so the dossier builder's DFS walk never included them
+2. `dossier_verified=INDETERMINATE` — TNAlloc credentials used attribute name `"numbers"` but the verifier only checked `"tn"`, `"phone"`, `"allocation"`
+3. Brand logo URL `logo-placeholder.png` returned 404 — the `/static` mount serves from `web/` root, but the logo was in `web/static/`
+
+**Deliverables:**
+- [x] Registered TNAlloc schema SAID `EFvnoHDY7I-kaBBeKlbDbkjG4BaI0nKLGadxBdjMGgSQ` in `KNOWN_SCHEMA_SAIDS` (was empty frozenset)
+- [x] Added `"numbers"` to TNAlloc attribute detection fallback in `common/vvp/models/acdc.py`
+- [x] Added `"numbers"` to TN data extraction in `verify_callee.py` and `authorization.py`
+- [x] Updated `bootstrap-issuer.py` to link TNAlloc credentials as edges of the brand credential
+- [x] Moved `brand-logo.png` to `web/` root for correct `/static/` serving
+- [x] Updated bootstrap default `--brand-logo` URL to `brand-logo.png`
+- [x] Added mock GLEIF AID to `VVP_TRUSTED_ROOT_AIDS` on Azure verifier
+- [x] E2E verified: `status=VALID`, all claims (passport, dossier, tn_rights, brand) = VALID
+- [x] 1858 tests pass (verifier 1818, common 40)

@@ -1,5 +1,38 @@
 # VVP Verifier Change Log
 
+## Sprint 60b: TNAlloc in Dossier + Brand Logo Fix
+
+**Date:** 2026-02-11
+**Status:** Complete
+
+### Summary
+
+Resolved three E2E test failures discovered after Sprint 60 deployment:
+1. TNAlloc credentials missing from dossier (not linked via brand credential edges)
+2. TNAlloc attribute `"numbers"` not recognized by verifier type detection and TN data extraction
+3. Brand logo URL returning 404 (file in wrong directory for `/static` mount)
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `common/common/vvp/schema/registry.py` | Register TNAlloc schema SAID in `KNOWN_SCHEMA_SAIDS` |
+| `common/common/vvp/models/acdc.py` | Add `"numbers"` to TNAlloc attribute detection fallback |
+| `services/verifier/app/vvp/verify_callee.py` | Add `"numbers"` to TN data extraction chain |
+| `services/verifier/app/vvp/authorization.py` | Add `"numbers"` to caller TN validation path |
+| `scripts/bootstrap-issuer.py` | Link TNAlloc creds as brand edges; update logo URL default |
+| `services/issuer/web/brand-logo.png` | NEW: Logo at web root for `/static/brand-logo.png` serving |
+| `scripts/.e2e-config` | Updated API key after re-bootstrap |
+| `services/pbx/config/public-sip.xml` | Updated API key in dialplan |
+
+### Commits
+
+- `dc9908c` Include TNAlloc credentials in dossier for TN rights validation
+- `14efbf5` Fix brand logo: add logo to web root, update bootstrap default URL
+- `a3fe477` Update API key after re-bootstrap with correct brand logo URL
+
+---
+
 ## Sprint 58: PASSporT vCard Card Claim
 
 **Date:** 2026-02-10
