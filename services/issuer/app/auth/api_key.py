@@ -316,6 +316,36 @@ def verify_org_api_key(raw_key: str) -> tuple[Principal | None, str | None]:
         return None, "invalid"
 
 
+def verify_org_key_still_valid(key_id: str) -> bool:
+    """Check if an org API key is still valid (not revoked, org not disabled).
+
+    Used by session validation to verify org API key sessions are still valid
+    without needing the raw key material.
+
+    Args:
+        key_id: The key_id in "org_key:{db_id}" format
+
+    Returns:
+        True if key is still valid, False if revoked/removed/org disabled
+    """
+    from app.db.session import get_db_session
+    from app.db.models import OrgAPIKey, Organization
+
+    try:
+        db_id = key_id.split(":", 1)[1]
+        with get_db_session() as db:
+            key = db.query(OrgAPIKey).filter(OrgAPIKey.id == db_id).first()
+            if key is None or key.revoked:
+                return False
+            org = db.query(Organization).filter(Organization.id == key.organization_id).first()
+            if org and not org.enabled:
+                return False
+            return True
+    except Exception as e:
+        log.error(f"Error checking org API key validity: {e}")
+        return False
+
+
 def get_api_key_store() -> APIKeyStore:
     """Get the global API key store instance.
 

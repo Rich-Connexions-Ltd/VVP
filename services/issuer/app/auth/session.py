@@ -204,8 +204,19 @@ class InMemorySessionStore(SessionStore):
                         f"user {email} disabled or removed"
                     )
                     return None
+            elif session.key_id.startswith("org_key:"):
+                # Org API key session - check if key is revoked in database
+                from app.auth.api_key import verify_org_key_still_valid
+
+                if not verify_org_key_still_valid(session.key_id):
+                    del self._sessions[session_id]
+                    log.warning(
+                        f"Session {session_id[:8]}... invalidated: "
+                        f"org API key {session.key_id} revoked or removed"
+                    )
+                    return None
             else:
-                # API key session - check if key is revoked
+                # File-based API key session - check if key is revoked
                 from app.auth.api_key import get_api_key_store
 
                 store = get_api_key_store()
