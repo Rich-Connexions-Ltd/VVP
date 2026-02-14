@@ -1,9 +1,9 @@
 name: VVP Verifier CI
 on:
   push:
-    branches: [vvp-verifier]
+    branches: [main]
   pull_request:
-    branches: [vvp-verifier]
+    branches: [main]
   workflow_dispatch:
     inputs:
       deploy_target:

@@ -51,7 +51,7 @@ The VVP verifier implements the **VVP Verifier Specification v1.5**. Key section
 
 ## Contact
 
-- **Repository**: [GitHub](https://github.com/your-org/vvp-verifier)
+- **Repository**: [GitHub](https://github.com/Rich-Connexions-Ltd/OVC-VVP-Verifier)
 - **Maintainer**: Rich Connexions Ltd.
 - **Email**: support@richconnexions.com
 
