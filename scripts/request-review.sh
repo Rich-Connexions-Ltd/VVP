@@ -129,9 +129,13 @@ PROMPT
 }
 
 build_code_review_prompt() {
-    # Get changed files since plan was last modified (approximation)
+    # Get changed files: uncommitted changes first, then fall back to recent commit range
     local changed_files
-    changed_files=$(git diff --name-only HEAD~1 2>/dev/null || git diff --name-only HEAD 2>/dev/null || echo "(unable to detect)")
+    changed_files=$(git diff --name-only 2>/dev/null)
+    if [ -z "$changed_files" ]; then
+        # All changes committed — diff across recent Sprint commits (up to 5 back)
+        changed_files=$(git diff --name-only HEAD~5..HEAD 2>/dev/null || git diff --name-only HEAD~1 2>/dev/null || echo "(unable to detect)")
+    fi
 
     cat <<PROMPT
 You are a senior code architect acting as Reviewer in a pair programming workflow.
