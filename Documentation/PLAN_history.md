@@ -12224,3 +12224,774 @@ User (Admin) → Wizard UI
 | `services/issuer/web/dossier.html` | +1124/-280 | 4-step wizard UI rewrite |
 | `services/issuer/tests/test_sprint63_wizard.py` | +1684 | 48 tests across 15+ test classes |
 
+
+---
+
+# Sprint 64: Repository Migration to Rich-Connexions-Ltd
+
+_Archived: 2026-02-14_
+
+# Sprint 64: Repository Migration to Rich-Connexions-Ltd
+
+## Problem Statement
+
+The VVP repository is currently hosted at `github.com/andrewbalercnx/vvp-verifier` under a personal GitHub account. It needs to move to `github.com/Rich-Connexions-Ltd/VVP` under the company's organization account. This requires updating the git remote, all code/documentation references, the Azure AD OIDC federation trust (so CI/CD can authenticate), and migrating all GitHub Actions secrets to the new repo.
+
+## Current State
+
+- **Origin remote**: `https://github.com/andrewbalercnx/vvp-verifier.git`
+- **Existing `ovc` remote**: `https://github.com/Rich-Connexions-Ltd/OVC-VVP-Verifier.git` (already exists)
+- **CI/CD**: Two GitHub Actions workflows (`deploy.yml`, `integration-tests.yml`) using OIDC auth to Azure
+- **Azure OIDC**: Federated credential subject claim currently trusts `repo:andrewbalercnx/vvp-verifier:ref:refs/heads/main`
+- **OIDC config file**: `fic.json` in repo root documents the current federated credential
+
+### Git Ref Inventory
+
+Active branches (from `git branch -a`):
+
+| Branch | Status | Migrate? |
+|--------|--------|----------|
+| `main` | Primary, CI/CD triggers on push | Yes (required) |
+| `vvp-verifier` | Legacy local branch | No — stale |
+| `claude/*` (4 local) | Ephemeral Claude Code branches | No — stale |
+| `remotes/origin/claude/*` (4 remote) | Ephemeral review branches | No — stale |
+| `remotes/ovc/main` | Already on target org | N/A |
+
+**Decision**: Only `main` and tags are migrated. All other branches are intentionally excluded. This matches the updated `SPRINTS.md` scope.
+
+**Branch exclusion decision record:**
+
+| Branch | Decision | Rationale |
+|--------|----------|-----------|
+| `vvp-verifier` (local) | Exclude — preserved in old repo archive | This was the Sprint 54 standalone verifier extraction, created on an orphan branch. Its 7 commits are already present in the target repo's `ovc/main` (which is backed up as a timestamped `backup/pre-migration-ovc-main-*` tag before force push). The standalone verifier code also exists in `Documentation/archive/PLAN_Sprint54.md` and the Sprint 54 commit history on `main`. No code is lost. |
+| `claude/*` (4 local + 4 remote) | Exclude — ephemeral | Auto-created by Claude Code for code reviews. No unique code; all changes were merged to `main`. |
+
+Owner sign-off: User (repository owner) approves exclusion via sprint plan approval.
+
+**Mandatory branch exclusion verification** (run during Step 3.1 preflight):
+
+```bash
+# 1. Verify vvp-verifier is an orphan branch (no common ancestor with main)
+git merge-base main vvp-verifier 2>/dev/null
+# Expected: exits with error code 1 (no common ancestor) — confirms orphan branch
+
+# 2. Show orphan branch commits (expected NON-EMPTY for orphan branches)
+git log --oneline main..vvp-verifier 2>/dev/null | head -10
+# Expected: Shows ~7 commits (the Sprint 54 standalone verifier extraction).
+# This is CORRECT for an orphan branch — these commits have no ancestor in main.
+# These commits are preserved via:
+#   a) timestamped backup/pre-migration-ovc-main-* tag on target (pushed in Step 3.2)
+#   b) ovc/main ref (same content, already on target)
+#   c) Sprint 54 archive in Documentation/archive/PLAN_Sprint54.md
+
+# 3. Verify LOCAL claude/* branches are fully merged to main
+for branch in $(git branch --list 'claude/*'); do
+  UNMERGED=$(git log --oneline main..$branch 2>/dev/null | wc -l)
+  echo "local $branch: $UNMERGED unmerged commits"
+done
+# Expected: all show 0 unmerged commits
+
+# 4. Verify REMOTE claude/* branches are fully merged to main
+git fetch origin
+for branch in $(git branch -r --list 'origin/claude/*'); do
+  UNMERGED=$(git log --oneline main..$branch 2>/dev/null | wc -l)
+  echo "remote $branch: $UNMERGED unmerged commits"
+done
+# Expected: all show 0 unmerged commits
+# Note: remote ephemeral branches are NOT pushed to the target.
+# This check confirms no required code was left on remote-only branches.
+```
+
+If any `claude/*` branch (local or remote) shows unmerged commits with required code, it must be merged to `main` before migration proceeds. The `vvp-verifier` orphan branch commits are preserved via the backup tag — no merge needed.
+
+### Full Reference Audit
+
+Comprehensive search for `andrewbalercnx`, `vvp-verifier.git`, and `git@github.com` across all tracked file types:
+
+| File | Line | Reference | Action |
+|------|------|-----------|--------|
+| `README.md` | 75-76 | Clone URL + `cd vvp-verifier` | Update |
+| `fic.json` | 4-5 | OIDC subject + description | Update |
+| `services/issuer/app/main.py` | 153 | Fallback repo name in `/version` endpoint | Update |
+| `services/verifier/app/main.py` | 232 | Fallback repo name in `/version` endpoint | Update |
+| `Documentation/VVP_Verifier_Documentation.md` | 95 | Repo reference in table | Update |
+| `Documentation/archive/VVP_Verifier_Documentation_v1.1.md` | 47, 59 | Archived doc references | Leave (archive) |
+| `SPRINTS.md` | 4026+ | Sprint 64 definition itself | Self-referential, OK |
+
+**Audit command for reproducibility** (uses `rg` for reliable multi-pattern search):
+```bash
+rg -n 'andrewbalercnx|vvp-verifier\.git|git@github\.com.*vvp' \
+  --type-add 'proj:*.{md,yml,yaml,py,json,toml,sh,html,js,cfg}' --type proj \
+  --glob '!Documentation/archive/*' --glob '!PLAN_Sprint64.md' --glob '!REVIEW_Sprint64.md' --glob '!SPRINTS.md'
+```
+
+**Explicit exclusions** (files allowed to retain historical references):
+| File/Pattern | Reason |
+|---|---|
+| `Documentation/archive/*` | Historical archived documents |
+| `PLAN_Sprint64.md` | Self-referential (this plan) |
+| `REVIEW_Sprint64.md` | Self-referential (reviewer feedback) |
+| `SPRINTS.md` | Sprint 64 definition is self-referential |
+
+## Proposed Solution
+
+### Approach
+
+The migration has four phases: (1) prepare the target repo, Azure trust, and governance, (2) update all code references, (3) push and verify CI/CD, (4) cutover gate and cleanup. This is a low-risk migration because the Azure infrastructure (Container Apps, ACR, DNS) is completely independent of the GitHub repo name.
+
+### Phase 1: Prepare Target Repository, OIDC, and Governance (Manual)
+
+**Step 1.1: Rename the GitHub repo (required path)**
+
+Rename `Rich-Connexions-Ltd/OVC-VVP-Verifier` → `VVP` via GitHub Settings → General → Repository name.
+
+This is the **required** migration strategy (not "create new"). Renaming preserves:
+- All existing repo settings, branch protections, and rulesets
+- GitHub Environments and environment-scoped secrets/variables
+- GitHub automatically redirects the old URL to the new name
+- No risk of artifact/settings drift from manual re-creation
+
+**Do NOT create a new repo** — this would lose settings parity and require manual re-creation of all governance controls.
+
+**Step 1.2: Configure GitHub Actions secrets on the new repo**
+
+The authoritative source for required secrets is the workflow YAML files themselves. The following matrix was extracted from `.github/workflows/deploy.yml` and `.github/workflows/integration-tests.yml`:
+
+**Workflow-derived secrets matrix** (authoritative):
+
+| Secret Name | deploy.yml | integration-tests.yml | Purpose |
+|-------------|------------|----------------------|---------|
+| `AZURE_CLIENT_ID` | Yes | Yes | Azure AD app registration client ID for OIDC |
+| `AZURE_TENANT_ID` | Yes | Yes | Azure AD tenant ID |
+| `AZURE_SUBSCRIPTION_ID` | Yes | Yes | Azure subscription ID |
+| `ACR_NAME` | Yes | — | Azure Container Registry name |
+| `ACR_LOGIN_SERVER` | Yes | — | ACR login server URL |
+| `AZURE_RG` | Yes | — | Azure resource group name |
+| `AZURE_CONTAINERAPP_NAME` | Yes | — | Verifier container app name |
+| `POSTGRES_HOST` | Yes | — | PostgreSQL host for issuer |
+| `POSTGRES_USER` | Yes | — | PostgreSQL username |
+| `POSTGRES_PASSWORD` | Yes | — | PostgreSQL password |
+| `POSTGRES_DB` | Yes | — | PostgreSQL database name |
+| `VVP_ADMIN_API_KEY` | Yes | Yes | API key for integration tests |
+| `AZURE_STORAGE_ACCOUNT` | Yes | — | Storage account for PBX deploys |
+| `AZURE_STORAGE_CONNECTION_STRING` | Yes | Yes | Full connection string for blob storage |
+
+**Total: 14 unique secrets.**
+
+**Reconciliation command** (reproduce this matrix at any time):
+```bash
+rg -o 'secrets\.(\w+)' -r '$1' --no-filename .github/workflows/ | sort -u
+```
+
+**Sprint spec name reconciliation:**
+
+The Sprint 64 definition in `SPRINTS.md` lists `VVP_PBX_IP` and `VVP_ISSUER_API_KEY` as secrets to migrate. Neither exists in current workflow files:
+
+| Sprint Spec Name | Status | Actual Name | Notes |
+|---|---|---|---|
+| `VVP_PBX_IP` | **Not used** | — | PBX IP is not referenced in any workflow. The PBX deploy job uses Azure CLI (`az vm run-command`) which doesn't require a PBX IP secret. |
+| `VVP_ISSUER_API_KEY` | **Renamed** | `VVP_ADMIN_API_KEY` | Renamed in earlier sprints. Workflows reference `secrets.VVP_ADMIN_API_KEY` and map it to env var `VVP_TEST_API_KEY`. |
+
+These stale names in `SPRINTS.md` are informational only — the workflow-derived matrix above is the authoritative parity gate source.
+
+Also check for any **repository variables** (Settings → Variables → Actions) and migrate those.
+
+**Step 1.3: Add dual OIDC federated credential (mandatory)**
+
+To avoid any CI/CD downtime, **add a second federated credential** before removing the old one:
+
+```bash
+# Get the app object ID
+APP_OBJ_ID=$(az ad app list --display-name "VVP GitHub Actions" --query "[0].id" -o tsv)
+
+# Add NEW federated credential for the new repo (keep old one active)
+az ad app federated-credential create \
+  --id $APP_OBJ_ID \
+  --parameters '{
+    "name": "github-actions-vvp-new",
+    "issuer": "https://token.actions.githubusercontent.com",
+    "subject": "repo:Rich-Connexions-Ltd/VVP:ref:refs/heads/main",
+    "description": "OIDC for GitHub Actions on Rich-Connexions-Ltd/VVP (main)",
+    "audiences": ["api://AzureADTokenExchange"]
+  }'
+
+# Verify both credentials exist
+az ad app federated-credential list --id $APP_OBJ_ID -o table
+```
+
+**Post-verification validation**: After the new credential is created, verify all fields:
+- `issuer` = `https://token.actions.githubusercontent.com`
+- `subject` = `repo:Rich-Connexions-Ltd/VVP:ref:refs/heads/main`
+- `audiences` = `["api://AzureADTokenExchange"]`
+
+The old credential remains active during migration. It is removed only after the cutover gate passes (Phase 4).
+
+**Step 1.4: Governance migration checklist**
+
+Configure on the new repo (or verify inherited from org):
+
+| Setting | Location | Required Value |
+|---------|----------|----------------|
+| Default branch | Settings → General | `main` |
+| Branch protection on `main` | Settings → Branches | Match old repo rules |
+| Required status checks | Branch protection | `test-verifier`, `test-issuer` if configured |
+| GitHub Environments | Settings → Environments | Migrate any environments + environment-scoped secrets |
+| Workflow permissions | Settings → Actions → General | `id-token: write`, `contents: read` |
+| Actions allowed | Settings → Actions → General | Allow all actions (or match old repo policy) |
+
+**Step 1.5: Verify repo permissions**
+
+The workflow YAML declares:
+```yaml
+permissions:
+  contents: read
+  id-token: write
+```
+
+Ensure the new repo's Actions settings allow these specific permissions. Note: the workflow only requires `contents: read` + `id-token: write`, so do **not** grant broader "Read and write permissions" unless other workflows need it. Set the default to "Read repository contents and packages permissions" and rely on the workflow-level `permissions` block.
+
+**Step 1.6: Preflight history reconciliation (mandatory)**
+
+Before cutover, verify the relationship between `origin/main` (source) and the target repo's `main`:
+
+```bash
+git fetch ovc
+git merge-base origin/main ovc/main   # Check for common ancestor
+```
+
+**Current state** (verified during planning): `ovc/main` has a completely separate history — 7 commits from the Sprint 54 OSS standalone verifier release. There is **no common ancestor** with `origin/main`. This is expected: the OVC repo was the standalone open-source verifier, not a fork of the monorepo.
+
+**Decision**: Since the monorepo history completely supersedes the standalone verifier, a **force push** is required in Phase 3 to replace `ovc/main` with the full VVP monorepo history. The standalone verifier commits are already preserved in the monorepo's Sprint 54 archive.
+
+**Tag preflight**: The source repo has no tags (`git tag -l` returns empty). The target repo's tags (if any) will be overwritten by `--force` or will not collide. Before force push, verify:
+```bash
+git ls-remote --tags ovc   # List target tags
+git tag -l                  # List local tags (currently empty)
+```
+If the target has tags that would collide, resolve by deleting target tags first (they belong to the standalone verifier and are superseded).
+
+**Step 1.7: Branch protection bypass for initial push**
+
+After renaming the repo, the initial `git push --force` to `main` may be blocked by branch protection rules. Resolution:
+
+1. **Temporarily disable branch protection** on `main` in the renamed repo (Settings → Branches → `main` → Edit → uncheck all protections)
+2. Perform the force push (Phase 3, Step 3.5)
+3. **Re-enable branch protection** immediately after push (Step 3.6, per Step 1.4 governance checklist)
+
+This is a one-time operation and must be done by the repo admin. Add to the manual steps table.
+
+**Step 1.8: OIDC workflow trigger/auth matrix**
+
+Analysis of which workflow triggers require Azure OIDC and on which git refs:
+
+| Workflow | Trigger | Ref Used | OIDC Required? |
+|----------|---------|----------|----------------|
+| `deploy.yml` | `push: branches: [main]` | `refs/heads/main` | Yes — all deploy jobs |
+| `deploy.yml` | `workflow_dispatch` | `refs/heads/main` (default) | Yes |
+| `integration-tests.yml` | `push: branches: [main]` | `refs/heads/main` | No — `integration-local` only |
+| `integration-tests.yml` | `schedule` (nightly) | `refs/heads/main` | Yes — `integration-azure` job |
+| `integration-tests.yml` | `workflow_dispatch` | `refs/heads/main` (default) | Conditional — only if `mode=azure` |
+
+**Conclusion**: All OIDC-requiring workflow runs execute on `refs/heads/main`. No PR or feature branch refs need OIDC authentication. A single federated credential scoped to `repo:Rich-Connexions-Ltd/VVP:ref:refs/heads/main` is sufficient. No additional subject patterns are needed.
+
+### Phase 2: Code & Documentation Updates (Claude implements)
+
+Note: The `origin` remote is **NOT** changed in this phase. It remains pointing to `andrewbalercnx/vvp-verifier` until Phase 3 preflight completes. This ensures all source-validation commands in Phase 3.1 (SHA capture, diff checks) operate against the true source repo.
+
+**Step 2.1: Update README.md clone URL**
+
+```diff
+- git clone https://github.com/andrewbalercnx/vvp-verifier.git
+- cd vvp-verifier
++ git clone https://github.com/Rich-Connexions-Ltd/VVP.git
++ cd VVP
+```
+
+**Step 2.2: Update fic.json**
+
+```diff
+- "subject": "repo:andrewbalercnx/vvp-verifier:ref:refs/heads/main",
+- "description": "OIDC for GitHub Actions on andrewbalercnx/vvp-verifier (main)",
++ "subject": "repo:Rich-Connexions-Ltd/VVP:ref:refs/heads/main",
++ "description": "OIDC for GitHub Actions on Rich-Connexions-Ltd/VVP (main)",
+```
+
+**Step 2.3: Update service fallback repo names**
+
+In `services/issuer/app/main.py:153`:
+```diff
+- repo = os.getenv("GITHUB_REPOSITORY", "andrewbalercnx/vvp-verifier")
++ repo = os.getenv("GITHUB_REPOSITORY", "Rich-Connexions-Ltd/VVP")
+```
+
+In `services/verifier/app/main.py:232`:
+```diff
+- repo = os.getenv("GITHUB_REPOSITORY", "andrewbalercnx/vvp-verifier")
++ repo = os.getenv("GITHUB_REPOSITORY", "Rich-Connexions-Ltd/VVP")
+```
+
+**Step 2.4: Update VVP_Verifier_Documentation.md**
+
+In `Documentation/VVP_Verifier_Documentation.md:95`:
+```diff
+-   GitHub Repo         Owner/Repo       andrewbalercnx/vvp-verifier
++   GitHub Repo         Owner/Repo       Rich-Connexions-Ltd/VVP
+```
+
+**Step 2.5: Archived documents — no change**
+
+`Documentation/archive/VVP_Verifier_Documentation_v1.1.md` references the old repo URL but is an archived historical document. These references are left as-is to preserve historical accuracy.
+
+### Phase 3: Push and Verify CI/CD
+
+**Step 3.1: Code freeze and final-sync (mandatory)**
+
+At this point, `origin` still points to `andrewbalercnx/vvp-verifier` (unchanged from Phase 2). This is intentional — all source validation commands below must operate against the true source repo.
+
+1. **Lock the old repo** — Enable branch protection on `main` at `andrewbalercnx/vvp-verifier` (require PR, no direct push). This prevents commits from landing after preflight. **Do NOT archive the old repo yet** — the rollback procedure depends on it remaining writable until the cutover gate passes.
+2. **Fetch and capture the source `main` HEAD SHA**:
+   ```bash
+   git fetch origin   # origin = andrewbalercnx/vvp-verifier (confirmed)
+   SOURCE_SHA=$(git rev-parse origin/main)
+   echo "Source main SHA: $SOURCE_SHA"
+   ```
+3. **Verify local `main` matches source**:
+   ```bash
+   git diff origin/main..main  # Must be empty — no local-only commits
+   ```
+4. **Record the SHA** — This SHA must match the target's `main` after force push. Used as a verification gate in Step 3.6.
+
+**Step 3.2: Preserve target repo refs (mandatory pre-push backup)**
+
+Before force-pushing, create an immutable backup of the target repo's current state. The `ovc` remote must be freshly fetched to guarantee the backup reflects the true current state.
+
+**Important**: At this point `origin` still points to the old source repo (`andrewbalercnx/vvp-verifier`). All backup operations use the `ovc` remote, which points to the target org repo (`Rich-Connexions-Ltd/VVP`, renamed from `OVC-VVP-Verifier`).
+
+```bash
+# Fetch the AUTHORITATIVE current state from the target remote (ovc)
+# This is mandatory — a stale local ovc/main would produce an incorrect backup
+git fetch ovc
+
+# Record the pre-migration target SHA for the migration runbook
+PRE_MIGRATION_TARGET_SHA=$(git rev-parse ovc/main)
+echo "Pre-migration target main SHA: $PRE_MIGRATION_TARGET_SHA"
+
+# Create a rerun-safe backup tag with timestamp suffix
+BACKUP_TAG="backup/pre-migration-ovc-main-$(date +%Y%m%d-%H%M)"
+echo "Backup tag: $BACKUP_TAG"
+
+# Create a local backup tag of the target's current main
+git tag "$BACKUP_TAG" ovc/main
+
+# Push the backup tag to the TARGET repo via ovc remote (NOT origin, which still points to source)
+git push ovc "$BACKUP_TAG"
+
+# Verify the backup tag exists on the target
+git ls-remote --tags ovc "$BACKUP_TAG"
+# Expected: one line showing the tag SHA
+```
+
+**Rerun behavior**: If the migration is retried, each attempt creates a distinct backup tag (timestamped). Prior backup tags remain on the target for audit. To clean up old backup tags after successful migration:
+```bash
+# Before Step 3.4 (origin = source): use ovc to list target tags
+git ls-remote --tags ovc 'backup/pre-migration-ovc-main-*'
+
+# After Step 3.4 (origin = target): use origin
+git ls-remote --tags origin 'backup/pre-migration-ovc-main-*'
+
+# Delete old ones manually if desired (keep at least the final one)
+```
+
+This preserves the 7-commit standalone verifier history in the new repo under a backup tag. If rollback is ever needed, the old state can be restored using the appropriate remote for the current phase:
+```bash
+# Before Step 3.4 (origin still = old repo): use ovc
+git push --force ovc $BACKUP_TAG:main
+
+# After Step 3.4 (origin = target repo): use origin
+git push --force origin $BACKUP_TAG:main
+```
+(Where `$BACKUP_TAG` is the timestamped tag from Step 3.2, recorded in the migration runbook.)
+
+**Step 3.3: Dry-run validation checklist (before push)**
+
+Verify ALL of the following before switching `origin` and pushing. Note: `origin` still points to the old source repo at this point — that is intentional. The remote switch happens in Step 3.4.
+
+| Check | Command | Expected |
+|-------|---------|----------|
+| Repo renamed | Visit `github.com/Rich-Connexions-Ltd/VVP` | Repo exists |
+| Secrets configured | `gh secret list -R Rich-Connexions-Ltd/VVP` | 14 secrets listed |
+| Both OIDC credentials | `az ad app federated-credential list --id $APP_OBJ_ID` | 2 credentials (old + new) |
+| Actions permissions | GitHub UI → Settings → Actions | `id-token: write` allowed |
+| Branch protection disabled | GitHub UI → Settings → Branches | No rules on `main` (temporary) |
+| Source frozen | Branch protection on `andrewbalercnx/vvp-verifier` `main` | Direct push blocked |
+| Backup tag on target | `git ls-remote --tags ovc $BACKUP_TAG` | Shows tag SHA |
+| Secrets parity | See parity check below | All 14 secrets present |
+
+**Secrets/variables parity verification:**
+
+Before force-push, verify that the target repo has all required secrets. The authoritative list is extracted from workflow files (see Step 1.2 matrix):
+
+```bash
+# Extract authoritative secret names from workflow files
+REQUIRED=$(rg -o 'secrets\.(\w+)' -r '$1' --no-filename .github/workflows/ | sort -u)
+echo "Required secrets (from workflows): $REQUIRED"
+
+# List secrets on new repo (names only — values are opaque)
+gh secret list -R Rich-Connexions-Ltd/VVP
+
+# Compare against workflow-derived inventory:
+for S in $REQUIRED; do
+  gh secret list -R Rich-Connexions-Ltd/VVP | grep -q "$S" && echo "OK: $S" || echo "MISSING: $S"
+done
+
+# Check for repository variables
+gh variable list -R Rich-Connexions-Ltd/VVP
+
+# Check for environment-scoped secrets (if any environments exist)
+ENVS=$(gh api repos/Rich-Connexions-Ltd/VVP/environments --jq '.environments[].name' 2>/dev/null)
+if [ -n "$ENVS" ]; then
+  for ENV in $ENVS; do
+    echo "--- Environment: $ENV ---"
+    gh api "repos/Rich-Connexions-Ltd/VVP/environments/$ENV/secrets" --jq '.secrets[].name' 2>/dev/null
+  done
+else
+  echo "No environments configured (OK — this repo uses repo-level secrets only)"
+fi
+```
+
+**Source-vs-target deterministic diff** (full parity proof):
+
+```bash
+# Capture source repo inventory
+SOURCE_SECRETS=$(gh secret list -R andrewbalercnx/vvp-verifier --jq '.[].name' --json name | sort)
+SOURCE_VARS=$(gh variable list -R andrewbalercnx/vvp-verifier --jq '.[].name' --json name 2>/dev/null | sort)
+SOURCE_ENVS=$(gh api repos/andrewbalercnx/vvp-verifier/environments --jq '.environments[].name' 2>/dev/null | sort)
+
+# Capture target repo inventory
+TARGET_SECRETS=$(gh secret list -R Rich-Connexions-Ltd/VVP --jq '.[].name' --json name | sort)
+TARGET_VARS=$(gh variable list -R Rich-Connexions-Ltd/VVP --jq '.[].name' --json name 2>/dev/null | sort)
+TARGET_ENVS=$(gh api repos/Rich-Connexions-Ltd/VVP/environments --jq '.environments[].name' 2>/dev/null | sort)
+
+# Diff (any output = parity failure)
+diff <(echo "$SOURCE_SECRETS") <(echo "$TARGET_SECRETS") && echo "Secrets: PARITY" || echo "Secrets: MISMATCH"
+diff <(echo "$SOURCE_VARS") <(echo "$TARGET_VARS") && echo "Variables: PARITY" || echo "Variables: MISMATCH"
+diff <(echo "$SOURCE_ENVS") <(echo "$TARGET_ENVS") && echo "Environments: PARITY" || echo "Environments: MISMATCH"
+
+# For each environment, diff environment-scoped secrets
+for ENV in $SOURCE_ENVS; do
+  S_ENV_SECRETS=$(gh api "repos/andrewbalercnx/vvp-verifier/environments/$ENV/secrets" --jq '.secrets[].name' 2>/dev/null | sort)
+  T_ENV_SECRETS=$(gh api "repos/Rich-Connexions-Ltd/VVP/environments/$ENV/secrets" --jq '.secrets[].name' 2>/dev/null | sort)
+  diff <(echo "$S_ENV_SECRETS") <(echo "$T_ENV_SECRETS") && echo "Env $ENV secrets: PARITY" || echo "Env $ENV secrets: MISMATCH"
+done
+```
+
+**Parity gate**: ALL diffs must show PARITY. Any MISMATCH blocks the force push. Note: secret *values* are opaque and cannot be diff'd — only names are compared. The operator must verify values were copied correctly (test by running a workflow).
+
+**Step 3.4: Switch origin to target repo**
+
+Now that all preflight checks pass, switch `origin` to the target:
+
+```bash
+git remote set-url origin https://github.com/Rich-Connexions-Ltd/VVP.git
+
+# Verify the switch
+git remote -v
+# Expected: origin → https://github.com/Rich-Connexions-Ltd/VVP.git (fetch and push)
+```
+
+**Go/no-go gate**: Confirm `origin` URL matches `Rich-Connexions-Ltd/VVP.git` before proceeding to force push. The `ovc` remote is kept until the cutover gate passes (Phase 4).
+
+**Step 3.5: Force push to new origin**
+
+```bash
+# Fetch the target's current refs through the newly switched origin
+git fetch origin
+
+# Use explicit lease target: we expect origin/main to be PRE_MIGRATION_TARGET_SHA
+# This will fail if someone else pushed to the target after our fetch — preventing accidental overwrites
+git push --force-with-lease=main:$PRE_MIGRATION_TARGET_SHA -u origin main
+git push origin --tags   # No tags exist currently; safe no-op or additive
+```
+
+Uses `--force-with-lease` with an explicit expected SHA for safety. The `git fetch origin` after Step 3.4's URL switch is mandatory — without it, local `origin/main` still references the old repo's ref and the lease check would use stale data.
+
+Force push is required because the target repo (`OVC-VVP-Verifier`, now renamed to `VVP`) has a divergent 7-commit history from the Sprint 54 standalone verifier. The monorepo history completely supersedes it.
+
+Only `main` and tags are pushed. All other branches (4 local `claude/*` branches, `vvp-verifier` branch) are stale ephemeral branches and are intentionally excluded.
+
+**Step 3.6: Re-enable branch protection**
+
+Immediately after successful force push, re-enable branch protection on `main` per the governance checklist (Step 1.4).
+
+**Step 3.7: Verify force-push SHA match and backup preservation**
+
+Confirm the target `main` now matches the recorded source SHA, and the backup tag is intact:
+
+```bash
+# Verify main SHA matches source
+git fetch origin
+TARGET_SHA=$(git rev-parse origin/main)
+echo "Target main SHA: $TARGET_SHA"
+# Must equal $SOURCE_SHA from Step 3.1
+
+# Verify backup tag still exists and resolves to pre-migration SHA
+BACKUP_SHA=$(git ls-remote --tags origin "$BACKUP_TAG" | awk '{print $1}')
+echo "Backup tag SHA: $BACKUP_SHA (tag: $BACKUP_TAG)"
+# Must equal $PRE_MIGRATION_TARGET_SHA from Step 3.2
+```
+
+**Preservation gate**: Both conditions must pass:
+1. `$TARGET_SHA == $SOURCE_SHA` (force push landed correctly)
+2. `$BACKUP_SHA == $PRE_MIGRATION_TARGET_SHA` (pre-migration history preserved)
+
+If either fails, execute rollback procedure (Phase 4).
+
+**Step 3.8: Monitor deployment**
+
+```bash
+gh run watch -R Rich-Connexions-Ltd/VVP   # Monitor the GitHub Actions workflow on the correct repo
+```
+
+**Step 3.9: Verify deployed services**
+
+```bash
+curl -s https://vvp-verifier.rcnx.io/healthz | jq .
+curl -s https://vvp-issuer.rcnx.io/healthz | jq .
+curl -s https://vvp-verifier.rcnx.io/version | jq .  # Verify repo field shows new name
+curl -s https://vvp-issuer.rcnx.io/version | jq .     # Verify repo field shows new name
+```
+
+### Phase 4: Cutover Gate and Cleanup
+
+**Cutover gate criteria** — ALL must pass before archiving old repo:
+
+| # | Criterion | Evidence Command | Expected Output |
+|---|-----------|-----------------|-----------------|
+| 1 | `deploy.yml` succeeded (includes test + deploy + post-deploy integration) | `gh run list -R Rich-Connexions-Ltd/VVP -w "Build and deploy to Azure Container Apps" --limit 2` | 2 runs with status `completed` / conclusion `success` |
+| 2 | Verifier healthy | `curl -s https://vvp-verifier.rcnx.io/healthz` | `{"status": "ok"}` |
+| 3 | Issuer healthy | `curl -s https://vvp-issuer.rcnx.io/healthz` | `{"status": "ok"}` |
+| 4 | Witness 1 healthy | `curl -s https://vvp-witness1.rcnx.io/oobi/BBilc4-L3tFUnfM_wJr4S4OJanAv_VmF_dJNN6vkf2Ha/controller` | HTTP 200 |
+| 5 | Verifier `/version` shows new repo | `curl -s https://vvp-verifier.rcnx.io/version \| jq .repo` | `"Rich-Connexions-Ltd/VVP"` |
+| 6 | Issuer `/version` shows new repo | `curl -s https://vvp-issuer.rcnx.io/version \| jq .repo` | `"Rich-Connexions-Ltd/VVP"` |
+| 7 | Target `main` SHA matches source | `git rev-parse origin/main` | Equals `$SOURCE_SHA` from Step 3.1 |
+| 8 | Backup tag preserved | `git ls-remote --tags origin $BACKUP_TAG` | SHA equals `$PRE_MIGRATION_TARGET_SHA` from Step 3.2 |
+| 9 | `integration-tests.yml` Azure path works | `gh workflow run integration-tests.yml -R Rich-Connexions-Ltd/VVP -f mode=azure` then `gh run list -R Rich-Connexions-Ltd/VVP -w "Integration Tests" --limit 1` | Status `completed` / conclusion `success` |
+| 10 | Scheduled integration test (verify next day) | Check `gh run list -R Rich-Connexions-Ltd/VVP -w "Integration Tests" --limit 2` next morning | Nightly schedule run completed successfully (OIDC via schedule trigger) |
+| 11 | E2E call test (optional but recommended) | `./scripts/system-health-check.sh --e2e` | All checks pass |
+
+**Rollback procedure** (if cutover gate fails):
+
+1. **Restore target `main`** from backup:
+   ```bash
+   git push --force origin $BACKUP_TAG:main   # $BACKUP_TAG from Step 3.2 runbook
+   ```
+2. **Re-point local origin** back to old repo:
+   ```bash
+   git remote set-url origin https://github.com/andrewbalercnx/vvp-verifier.git
+   ```
+3. **Verify deployment authority**: The old repo remains the deployment source. Old OIDC federated credential is still active (dual-credential), so old repo CI/CD works immediately.
+4. **Verify branch protection** on target repo: If protection was re-enabled (Step 3.6), temporarily disable it before restoring `main`.
+5. **Check OIDC state**: Confirm both federated credentials still exist:
+   ```bash
+   az ad app federated-credential list --id $APP_OBJ_ID -o table
+   ```
+6. **Push any fixes** to old repo, diagnose root cause, and retry migration.
+
+**After cutover gate passes:**
+
+1. Remove `ovc` remote (now redundant — `origin` IS the org repo):
+   ```bash
+   git remote remove ovc
+   ```
+2. Remove old OIDC federated credential:
+   ```bash
+   az ad app federated-credential delete --id $APP_OBJ_ID --federated-credential-id <OLD_CRED_ID>
+   ```
+3. Archive old repo: `andrewbalercnx/vvp-verifier` → GitHub Settings → Danger Zone → Archive
+4. Optionally add a redirect notice to old repo description
+5. Update external references and local project paths:
+   | Reference | Location | Action |
+   |-----------|----------|--------|
+   | Browser bookmarks | User's browser | Update to `github.com/Rich-Connexions-Ltd/VVP` |
+   | Azure DevOps links | If any exist | Update repo URL |
+   | Local `.claude/` project paths | `~/.claude/projects/` | Verify project mapping still works (directory name unchanged) |
+   | VS Code workspace settings | `.vscode/settings.json` if applicable | Update any repo URL references |
+   | CI/CD webhook URLs | GitHub settings | Verify webhooks transferred with rename (GitHub auto-migrates) |
+
+## What Changes and What Doesn't
+
+### Changes
+| Item | Old | New |
+|------|-----|-----|
+| GitHub URL | `github.com/andrewbalercnx/vvp-verifier` | `github.com/Rich-Connexions-Ltd/VVP` |
+| Git remote origin | `https://github.com/andrewbalercnx/vvp-verifier.git` | `https://github.com/Rich-Connexions-Ltd/VVP.git` |
+| OIDC subject claim | `repo:andrewbalercnx/vvp-verifier:ref:refs/heads/main` | `repo:Rich-Connexions-Ltd/VVP:ref:refs/heads/main` |
+| README clone instructions | Old URL and `cd vvp-verifier` | New URL and `cd VVP` |
+| `fic.json` | Old subject/description | New subject/description |
+| Service `/version` fallback | `andrewbalercnx/vvp-verifier` | `Rich-Connexions-Ltd/VVP` |
+| Documentation repo reference | Old owner/repo | New owner/repo |
+
+### Does NOT change
+| Item | Value | Why |
+|------|-------|-----|
+| Container image names | `vvp-verifier`, `vvp-issuer`, `vvp-witness` | ACR-side, independent of repo |
+| Azure Container App names | `vvp-verifier`, `vvp-issuer`, etc. | Azure-side |
+| DNS/domains | `*.rcnx.io` | Azure-side |
+| Workflow YAML | No changes needed | Uses `${{ github.repository }}` which auto-updates |
+| Azure resources | All existing | Unaffected |
+| PBX VM | `vvp-pbx` | Unaffected |
+| Archived documentation | `Documentation/archive/*` | Historical — left as-is |
+
+## Files to Modify (Claude)
+
+| File | Action | Purpose |
+|------|--------|---------|
+| `README.md` | Edit lines 75-76 | Update clone URL and `cd` directory |
+| `fic.json` | Edit lines 4-5 | Update OIDC subject and description |
+| `services/issuer/app/main.py` | Edit line 153 | Update fallback repo name |
+| `services/verifier/app/main.py` | Edit line 232 | Update fallback repo name |
+| `Documentation/VVP_Verifier_Documentation.md` | Edit line 95 | Update repo reference |
+| `CLAUDE.md` | Conditional — if audit finds refs | Update any repo URL references |
+| `knowledge/*.md` | Conditional — if audit finds refs | Update any repo URL references |
+
+Note: `CLAUDE.md` and `knowledge/*.md` are included per `SPRINTS.md` deliverable. The reproducible audit command will catch any references in these files. If the audit shows no hits, no changes are needed.
+
+## Manual Steps (User)
+
+These steps require GitHub/Azure admin access and must be performed by the user:
+
+| Step | Phase | Evidence |
+|------|-------|----------|
+| Rename `OVC-VVP-Verifier` → `VVP` | 1.1 | Screenshot of repo settings |
+| Configure all 14 secrets on new repo | 1.2 | `gh secret list` output |
+| Check for repo variables and migrate | 1.2 | `gh variable list` output |
+| Add new OIDC federated credential | 1.3 | `az ad app federated-credential list` |
+| Verify credential fields (issuer/audience/subject) | 1.3 | CLI output |
+| Configure branch protection rules | 1.4 | Screenshot or `gh api` output |
+| Verify workflow permissions | 1.5 | Screenshot of Actions settings |
+| Temporarily disable branch protection for push | 1.7 | Screenshot of rules disabled |
+| Code freeze source repo | 3.1 | Branch protection enabled on old repo |
+| Re-enable branch protection after push | 3.6 | Screenshot or `gh api` output |
+| Archive old repo (after cutover gate) | 4 | Confirmed after 2 successful deploys |
+| Remove old OIDC credential (after cutover gate) | 4 | `az ad app federated-credential delete` |
+
+## Automated Steps (Claude)
+
+These steps are performed by Claude during the interactive session:
+
+| Step | Phase | Evidence |
+|------|-------|----------|
+| Run preflight history reconciliation | 1.6 | `git merge-base` + `git ls-remote --tags` output |
+| Switch origin remote to target | 3.4 | `git remote -v` output |
+| Remove `ovc` remote (after cutover gate) | 4 | `git remote -v` shows no `ovc` |
+
+## Joint Steps (User + Claude)
+
+| Step | Phase | Evidence |
+|------|-------|----------|
+| Run dry-run validation checklist | 3.3 | All checks pass (mix of CLI + GitHub UI) |
+
+## Risks and Mitigations
+
+| Risk | Likelihood | Impact | Mitigation |
+|------|------------|--------|------------|
+| OIDC auth fails from new repo | Medium | CI/CD broken | Dual federated credentials — old remains active throughout |
+| Secrets misconfigured | Low | CI/CD broken | Verify each secret; rollback to old repo if needed |
+| Missed URL references | Low | Cosmetic | Comprehensive audit with reproducible grep command |
+| Brief CI/CD downtime | None expected | N/A | Dual-credential approach eliminates transition gap |
+| Governance settings missing | Low | Security posture | Explicit checklist with verification evidence |
+
+## Approved Reference-Audit Exceptions
+
+The exit criterion "No references to `andrewbalercnx/vvp-verifier` remain in codebase" has the following **approved exceptions** — files that will still contain old references after migration, with justification:
+
+| File | Reference Type | Justification |
+|------|----------------|---------------|
+| `Documentation/archive/*` | Historical URLs and repo names | Archived documents preserve historical accuracy. These are never executed or parsed by CI/CD. |
+| `SPRINTS.md` (Sprint 64 section) | Sprint 64 goal statement references old repo | The sprint definition itself describes the migration *from* the old repo. Self-referential and cannot be changed without losing context. |
+| `PLAN_Sprint64.md` | Plan describes the migration | Self-referential — this plan is about migrating away from the old repo. |
+| `REVIEW_Sprint64.md` | Review references plan content | Transient file, deleted after sprint archival. |
+
+These exceptions are reflected in the reproducible audit command (`rg` with `--glob` exclusions) and the exit criteria wording.
+
+## Test Strategy
+
+1. After code changes: run the reproducible audit command (see "Full Reference Audit" section) to confirm no remaining references in active codebase (archived docs and Sprint 64 plan/sprint files excluded)
+2. Push to new repo triggers CI/CD — monitor with `gh run watch`
+3. Verify health endpoints return 200 for all services
+4. Verify `/version` endpoint shows new repo name
+5. Optionally run full E2E: `./scripts/system-health-check.sh --e2e`
+6. Repeat for at least 2 successful CI/CD runs before archiving old repo
+
+## Migration Runbook Artifact
+
+During execution, record the following values in a single checklist artifact for audit and rollback:
+
+```
+MIGRATION RUNBOOK — Sprint 64
+==============================
+Source repo:                  andrewbalercnx/vvp-verifier
+Target repo:                  Rich-Connexions-Ltd/VVP
+Date:                         ____-__-__
+
+SOURCE_SHA (Step 3.1):        ________________________________________
+PRE_MIGRATION_TARGET_SHA (3.2): ________________________________________
+BACKUP_TAG_NAME (3.2):        backup/pre-migration-ovc-main-___________
+BACKUP_TAG_SHA (3.2):         ________________________________________
+POST_PUSH_TARGET_SHA (3.7):   ________________________________________
+
+OIDC Credentials (record before cleanup):
+  Old credential ID:            ________________________________________
+  Old credential name:          github-actions-main
+  New credential ID:            ________________________________________
+  New credential name:          github-actions-vvp-new
+
+Verification:
+  SOURCE_SHA == POST_PUSH_TARGET_SHA:     [ ] PASS  [ ] FAIL
+  BACKUP_TAG_SHA == PRE_MIGRATION_SHA:    [ ] PASS  [ ] FAIL
+  deploy.yml run 1 success:               [ ] PASS  [ ] FAIL
+  deploy.yml run 2 success:               [ ] PASS  [ ] FAIL
+  integration-tests.yml azure success:    [ ] PASS  [ ] FAIL
+  Health checks pass:                     [ ] PASS  [ ] FAIL
+  /version shows new repo:                [ ] PASS  [ ] FAIL
+
+Cutover gate:                             [ ] ALL PASS → proceed to cleanup
+Old OIDC credential removed:             [ ] Done (ID: _____________)
+Old repo archived:                        [ ] Done
+ovc remote removed:                       [ ] Done
+```
+
+## Exit Criteria
+
+- `git remote -v` shows origin as `https://github.com/Rich-Connexions-Ltd/VVP.git`
+- No `ovc` remote exists
+- No references to `andrewbalercnx/vvp-verifier` remain in the **active codebase** (i.e., files that are executed, parsed by CI/CD, or presented to users — excluding archived documentation and transient sprint files; see "Approved Reference-Audit Exceptions" for the complete list of justified exclusions)
+- `git push --force -u origin main` succeeds (force push required due to divergent history)
+- At least 2 GitHub Actions deploy workflows run successfully from new repo
+- All Azure services pass health checks
+- `/version` endpoints show `Rich-Connexions-Ltd/VVP`
+- Old OIDC credential removed
+- Old repo archived
+
+---
+
+## Implementation Notes
+
+### Deviations from Plan
+No deviations. All 5 file edits implemented exactly as specified in Phase 2.
+
+### Implementation Details
+- Reference audit confirmed no remaining `andrewbalercnx/vvp-verifier` references in active codebase
+- `CLAUDE.md` and `knowledge/*.md` checked — no references found (conditional edits not needed)
+- Only approved exceptions remain: `SPRINTS.md` (self-referential), `PLAN_Sprint64.md` (self-referential), `Documentation/archive/*` (historical)
+
+### Files Changed
+| File | Lines | Summary |
+|------|-------|---------|
+| `README.md` | ~2 | Updated clone URL and `cd` directory |
+| `fic.json` | ~2 | Updated OIDC subject and description |
+| `services/issuer/app/main.py` | ~1 | Updated fallback repo name in `/version` |
+| `services/verifier/app/main.py` | ~1 | Updated fallback repo name in `/version` |
+| `Documentation/VVP_Verifier_Documentation.md` | ~1 | Updated repo reference in table |
+| `SPRINTS.md` | ~2 | Updated branch scope + status to IN PROGRESS |
+

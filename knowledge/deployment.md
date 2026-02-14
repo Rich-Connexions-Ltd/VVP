@@ -3,8 +3,13 @@
 ## CI/CD Pipeline
 
 ### GitHub Actions (`deploy.yml`)
-**Trigger**: Push to `main` branch
+**Repo**: `Rich-Connexions-Ltd/VVP`
+**Trigger**: Push to `main` branch, or `workflow_dispatch`
 **Target**: Azure Container Apps (UK South region)
+
+**Workflow dispatch inputs:**
+- `force_all` (boolean) — Deploy ALL services regardless of changed paths
+- `lock_wait_seconds` (string, default `120`) — Max seconds to poll for LMDB lock release
 
 ### Deployment Flow
 ```
@@ -25,11 +30,24 @@ The pipeline has separate jobs triggered by path filters:
 | `deploy-verifier` | `services/verifier/**`, `common/**` | Azure Container Apps |
 | `deploy-issuer` | `services/issuer/**`, `common/**` | Azure Container Apps (LMDB single-revision) |
 | `deploy-sip-redirect` | `services/sip-redirect/**`, `common/**` | PBX VM via `az vm run-command` |
-| `deploy-dialplan` | `services/pbx/config/public-sip.xml` | PBX VM FreeSWITCH dialplan |
+| `deploy-sip-verify` | `services/sip-verify/**`, `common/**` | PBX VM via `az vm run-command` |
+| `build-witness-image` + `deploy-witnesses` | `services/witness/**` | Azure Container Apps (3 witnesses) |
+| `deploy-pbx-config` | `services/pbx/config/**` | PBX VM FreeSWITCH dialplan |
+
+All path filters are bypassed when `force_all=true` is passed via workflow dispatch.
 
 ### Issuer LMDB Constraint
 
-The issuer uses LMDB (keripy) on a shared Azure Files volume. **Two revisions CANNOT run simultaneously** — the LMDB lock blocks the new revision's startup. CI/CD must deactivate the old revision before deploying the new one (causes ~30s downtime).
+The issuer uses LMDB (keripy) on a shared Azure Files volume. **Two revisions CANNOT run simultaneously** — the LMDB lock blocks the new revision's startup. CI/CD uses a 4-phase stop-before-deploy sequence:
+
+1. **Scale to zero** — `--min-replicas 0 --max-replicas 0` forces container shutdown faster than deactivation alone
+2. **Deactivate revisions** — with up to 3 retries per revision to handle transient Azure API failures
+3. **Poll until stopped** — checks both `runningState` and `replicas` count, with 120s timeout (configurable via `lock_wait_seconds` workflow input). **Fails hard** on timeout instead of proceeding
+4. **Lock release buffer** — 10s sleep after all revisions report stopped, to allow the Azure Files mount to release the LMDB file lock
+
+Brief downtime is ~30-40s. The deploy step restores `--min-replicas 1 --max-replicas 3`.
+
+**Verification timeout**: Issuer version check polls for **5 minutes** (16 intervals of 10-20s) because LMDB/Habery initialization on Azure Files takes ~3 minutes.
 
 ### SIP Redirect Deploy
 
@@ -50,7 +68,10 @@ az vm run-command invoke --resource-group VVP --name vvp-pbx \
   --command-id RunShellScript --scripts "curl -s http://localhost:8085/version"
 
 # Monitor deployment
-gh run watch
+gh run watch -R Rich-Connexions-Ltd/VVP
+
+# Force deploy all services (workflow dispatch)
+gh workflow run "Build and deploy to Azure Container Apps" -R Rich-Connexions-Ltd/VVP -f force_all=true
 ```
 
 ---
