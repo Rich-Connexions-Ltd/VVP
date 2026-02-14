@@ -133,29 +133,31 @@ def _full_cred_set(org_aid, *, extra_creds=None, overrides=None):
         SAIDs that should be in ManagedCredential.
     """
     ov = overrides or {}
-    uid = uuid.uuid4().hex[:16]  # unique per call to avoid SAID collisions
+    uid = uuid.uuid4().hex[:8]  # unique per call to avoid SAID collisions
 
+    # SAIDs must be ≤44 chars for PostgreSQL VARCHAR(44) constraint.
+    # Format: E{type}_{uid8}_{pad} = 44 chars total (matches real KERI SAID length).
     creds = [
         # vetting: any schema, NI2I (no recipient constraint)
-        _make_cred(f"Ev_vetting_{uid}_12345678901234567890",
+        _make_cred(f"Ev_{uid}_00000000000000000000000000000000",
                     ov.get("vetting", {}).get("schema_said", LE_SCHEMA_SAID),
                     ov.get("vetting", {}).get("issuer_aid", "Eexternal"),
                     ov.get("vetting", {}).get("recipient_aid", None),
                     ov.get("vetting", {}).get("status", "issued")),
         # alloc: GCD, I2I (recipient must be org)
-        _make_cred(f"Ea_alloc_{uid}_1234567890123456789012",
+        _make_cred(f"Ea_{uid}_00000000000000000000000000000000",
                     ov.get("alloc", {}).get("schema_said", GCD_SCHEMA_SAID),
                     ov.get("alloc", {}).get("issuer_aid", "Eexternal"),
                     ov.get("alloc", {}).get("recipient_aid", org_aid),
                     ov.get("alloc", {}).get("status", "issued")),
         # tnalloc: TNALLOC, I2I (recipient must be org)
-        _make_cred(f"Et_tnalloc_{uid}_123456789012345678901",
+        _make_cred(f"Et_{uid}_00000000000000000000000000000000",
                     ov.get("tnalloc", {}).get("schema_said", TNALLOC_SCHEMA_SAID),
                     ov.get("tnalloc", {}).get("issuer_aid", "Eexternal"),
                     ov.get("tnalloc", {}).get("recipient_aid", org_aid),
                     ov.get("tnalloc", {}).get("status", "issued")),
         # delsig: GCD, NI2I but issuer must be AP, recipient (OP) must exist
-        _make_cred(f"Ed_delsig_{uid}_123456789012345678901",
+        _make_cred(f"Ed_{uid}_00000000000000000000000000000000",
                     ov.get("delsig", {}).get("schema_said", GCD_SCHEMA_SAID),
                     ov.get("delsig", {}).get("issuer_aid", org_aid),
                     ov.get("delsig", {}).get("recipient_aid", ov.get("delsig", {}).get("recipient_aid", org_aid)),
@@ -332,7 +334,7 @@ class TestDossierReadiness:
         # Create creds WITHOUT tnalloc
         creds, managed_saids = _full_cred_set(org_aid)
         # Remove tnalloc credential
-        creds = [c for c in creds if "tnalloc" not in c.said]
+        creds = [c for c in creds if c.schema_said != TNALLOC_SCHEMA_SAID]
         managed_saids = {c.said for c in creds}
 
         db2 = SessionLocal()
