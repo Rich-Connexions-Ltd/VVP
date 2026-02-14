@@ -4021,7 +4021,7 @@ Replace the current flat credential list with a multi-step wizard:
 
 ---
 
-## Sprint 64: Repository Migration to Rich-Connexions-Ltd (TODO)
+## Sprint 64: Repository Migration to Rich-Connexions-Ltd (IN PROGRESS)
 
 **Goal:** Migrate the repository from `github.com/andrewbalercnx/vvp-verifier` to `github.com/Rich-Connexions-Ltd/VVP` and update all references, CI/CD pipelines, and Azure OIDC federation trusts to work from the new org/repo.
 
