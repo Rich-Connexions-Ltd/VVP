@@ -760,8 +760,6 @@
 
           let html = '<option value="">None (no OSP association)</option>';
           for (const org of data.organizations) {
-            // Don't show AP org as OSP
-            if (org.id === selectedApOrgId) continue;
             html += `<option value="${esc(org.id)}">${esc(org.name)}</option>`;
           }
           select.innerHTML = html;

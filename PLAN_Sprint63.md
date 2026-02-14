@@ -712,11 +712,28 @@ User (Admin) → Wizard UI
 - Tightened assertions from `in (400, 404)` to exact status codes with detail checks
 - Added 5 happy-path tests: required-edges-only, all-6-edges, OSP association + DB persistence, witness failure non-fatal, OSP AID mismatch
 
+### Review Fixes (Rounds 3-5)
+
+**Round 3 fixes:**
+- Strict I2I filtering in edge picker — empty-state message instead of fallback-to-all
+- Fixed `<p>` inside `<tbody>` — moved info text before table element
+- Removed unused `org_managed` variable in credential.py line 217
+- Added 3 tests: cross-org 403, readonly 403, create-then-build integration
+
+**Round 4 fixes:**
+- Sanitized 500 error message: generic `"Failed to issue dossier credential"` instead of leaking `{e}`
+- Added contextual step navigation links in wizard error display
+
+**Round 5 fixes:**
+- Removed AP org exclusion from OSP dropdown — an org can be both AP and OSP (self-signing)
+- Added concrete audit logging assertions: mock `get_audit_logger` with call count/argument verification for create (1 call), create+OSP (2 calls), and failure (0 calls)
+- Added admin `org_id` filter test for `/dossier/associated`
+
 ### Test Results
 
 ```
-40 tests in test_sprint63_wizard.py — all pass
-491 tests total in issuer test suite — all pass (5 skipped, 3 deselected)
+46 tests in test_sprint63_wizard.py — all pass
+497 tests total in issuer test suite — all pass (5 skipped, 3 deselected)
 ```
 
 ### Files Changed
@@ -729,4 +746,4 @@ User (Admin) → Wizard UI
 | `services/issuer/app/api/organization.py` | +48 | GET /organizations/names with purpose=ap/osp |
 | `services/issuer/app/db/models.py` | +40 | DossierOspAssociation model |
 | `services/issuer/web/dossier.html` | +1124/-280 | 4-step wizard UI rewrite |
-| `services/issuer/tests/test_sprint63_wizard.py` | +1400 | 40 tests across 13 test classes |
+| `services/issuer/tests/test_sprint63_wizard.py` | +1684 | 46 tests across 15 test classes |

@@ -851,6 +851,64 @@ class TestAssociatedDossiers:
         )
         assert response.status_code == 200
 
+    @pytest.mark.asyncio
+    async def test_associated_admin_org_id_filter(self, client_with_auth, admin_headers):
+        """Admin with org_id filter sees only associations for that OSP org."""
+        _init_app_db()
+        from app.db.session import SessionLocal
+
+        db = SessionLocal()
+        try:
+            ap = Organization(
+                id=str(uuid.uuid4()),
+                name=f"Filter AP {uuid.uuid4().hex[:8]}",
+                pseudo_lei=f"54930{uuid.uuid4().hex[:15]}",
+                enabled=True,
+            )
+            osp1 = Organization(
+                id=str(uuid.uuid4()),
+                name=f"Filter OSP1 {uuid.uuid4().hex[:8]}",
+                pseudo_lei=f"54930{uuid.uuid4().hex[:15]}",
+                enabled=True,
+            )
+            osp2 = Organization(
+                id=str(uuid.uuid4()),
+                name=f"Filter OSP2 {uuid.uuid4().hex[:8]}",
+                pseudo_lei=f"54930{uuid.uuid4().hex[:15]}",
+                enabled=True,
+            )
+            db.add_all([ap, osp1, osp2])
+            db.flush()
+
+            # Associate dossier A with osp1 and dossier B with osp2
+            assoc1 = DossierOspAssociation(
+                dossier_said=f"Efilter_a_{uuid.uuid4().hex[:32]}",
+                owner_org_id=ap.id,
+                osp_org_id=osp1.id,
+            )
+            assoc2 = DossierOspAssociation(
+                dossier_said=f"Efilter_b_{uuid.uuid4().hex[:32]}",
+                owner_org_id=ap.id,
+                osp_org_id=osp2.id,
+            )
+            db.add_all([assoc1, assoc2])
+            db.commit()
+            osp1_id = osp1.id
+            said_a = assoc1.dossier_said
+            said_b = assoc2.dossier_said
+        finally:
+            db.close()
+
+        # Filter by osp1
+        response = await client_with_auth.get(
+            f"/dossier/associated?org_id={osp1_id}", headers=admin_headers
+        )
+        assert response.status_code == 200
+        data = response.json()
+        returned_saids = [a["dossier_said"] for a in data["associations"]]
+        assert said_a in returned_saids
+        assert said_b not in returned_saids
+
 
 # =============================================================================
 # Route Ordering Tests
@@ -1130,24 +1188,169 @@ class TestOspConsistency:
 
 
 class TestDossierAuditLogging:
-    """Tests verifying audit logging in dossier creation."""
+    """Tests verifying audit logging call counts and arguments."""
+
+    def _setup_happy_path_mocks(self, org_aid, dossier_said):
+        """Build mock objects for a successful dossier creation."""
+        from app.keri.issuer import CredentialInfo
+
+        mock_edges = (
+            {"vetting": {"n": "Ev"}, "alloc": {"n": "Ea"},
+             "tnalloc": {"n": "Et"}, "delsig": {"n": "Ed"}},
+            None,
+        )
+        mock_cred = CredentialInfo(
+            said=dossier_said, issuer_aid=org_aid, recipient_aid=None,
+            registry_key=f"E{uuid.uuid4().hex[:43]}", schema_said=DOSSIER_SCHEMA_SAID,
+            issuance_dt="2026-01-01T00:00:00.000000+00:00", status="issued",
+            revocation_dt=None, attributes={"d": "", "dt": "2026-01-01T00:00:00.000000+00:00"},
+            edges=None, rules=None,
+        )
+        mock_issuer = AsyncMock()
+        mock_issuer.issue_credential = AsyncMock(return_value=(mock_cred, b"\x00"))
+
+        mock_registry_info = MagicMock()
+        mock_registry_info.name = "test-registry"
+        mock_reg_mgr = AsyncMock()
+        mock_reg_mgr.get_registry = AsyncMock(return_value=mock_registry_info)
+
+        return mock_edges, mock_issuer, mock_reg_mgr
 
     @pytest.mark.asyncio
     async def test_create_org_not_found_no_audit(self, client_with_auth, admin_headers):
         """Failed creation (org not found) does not produce audit log."""
         _init_app_db()
 
-        # Attempt create with non-existent org — should fail without audit entry
-        response = await client_with_auth.post(
-            "/dossier/create",
-            json={
-                "owner_org_id": str(uuid.uuid4()),
-                "edges": {"vetting": "Ev", "alloc": "Ea", "tnalloc": "Et", "delsig": "Ed"},
-            },
-            headers=admin_headers,
-        )
+        mock_audit = MagicMock()
+        with patch("app.api.dossier.get_audit_logger", return_value=mock_audit):
+            response = await client_with_auth.post(
+                "/dossier/create",
+                json={
+                    "owner_org_id": str(uuid.uuid4()),
+                    "edges": {"vetting": "Ev", "alloc": "Ea", "tnalloc": "Et", "delsig": "Ed"},
+                },
+                headers=admin_headers,
+            )
         assert response.status_code == 404
-        # Verifying no crash; audit log is only called on success path
+        mock_audit.log_access.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_success_emits_create_audit(self, client_with_auth, admin_headers):
+        """Successful creation emits exactly one dossier.create audit event."""
+        _init_app_db()
+        from app.db.session import SessionLocal
+
+        db = SessionLocal()
+        try:
+            org = Organization(
+                id=str(uuid.uuid4()),
+                name=f"Audit Org {uuid.uuid4().hex[:8]}",
+                pseudo_lei=f"54930{uuid.uuid4().hex[:15]}",
+                aid=f"E{uuid.uuid4().hex[:43]}",
+                registry_key=f"E{uuid.uuid4().hex[:43]}",
+                enabled=True,
+            )
+            db.add(org)
+            db.commit()
+            org_id, org_aid = org.id, org.aid
+        finally:
+            db.close()
+
+        dossier_said = f"E{uuid.uuid4().hex[:43]}"
+        mock_edges, mock_issuer, mock_reg_mgr = self._setup_happy_path_mocks(org_aid, dossier_said)
+        mock_audit = MagicMock()
+
+        with (
+            patch("app.api.dossier._validate_dossier_edges", new_callable=AsyncMock, return_value=mock_edges),
+            patch("app.api.dossier.get_credential_issuer", new_callable=AsyncMock, return_value=mock_issuer),
+            patch("app.keri.registry.get_registry_manager", new_callable=AsyncMock, return_value=mock_reg_mgr),
+            patch("app.api.dossier.WITNESS_IURLS", []),
+            patch("app.api.dossier.get_audit_logger", return_value=mock_audit),
+        ):
+            response = await client_with_auth.post(
+                "/dossier/create",
+                json={
+                    "owner_org_id": org_id,
+                    "edges": {"vetting": "Ev", "alloc": "Ea", "tnalloc": "Et", "delsig": "Ed"},
+                },
+                headers=admin_headers,
+            )
+
+        assert response.status_code == 200
+        # Exactly 1 audit call: dossier.create (no OSP)
+        assert mock_audit.log_access.call_count == 1
+        call_args = mock_audit.log_access.call_args
+        assert call_args.kwargs["action"] == "dossier.create"
+        assert call_args.kwargs["resource"] == dossier_said
+        assert call_args.kwargs["details"]["owner_org_id"] == org_id
+        assert call_args.kwargs["details"]["osp_org_id"] is None
+
+    @pytest.mark.asyncio
+    async def test_success_with_osp_emits_two_audit_events(self, client_with_auth, admin_headers):
+        """Successful creation with OSP emits dossier.create + dossier.osp_associate."""
+        _init_app_db()
+        from app.db.session import SessionLocal
+
+        osp_aid = f"E{uuid.uuid4().hex[:43]}"
+        db = SessionLocal()
+        try:
+            ap = Organization(
+                id=str(uuid.uuid4()),
+                name=f"Audit AP {uuid.uuid4().hex[:8]}",
+                pseudo_lei=f"54930{uuid.uuid4().hex[:15]}",
+                aid=f"E{uuid.uuid4().hex[:43]}",
+                registry_key=f"E{uuid.uuid4().hex[:43]}",
+                enabled=True,
+            )
+            osp = Organization(
+                id=str(uuid.uuid4()),
+                name=f"Audit OSP {uuid.uuid4().hex[:8]}",
+                pseudo_lei=f"54930{uuid.uuid4().hex[:15]}",
+                aid=osp_aid,
+                enabled=True,
+            )
+            db.add(ap)
+            db.add(osp)
+            db.commit()
+            ap_id, ap_aid = ap.id, ap.aid
+            osp_id = osp.id
+        finally:
+            db.close()
+
+        dossier_said = f"E{uuid.uuid4().hex[:43]}"
+        mock_edges = (
+            {"vetting": {"n": "Ev"}, "alloc": {"n": "Ea"},
+             "tnalloc": {"n": "Et"}, "delsig": {"n": "Ed"}},
+            osp_aid,
+        )
+        mock_edges_tuple, mock_issuer, mock_reg_mgr = self._setup_happy_path_mocks(ap_aid, dossier_said)
+        mock_audit = MagicMock()
+
+        with (
+            patch("app.api.dossier._validate_dossier_edges", new_callable=AsyncMock, return_value=mock_edges),
+            patch("app.api.dossier.get_credential_issuer", new_callable=AsyncMock, return_value=mock_issuer),
+            patch("app.keri.registry.get_registry_manager", new_callable=AsyncMock, return_value=mock_reg_mgr),
+            patch("app.api.dossier.WITNESS_IURLS", []),
+            patch("app.api.dossier.get_audit_logger", return_value=mock_audit),
+        ):
+            response = await client_with_auth.post(
+                "/dossier/create",
+                json={
+                    "owner_org_id": ap_id,
+                    "edges": {"vetting": "Ev", "alloc": "Ea", "tnalloc": "Et", "delsig": "Ed"},
+                    "osp_org_id": osp_id,
+                },
+                headers=admin_headers,
+            )
+
+        assert response.status_code == 200
+        # Exactly 2 audit calls: dossier.create + dossier.osp_associate
+        assert mock_audit.log_access.call_count == 2
+        actions = [c.kwargs["action"] for c in mock_audit.log_access.call_args_list]
+        assert actions == ["dossier.create", "dossier.osp_associate"]
+        # Verify OSP details in second call
+        osp_call = mock_audit.log_access.call_args_list[1]
+        assert osp_call.kwargs["details"]["osp_org_id"] == osp_id
 
 
 class TestDossierCreateEdgeValidationAPI:
