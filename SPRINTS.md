@@ -50,8 +50,9 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 60b | TNAlloc in Dossier + Brand Logo Fix | COMPLETE | Sprint 60 |
 | 61 | Organization Vetter Certification Association | TODO | Sprint 41, 40 |
 | 62 | Multichannel Vetter Constraint Enforcement | TODO | Sprint 61 |
-| 63 | Dossier Creation Wizard UI | TODO | Sprint 41, 32, 60b |
-| 64 | Repository Migration to Rich-Connexions-Ltd | IN PROGRESS | - |
+| 63 | Dossier Creation Wizard UI | DONE | Sprint 41, 32, 60b |
+| 64 | Repository Migration to Rich-Connexions-Ltd | COMPLETE | - |
+| 65 | Schema-Aware Credential Management | TODO | Sprint 63, 34 |
 
 ---
 
@@ -4070,3 +4071,230 @@ Replace the current flat credential list with a multi-step wizard:
 - [x] GitHub Actions deploy workflow runs successfully from new repo
 - [x] All Azure Container Apps deploy and pass health checks
 - [ ] Old repo is archived (manual step remaining)
+
+---
+
+## Sprint 65: Schema-Aware Credential Management (TODO)
+
+**Goal:** Transform the credential creation experience from a generic "pick a schema and fill in JSON" workflow into a guided, schema-driven process. Each credential type's schema already defines its required attributes, edges, operators, and schema constraints — this sprint surfaces that information in the UI so that creating credentials for a dossier becomes intuitive rather than requiring deep knowledge of ACDC structure.
+
+**Dependencies:** Sprint 63 (Dossier Creation Wizard UI), Sprint 34 (Schema Management)
+
+### Spec References
+
+- **VVP Spec §6.3 — Dossier Credential Chain**: The dossier assembles backing credentials via edges. Each credential type (LE, GCD, TNAlloc, Brand) has specific schema-defined attributes and edge requirements.
+- **ACDC Spec — Edges Block**: The `e` property of each schema JSON defines required and optional edges, each with `n` (SAID), `s` (schema constraint), and `o` (operator: `I2I` or `NI2I`).
+- **VVP Spec §6.3.6 — TN Allocation**: TNAlloc credentials require specific attributes (`numbers`, `channel`, `doNotOriginate`) and may chain to an issuer identity credential.
+- **GCD Spec — Cooperative Delegation**: GCD credentials (`EL7ir...`) have a rich constraint model (`c_goal`, `c_pgeo`, `c_rgeo`, `c_jur`, `c_ical`, `c_proto`, etc.) that should be surfaced in the form.
+
+### Background
+
+The existing credential creation page (`credentials.html`) has a `SchemaFormGenerator` that dynamically renders attribute form fields from schema JSON. However, the edge management is entirely manual — the user must know the edge name, target credential SAID, schema SAID, and operator by heart. This is error-prone and requires deep ACDC expertise.
+
+Meanwhile, every schema JSON file already contains a complete definition of its edge requirements:
+
+```json
+// Example: TNAlloc schema edge block
+"e": {
+  "oneOf": [{...}, {
+    "required": ["d", "tnalloc"],       // ← required edges
+    "properties": {
+      "tnalloc": {
+        "required": ["n", "s", "o"],
+        "properties": {
+          "s": { "const": "EFvnoHDY7I-..." },  // ← schema constraint
+          "o": { "const": "I2I" }               // ← operator constraint
+        }
+      },
+      "issuer": {                               // ← optional edge (not in required)
+        "properties": {
+          "o": { "const": "NI2I" }
+        }
+      }
+    }
+  }]
+}
+```
+
+This sprint extends the `SchemaFormGenerator` pattern to also parse the edges block, presenting schema-driven edge pickers instead of manual edge entry.
+
+### Current State
+
+**What exists:**
+- `SchemaFormGenerator` class in `credentials.html` — parses JSON Schema `properties.a.oneOf[1]` to render dynamic attribute forms (simple fields, arrays, nested objects, booleans, selects)
+- `FormDataCollector` — serializes dynamic form data back to JSON for API submission
+- Manual edge management — user picks from a dropdown of common edge names (`vetting`, `delegation`, `jl`, etc.) and types a target SAID
+- `GET /schema/{said}` API — returns full `schema_document` including edge definitions
+- `GET /credential` API — lists credentials with `schema_said` and `org_id` filters (Sprint 63)
+- 13 embedded schema JSON files covering all VVP credential types
+- Datalist-based credential SAID autocomplete for edge targets
+
+**What's missing:**
+1. No schema-driven edge awareness — edges block is ignored by `SchemaFormGenerator`
+2. No automatic edge slot rendering based on the selected schema's edge requirements
+3. No filtering of candidate credentials per edge slot (by schema SAID constraint)
+4. No operator auto-population from schema definition
+5. No required/optional distinction for edges (everything looks the same)
+6. No credential type labels on edge target candidates (raw SAIDs only)
+7. No "dossier readiness" view showing which credentials an org still needs
+8. Edge schema SAID (`s` field) must be manually looked up and entered
+
+### Deliverables
+
+#### Phase 1: Schema Edge Parser (`SchemaEdgeParser`)
+
+Extend the UI's schema-handling JavaScript to parse the edges block:
+
+- [ ] **`SchemaEdgeParser` class** — New JS class (in `credentials.html` or extracted to `shared.js`) that:
+  - Takes a schema document and extracts the edges block from `properties.e.oneOf[1]` (the object variant, mirroring how `SchemaFormGenerator` extracts from `properties.a.oneOf[1]`)
+  - Returns a structured list of edge slots: `[{ name, required, schemaConstraint, operator, description }]`
+  - Identifies required edges (those listed in `e.required[]`) vs optional
+  - Extracts `const` schema SAIDs and operators from each edge's property definitions
+  - Handles schemas with no edges (e.g., some simple credential types)
+
+- [ ] **Edge slot metadata** — For each parsed edge slot, expose:
+  - `name`: Edge name (e.g., `tnalloc`, `issuer`, `vetting`)
+  - `required`: Boolean (from `e.required[]`)
+  - `schemaConstraint`: The `const` value from `properties.{edge}.properties.s.const` (null if flexible)
+  - `operator`: The `const` value from `properties.{edge}.properties.o.const` (e.g., `I2I`, `NI2I`)
+  - `description`: From `properties.{edge}.description`
+
+#### Phase 2: Schema-Driven Edge UI
+
+Replace the current manual edge entry with an automatically generated edge section:
+
+- [ ] **Auto-rendered edge slots** — When a schema is selected in the credential creation form, parse its edge block and render a section for each edge slot:
+  - Heading: edge name, description, required/optional badge
+  - Credential picker: dropdown or searchable list of available credentials
+  - Filtered by schema constraint (if `schemaConstraint` is non-null, only show credentials with that `schema_said`)
+  - Filtered by operator (if `I2I`, only show credentials issued TO the current org's AID; if `NI2I`, show all accessible credentials)
+  - Each candidate shows: truncated SAID, schema type label, issuer/recipient org names, status badge
+  - Read-only display of auto-populated operator and schema SAID
+
+- [ ] **Fallback for custom edges** — Retain the existing "+ Add Edge" button for edge names not defined in the schema (forward compatibility with future schema extensions)
+
+- [ ] **Schema type labels** — Map schema SAIDs to human-readable names in the UI:
+  | Schema SAID | Label |
+  |-------------|-------|
+  | `EFvnoHDY7I-kaBBeKlbDbkjG4BaI0nKLGadxBdjMGgSQ` | TN Allocation |
+  | `EL7irIKYJL9Io0hhKSGWI4OznhwC7qgJG5Qf4aEs6j0o` | Cooperative Delegation (GCD) |
+  | `EH1jN4U4LMYHmPVI4FYdZ10bIPR7YWKp8TDdZ9Y9Al-P` | VVP Dossier |
+  | `EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao` | Legal Entity (vLEI) |
+  | `EPknTwPpSZi379molapnuN4V5AyhCxz_6TLYdiVNWvbV` | Extended Legal Entity |
+  | `EK7kPhs5YkPsq9mZgUfPYfU-zq5iSlU8XVYJWqrVPk6g` | Extended Brand |
+  | `EJrcLKzq4d1PFtlnHLb9tl4zGwPAjO6v0dec4CiJMZk6` | Legal Entity (Provenant) |
+  Source: `GET /schema` → `title` field. Build a lookup map at page load from the schema list API.
+
+- [ ] **Credential attribute preview** — In the edge credential picker, show key attributes inline to help distinguish between multiple credentials of the same type:
+  - TNAlloc: phone numbers/ranges from `attributes.numbers`
+  - LE/Extended LE: LEI, legal name, country
+  - Brand/Extended Brand: brand name, assertion country
+  - GCD: role, delegate AID (truncated)
+  These come from `GET /credential/{said}` → `attributes` field (already available via the detail endpoint)
+
+#### Phase 3: Credential Type Quick-Create Templates
+
+Provide guided creation templates for the VVP-specific credential types:
+
+- [ ] **"Create for Dossier" button** — On the dossier wizard page (Sprint 63), when an edge slot has no matching credentials, show a "Create" link that opens the credentials page with the schema pre-selected and the edge context pre-filled
+  - URL pattern: `/ui/credentials?schema={SAID}&context=dossier&edge={edge_name}&org={org_id}`
+  - The credentials page reads query params and pre-selects the schema, pre-fills the recipient AID (for I2I edges), and shows a "Return to Dossier" banner
+
+- [ ] **VVP credential type selector** — Above the generic schema dropdown, add a "VVP Credential Types" section with labeled buttons/cards for the main types:
+  - "TN Allocation" → selects TNAlloc schema, shows numbers/channel/doNotOriginate form
+  - "Delegated Signer" → selects GCD schema, shows role/delegate form with appropriate edges
+  - "Legal Entity" → selects LE schema, shows LEI/legalName form
+  - "Brand Credential" → selects Extended Brand schema, shows brandName/logoUrl/assertionCountry form
+  - "Allocator Authority" → selects GCD schema, shows allocator-specific role
+  Clicking a type card selects the schema and scrolls to the form. The generic schema dropdown remains for advanced use.
+
+- [ ] **Recipient AID helper** — For credentials that require a recipient (`a.i`), provide an organization picker dropdown (reusing the `GET /api/organizations/names` endpoint from Sprint 63) that resolves the org's AID, instead of requiring the user to paste a raw AID string
+
+#### Phase 4: Dossier Readiness Dashboard
+
+Add a view showing organizational readiness for dossier assembly:
+
+- [ ] **Dossier readiness panel** — On the dossier wizard page or as a new section on the credentials page, show a checklist of the 6 dossier edge slots with status:
+  - For each edge slot: name, required/optional badge, count of matching credentials owned by the selected org
+  - Green check if at least one valid (non-revoked) credential exists for that slot
+  - Red X with "Create" link if no matching credential exists
+  - Credential count links to filtered credential list (`?schema_said=...&org_id=...`)
+
+- [ ] **API: `GET /api/dossier/readiness?org_id={uuid}`** — Backend endpoint that checks credential availability for each dossier edge slot:
+  ```json
+  {
+    "org_id": "...",
+    "org_name": "ACME Inc",
+    "ready": false,
+    "slots": [
+      {
+        "edge": "vetting",
+        "required": true,
+        "schema_constraint": null,
+        "available_count": 1,
+        "status": "ready"
+      },
+      {
+        "edge": "tnalloc",
+        "required": true,
+        "schema_constraint": "EFvnoHDY7I-kaBBeKlbDbkjG4BaI0nKLGadxBdjMGgSQ",
+        "available_count": 0,
+        "status": "missing"
+      }
+    ]
+  }
+  ```
+  This parses the dossier schema's edge block server-side and checks credential availability per slot.
+
+#### Phase 5: Tests
+
+- [ ] **JS unit tests** — If a JS test framework exists, add tests for `SchemaEdgeParser`:
+  - Parse TNAlloc schema edges → returns `tnalloc` (required, I2I, schema constraint) + `issuer` (optional, NI2I)
+  - Parse GCD schema edges → returns `issuer` (required, I2I)
+  - Parse Dossier schema edges → returns all 6 slots with correct required/optional/operator/constraint
+  - Parse schema with no edges → returns empty list
+
+- [ ] **API tests: `GET /api/dossier/readiness`** — Org with all credentials, org with missing credentials, org with revoked credentials, non-existent org, admin vs non-admin access
+
+- [ ] **Integration test** — Full flow: create org → check readiness (missing) → issue required credentials → check readiness (ready) → create dossier (succeeds)
+
+### Key Files to Create/Modify
+
+| File | Action | Purpose |
+|------|--------|---------|
+| `services/issuer/web/credentials.html` | Modify | Add `SchemaEdgeParser`, schema-driven edge UI, credential type cards, recipient AID helper |
+| `services/issuer/web/dossier.html` | Modify | Add "Create" links for missing credentials, readiness panel |
+| `services/issuer/web/shared.js` | Modify | Add schema type label lookup utility, shared edge parsing logic |
+| `services/issuer/app/api/dossier.py` | Modify | Add `GET /api/dossier/readiness` endpoint |
+| `services/issuer/app/api/models.py` | Modify | Add `DossierReadinessResponse`, `DossierSlotStatus` models |
+| `services/issuer/tests/test_dossier_readiness.py` | Create | Readiness endpoint tests |
+| `knowledge/api-reference.md` | Update | Document readiness endpoint |
+
+### Technical Notes
+
+- **Schema edge parsing is client-side**: The `SchemaEdgeParser` runs in the browser using the JSON schema document returned by `GET /schema/{said}`. No new backend parsing is needed for the edge UI — the schema already contains all the information. The backend `readiness` endpoint does its own server-side parsing for the dossier-specific check.
+
+- **Edge block structure**: All VVP schemas use the same pattern for edges: `properties.e.oneOf[1]` is the object variant with `required[]` listing mandatory edges. Each edge property has `n` (SAID), `s` (schema constraint, may have `const`), and `o` (operator, may have `const`). The parser should handle schemas where `e` is absent or has no `oneOf`.
+
+- **Credential filtering by operator**: For `I2I` edges, the dossier's issuer AID (the AP) MUST be the issuee of the target credential. The UI should filter to credentials where `recipient_aid` matches the current org's AID. For `NI2I` edges, any accessible credential is valid. This filtering reuses the existing `GET /credential?org_id=...` + `schema_said=...` filters from Sprint 63.
+
+- **Schema type label source**: The `title` field from each schema's JSON document (e.g., `"TN Allocation Credential"`, `"Generalized Cooperative Delegation Credential"`) provides human-readable labels. Build a `Map<SAID, title>` at page load from `GET /schema` list.
+
+- **Existing `SchemaFormGenerator` unchanged**: The attribute form generation continues to work as-is. This sprint adds the *parallel* edge generation alongside it. When a schema is selected, both the attribute form and the edge slots are rendered.
+
+- **Cross-page navigation**: The `/ui/credentials?schema=...&context=dossier` deep link pattern enables the dossier wizard to link users to credential creation without losing context. After creating the credential, a "Return to Dossier" link navigates back.
+
+- **No UI framework change**: All new UI code follows the existing vanilla JS + `authFetch()` + `shared.js` patterns. No React/Vue/etc. introduction.
+
+### Exit Criteria
+
+- Selecting a schema in the credential creation form auto-renders the correct edge slots with required/optional badges
+- Schema-constrained edges show only credentials with matching `schema_said` in the picker
+- Operator-constrained edges correctly filter by I2I (issued TO org) vs NI2I (any accessible)
+- VVP credential type cards provide one-click schema selection for the 5 main types
+- Each edge candidate shows schema type label and key attributes (not just raw SAID)
+- Dossier readiness panel shows which credentials an org has vs needs for dossier assembly
+- "Create" links from dossier wizard open credentials page with schema pre-selected
+- All new API endpoints have tests
+- All existing tests continue to pass (no regressions)
+- Existing generic edge management (manual "+ Add Edge") still works for non-schema-defined edges
