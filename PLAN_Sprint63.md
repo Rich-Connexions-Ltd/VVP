@@ -162,9 +162,9 @@ class CreateDossierRequest(BaseModel):
     """Request to create (issue) a dossier ACDC."""
     owner_org_id: str = Field(..., description="Accountable Party organization ID")
     name: Optional[str] = Field(None, max_length=255, description="Optional dossier name")
-    edges: dict[str, dict] = Field(
+    edges: dict[str, str] = Field(
         ...,
-        description="Edge selections: {edge_name: {said: SAID_of_credential}}",
+        description="Edge selections: {edge_name: credential_SAID}",
     )
     osp_org_id: Optional[str] = Field(
         None, description="OSP organization to associate (administrative)"
@@ -689,6 +689,8 @@ User (Admin) → Wizard UI
 2. **Test database initialization**: ASGITransport doesn't invoke FastAPI lifespan, so `init_database()` is never called during tests. Added `_init_app_db()` helper to ensure tables exist in API-level tests.
 
 3. **SQLite foreign key enforcement**: In-memory SQLite test fixture needed explicit `PRAGMA foreign_keys=ON` event listener for CASCADE delete tests.
+
+4. **Flat edges contract**: Plan initially defined `edges: dict[str, dict]` (nested `{edge_name: {said: ...}}`). Implemented as `edges: dict[str, str]` (flat `{edge_name: credential_SAID}`) since the backend builds the full ACDC edge structure internally during `_validate_dossier_edges()`. The flat format is simpler for both the UI and API consumers. Plan updated in round 6 to match.
 
 ### Implementation Details
 

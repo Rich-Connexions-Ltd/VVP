@@ -9,7 +9,6 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.api.models import (
@@ -29,7 +28,7 @@ from app.auth.roles import (
     check_credential_access_role,
     check_credential_write_role,
 )
-from app.auth.scoping import can_access_credential, filter_credentials_by_org, validate_dossier_chain_access
+from app.auth.scoping import can_access_credential, validate_dossier_chain_access
 from app.audit import get_audit_logger
 from app.config import WITNESS_IURLS, VVP_ISSUER_BASE_URL
 from app.db.models import DossierOspAssociation, ManagedCredential, Organization

@@ -1872,15 +1872,30 @@ class TestDossierBuildability:
         assert create_resp.status_code == 200
         created_said = create_resp.json()["dossier_said"]
 
-        # Step 2: Verify the created dossier is known to the build endpoint
-        # (build will try KERI lookup which is mocked, so we expect a build error
-        # not a "credential not found in managed table" error)
-        build_resp = await client_with_auth.post(
-            "/dossier/build",
-            json={"root_said": created_said, "format": "json"},
-            headers=admin_headers,
+        # Step 2: Build the dossier with mocked builder to verify full path
+        from app.dossier.builder import DossierContent
+        mock_content = DossierContent(
+            root_said=created_said,
+            root_saids=[created_said],
+            credential_saids=[created_said],
+            is_aggregate=False,
+            credentials={created_said: b"\x00"},
+            credentials_json={created_said: {"v": "ACDC10JSON000000_", "d": created_said}},
         )
-        # The dossier SAID exists in ManagedCredential, so access control passes.
-        # The actual build fails because KERI credential data is mocked, but we
-        # verify the dossier is accessible (not 403/404 from access control).
-        assert build_resp.status_code != 403, "Dossier should be accessible after creation"
+        mock_builder = AsyncMock()
+        mock_builder.build = AsyncMock(return_value=mock_content)
+
+        with (
+            patch("app.api.dossier.get_dossier_builder", new_callable=AsyncMock, return_value=mock_builder),
+            patch("app.api.dossier.validate_dossier_chain_access", return_value=[]),
+        ):
+            build_resp = await client_with_auth.post(
+                "/dossier/build",
+                json={"root_said": created_said, "format": "json"},
+                headers=admin_headers,
+            )
+        # Full build path succeeds: access control passes, builder runs, serialization returns data
+        assert build_resp.status_code == 200, f"Build failed: {build_resp.json()}"
+        assert build_resp.headers["content-type"].startswith("application/json")
+        assert build_resp.headers["x-dossier-root-said"] == created_said
+        assert build_resp.headers["x-dossier-credential-count"] == "1"
