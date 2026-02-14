@@ -731,11 +731,26 @@ User (Admin) → Wizard UI
 - Added concrete audit logging assertions: mock `get_audit_logger` with call count/argument verification for create (1 call), create+OSP (2 calls), and failure (0 calls)
 - Added admin `org_id` filter test for `/dossier/associated`
 
+### Review Fixes (Rounds 6-8)
+
+**Round 6 fixes:**
+- Documented flat edges contract deviation in plan (dict[str, str] vs dict[str, dict])
+- Strengthened buildability test with mocked DossierBuilder + serialize path (asserts 200, headers)
+- Removed unused imports (JSONResponse, filter_credentials_by_org) from dossier.py
+
+**Round 7 fixes:**
+- Sanitized registry key from 500 error detail — logged to server only, generic message returned to client
+
+**Round 8 fixes:**
+- Added `access` property to UI EDGE_SLOTS mirroring backend DOSSIER_EDGE_DEFS
+- bproxy credential loading skips org_id filter (principal-scoped, not AP-org scoped)
+- Added 2 bproxy access policy tests: principal access succeeds + denied
+
 ### Test Results
 
 ```
-46 tests in test_sprint63_wizard.py — all pass
-497 tests total in issuer test suite — all pass (5 skipped, 3 deselected)
+48 tests in test_sprint63_wizard.py — all pass
+499 tests total in issuer test suite — all pass (5 skipped, 3 deselected)
 ```
 
 ### Files Changed
@@ -748,4 +763,4 @@ User (Admin) → Wizard UI
 | `services/issuer/app/api/organization.py` | +48 | GET /organizations/names with purpose=ap/osp |
 | `services/issuer/app/db/models.py` | +40 | DossierOspAssociation model |
 | `services/issuer/web/dossier.html` | +1124/-280 | 4-step wizard UI rewrite |
-| `services/issuer/tests/test_sprint63_wizard.py` | +1684 | 46 tests across 15 test classes |
+| `services/issuer/tests/test_sprint63_wizard.py` | +1684 | 48 tests across 15+ test classes |
