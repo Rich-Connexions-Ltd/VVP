@@ -192,6 +192,17 @@ class User(Base):
     roles: str                     # JSON list
     organization_id: Optional[UUID]
     is_active: bool
+
+class DossierOspAssociation(Base):   # Sprint 63
+    """Administrative record: which OSP org can reference which dossier.
+    Visibility only — does NOT gate TN mapping authorization."""
+    __tablename__ = "dossier_osp_associations"
+    id: int                        # Primary key, autoincrement
+    dossier_said: str(44)          # Dossier credential SAID
+    owner_org_id: UUID             # FK → organizations.id (AP), CASCADE
+    osp_org_id: UUID               # FK → organizations.id (OSP), CASCADE, indexed
+    created_at: datetime
+    # Unique constraint: (dossier_said, osp_org_id)
 ```
 
 ### api/models.py - Issuer API Models
@@ -223,6 +234,42 @@ class TNLookupRequest(BaseModel):
 class CreateOrganizationRequest(BaseModel):
     name: str
     lei: Optional[str]
+
+# Sprint 63 — Dossier Creation Wizard
+class CreateDossierRequest(BaseModel):
+    owner_org_id: str              # AP organization ID
+    name: Optional[str]            # Dossier name (max 255)
+    edges: dict[str, str]          # {edge_name: credential_SAID}
+    osp_org_id: Optional[str]      # OSP org to associate
+
+class CreateDossierResponse(BaseModel):
+    dossier_said: str
+    issuer_aid: str
+    schema_said: str
+    edge_count: int
+    name: Optional[str]
+    osp_org_id: Optional[str]
+    dossier_url: str
+    publish_results: Optional[list[WitnessPublishResult]]
+
+class OrganizationNameResponse(BaseModel):
+    id: str
+    name: str
+
+class OrganizationNameListResponse(BaseModel):
+    count: int
+    organizations: list[OrganizationNameResponse]
+
+class AssociatedDossierEntry(BaseModel):
+    dossier_said: str
+    owner_org_id: str
+    owner_org_name: str
+    osp_org_id: str
+    created_at: str
+
+class AssociatedDossierListResponse(BaseModel):
+    count: int
+    associations: list[AssociatedDossierEntry]
 ```
 
 ---

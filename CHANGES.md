@@ -1,5 +1,46 @@
 # VVP Verifier Change Log
 
+## Sprint 63: Dossier Creation Wizard UI
+
+**Date:** 2026-02-13
+**Status:** Complete
+
+### Summary
+
+Redesigned the issuer dossier page (`/ui/dossier`) from a flat "select credential → download" tool into a guided 4-step wizard for creating dossier ACDCs. Added server-side dossier ACDC issuance with schema-driven edge validation, per-edge access policies, OSP organization association, and audit logging.
+
+### Key Features
+
+- **4-step wizard UI**: AP org selection → edge credential selection → metadata/OSP → review & create
+- **`POST /api/dossier/create`**: Server-side dossier ACDC issuance with 6-edge validation (4 required, 2 optional)
+- **`GET /api/organizations/names`**: Lightweight org list for any authenticated user (AP and OSP dropdowns)
+- **`GET /api/dossier/associated`**: OSP visibility — list dossiers associated with principal's org
+- **Credential list filtering**: `schema_said` and `org_id` query parameters on `GET /credential`
+- **DossierOspAssociation model**: Administrative record linking dossier → OSP org
+- **Per-edge access policy**: 5 edges use AP-org scoping; `bproxy` uses principal-scoped `can_access_credential()`
+- **48 tests** across 15+ test classes; 499 total suite tests passing
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `services/issuer/app/api/dossier.py` | Edge validation, `POST /create`, `GET /associated`, audit logging |
+| `services/issuer/app/api/credential.py` | `schema_said` and `org_id` query filters |
+| `services/issuer/app/api/organization.py` | `GET /names` endpoint with `purpose=ap\|osp` |
+| `services/issuer/app/api/models.py` | CreateDossierRequest/Response, AssociatedDossier, OrgName models |
+| `services/issuer/app/db/models.py` | DossierOspAssociation model |
+| `services/issuer/web/dossier.html` | 4-step wizard UI rewrite (~1100 lines) |
+| `services/issuer/tests/test_sprint63_wizard.py` | 48 tests across 15+ test classes |
+| `knowledge/api-reference.md` | Document new endpoints |
+| `knowledge/data-models.md` | Document new models |
+
+### Commits
+
+- `4611005` Sprint 63: Dossier Creation Wizard UI — sprint definition
+- `213a3d7` Update PLAN_Sprint63.md test counts and add round 6-8 review fix notes
+
+---
+
 ## Sprint 60b: TNAlloc in Dossier + Brand Logo Fix
 
 **Date:** 2026-02-11

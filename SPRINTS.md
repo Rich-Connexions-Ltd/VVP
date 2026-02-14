@@ -51,6 +51,7 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 61 | Organization Vetter Certification Association | TODO | Sprint 41, 40 |
 | 62 | Multichannel Vetter Constraint Enforcement | TODO | Sprint 61 |
 | 63 | Dossier Creation Wizard UI | TODO | Sprint 41, 32, 60b |
+| 64 | Repository Migration to Rich-Connexions-Ltd | TODO | - |
 
 ---
 
@@ -3807,7 +3808,7 @@ The verification returns an evidence status code indicating the evidence is soli
 
 ---
 
-## Sprint 63: Dossier Creation Wizard UI (TODO)
+## Sprint 63: Dossier Creation Wizard UI (DONE)
 
 **Goal:** Redesign the `/ui/dossier` page from a "select root credential and download" tool into a guided dossier creation wizard. The new workflow lets an SSO-authenticated admin select a dossier-owning organization (the Accountable Party), pick credentials matching each dossier schema edge slot, optionally name the dossier, and issue the dossier ACDC (`EH1jN4U4LMYHmPVI4FYdZ10bIPR7YWKp8TDdZ9Y9Al-P`) — then record which OSP (Originating Service Provider) organization is authorized to reference it.
 
@@ -4017,3 +4018,73 @@ Replace the current flat credential list with a multi-step wizard:
 - Existing "build & download" functionality continues to work for all dossiers (old and new)
 - All new API endpoints have tests
 - All existing tests continue to pass (no regressions)
+
+---
+
+## Sprint 64: Repository Migration to Rich-Connexions-Ltd (TODO)
+
+**Goal:** Migrate the repository from `github.com/andrewbalercnx/vvp-verifier` to `github.com/Rich-Connexions-Ltd/VVP` and update all references, CI/CD pipelines, and Azure OIDC federation trusts to work from the new org/repo.
+
+**Deliverables:**
+
+### 1. GitHub Repository Setup
+- [ ] Create `Rich-Connexions-Ltd/VVP` repository (or rename existing `OVC-VVP-Verifier`)
+- [ ] Push full history (all branches, tags) to new repo
+- [ ] Configure repository settings (branch protection, default branch)
+- [ ] Migrate GitHub Actions secrets from old repo to new org:
+  - `ACR_LOGIN_SERVER`, `AZURE_CLIENT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_TENANT_ID`
+  - `VVP_PBX_IP`, `VVP_ISSUER_API_KEY`
+  - Any other secrets referenced in workflows
+
+### 2. Azure OIDC Federation Trust
+- [ ] Update Azure AD app registration federated credential to trust `Rich-Connexions-Ltd/VVP` (repo path in OIDC subject claim changes with org/repo name)
+- [ ] Verify OIDC login works from new repo's GitHub Actions
+
+### 3. Code & Documentation Updates
+- [ ] Update git remote origin URL: `https://github.com/Rich-Connexions-Ltd/VVP.git`
+- [ ] Remove the `ovc` remote (now redundant)
+- [ ] Update `README.md` clone URL (line 75)
+- [ ] Grep all `*.md`, `*.yml`, `*.py`, `*.toml`, `*.sh`, `*.html` for `andrewbalercnx/vvp-verifier` and update
+- [ ] Update `CLAUDE.md` CI/CD section if it references repo URLs
+- [ ] Update `Documentation/*.md` references
+- [ ] Update `knowledge/*.md` references
+
+### 4. CI/CD Pipeline Verification
+- [ ] Push to new repo's `main` branch
+- [ ] Verify GitHub Actions workflow triggers and completes:
+  - OIDC login to Azure succeeds
+  - Docker build + ACR push succeeds
+  - Container App deployment succeeds
+  - PBX deploy steps succeed
+- [ ] Verify all deployed services remain healthy after deploy from new repo
+
+### 5. Cleanup
+- [ ] Archive or delete old `andrewbalercnx/vvp-verifier` repo (or mark as moved)
+- [ ] Update any external references (bookmarks, Azure DevOps links, etc.)
+- [ ] Update local `.claude/` project paths if needed
+
+**Key Files to Modify:**
+| File | Action | Purpose |
+|------|--------|---------|
+| `README.md` | Update | Clone URL |
+| `.github/workflows/deploy.yml` | Verify | Secrets and OIDC still work |
+| `.github/workflows/integration-tests.yml` | Verify | Secrets still work |
+| `Documentation/*.md` | Update | Any repo URL references |
+| `knowledge/*.md` | Update | Any repo URL references |
+| `CLAUDE.md` | Update | If repo URLs referenced |
+
+**Technical Notes:**
+- The existing `ovc` remote already points to `Rich-Connexions-Ltd/OVC-VVP-Verifier` — this may need to be renamed to `VVP` at the GitHub level
+- Azure OIDC federation uses the subject claim `repo:ORG/REPO:ref:refs/heads/main` — this MUST be updated in the Azure AD app registration before CI/CD will work from the new repo
+- GitHub Actions secrets are per-repo (or per-org with policies). Secrets must be recreated or org-level secrets configured
+- Container image names in ACR (`vvp-verifier`, `vvp-issuer`, etc.) and Azure Container App names do NOT need to change — they are independent of the GitHub repo name
+- The `vvp-verifier.rcnx.io` / `vvp-issuer.rcnx.io` DNS and domain bindings are Azure-side and unaffected
+
+### Exit Criteria
+
+- `git remote -v` shows origin as `https://github.com/Rich-Connexions-Ltd/VVP.git`
+- No references to `andrewbalercnx/vvp-verifier` remain in codebase
+- `git push origin main` succeeds to new repo
+- GitHub Actions deploy workflow runs successfully from new repo
+- All Azure Container Apps deploy and pass health checks
+- Old repo is archived or deleted

@@ -116,8 +116,29 @@ Base URL: `https://vvp-issuer.rcnx.io`
 |--------|------|---------|
 | `POST` | `/api/organizations` | Create organization (auto-provisions KERI identity + LE credential) |
 | `GET` | `/api/organizations` | List organizations |
+| `GET` | `/api/organizations/names` | List org names (lightweight, any auth) |
 | `GET` | `/api/organizations/{id}` | Get organization details |
 | `PATCH` | `/api/organizations/{id}` | Update organization |
+
+#### GET /api/organizations/names (Sprint 63)
+
+Lightweight org name list for any authenticated user. Used by dossier wizard for AP and OSP dropdowns.
+
+**Query Parameters:**
+- `purpose` (optional): `ap` (default) or `osp`
+  - `ap`: Non-admins see only their own org; admins see all
+  - `osp`: All authenticated users see all enabled orgs
+
+**Response:** `OrganizationNameListResponse`
+```json
+{
+  "count": 2,
+  "organizations": [
+    {"id": "uuid", "name": "ACME Corp"},
+    {"id": "uuid", "name": "Example Inc"}
+  ]
+}
+```
 
 ### Organization API Keys (`/api/organizations/{id}/api-keys`)
 
@@ -158,13 +179,75 @@ Base URL: `https://vvp-issuer.rcnx.io`
 | `POST` | `/api/credentials/{said}/revoke` | Revoke credential |
 | `DELETE` | `/api/credentials/{said}` | Delete credential |
 
+#### GET /credential Query Filters (Sprint 63)
+
+- `schema_said` (optional): Filter to credentials matching this schema SAID
+- `org_id` (optional, admin-only): Scope credentials to a specific org. Non-admins receive 403. Relationship tagging is computed from the perspective of the specified org.
+- `status` (optional): Filter by credential status (e.g., `issued`)
+
 ### Dossiers (`/api/dossiers`)
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `POST` | `/api/dossiers/build` | Build dossier from credential |
-| `POST` | `/api/dossiers/sign` | Sign dossier with identity |
-| `GET` | `/api/dossiers` | List dossiers |
+| `POST` | `/api/dossier/create` | Create dossier ACDC with edge validation (Sprint 63) |
+| `POST` | `/api/dossier/build` | Build dossier from credential SAID |
+| `POST` | `/api/dossier/build/info` | Build info (credential count, format) |
+| `GET` | `/api/dossier/associated` | List dossiers associated with principal's org as OSP (Sprint 63) |
+| `GET` | `/api/dossier/{said}` | Get public dossier by SAID |
+
+#### POST /api/dossier/create (Sprint 63)
+
+Create a dossier ACDC with server-side edge validation, ACDC issuance, and optional OSP association.
+
+**Auth:** `issuer:operator+` or `org:dossier_manager+`
+
+**Request:** `CreateDossierRequest`
+```json
+{
+  "owner_org_id": "uuid (AP org)",
+  "name": "My VVP Dossier (optional)",
+  "edges": {
+    "vetting": "SAID_of_LE_credential",
+    "alloc": "SAID_of_GCD_credential",
+    "tnalloc": "SAID_of_TNAlloc_credential",
+    "delsig": "SAID_of_delegation_credential",
+    "bownr": "SAID_of_brand_credential (optional)",
+    "bproxy": "SAID_of_brand_proxy (optional)"
+  },
+  "osp_org_id": "uuid (optional OSP association)"
+}
+```
+
+**Response:** `CreateDossierResponse`
+```json
+{
+  "dossier_said": "E...",
+  "issuer_aid": "E...",
+  "schema_said": "EH1jN4U4...",
+  "edge_count": 4,
+  "name": "My VVP Dossier",
+  "osp_org_id": "uuid or null",
+  "dossier_url": "https://vvp-issuer.rcnx.io/api/dossier/E...",
+  "publish_results": [{"witness_url": "...", "success": true}]
+}
+```
+
+**Edge validation:**
+- Required: `vetting`, `alloc`, `tnalloc`, `delsig`
+- Optional: `bownr`, `bproxy`
+- Schema match enforced for constrained edges
+- I2I operator validated for `alloc`, `tnalloc`
+- `delsig` issuer must be AP's AID (§5.1 step 9)
+- `bproxy` required when `bownr` present and OP differs from AP (§6.3.4)
+- Per-edge access policy: `ap_org` (5 edges) or `principal` (bproxy only)
+
+#### GET /api/dossier/associated (Sprint 63)
+
+List dossiers associated with the principal's organization as OSP.
+
+**Auth:** `issuer:readonly+` or `org:dossier_manager+`
+**Query Parameters:** `org_id` (optional, admin-only): Filter by specific OSP org
+**Scoping:** Admins see all; org-scoped principals see only their org's associations
 
 ### TN Mappings (`/api/tn`)
 
