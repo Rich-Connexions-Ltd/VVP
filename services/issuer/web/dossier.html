@@ -418,12 +418,12 @@
 
       // Edge slot definitions matching server-side DOSSIER_EDGE_DEFS
       const EDGE_SLOTS = [
-        { name: 'vetting',  label: 'Vetting (LE)',       desc: 'Legal Entity credential verifying the AP', required: true,  schema: null,               i2i: false },
-        { name: 'alloc',    label: 'Allocation (GCD)',    desc: 'Cooperative Delegation credential allocating authority to AP', required: true,  schema: GCD_SCHEMA_SAID,    i2i: true },
-        { name: 'tnalloc',  label: 'TN Allocation (RTU)', desc: 'Telephone Number allocation credential', required: true,  schema: TNALLOC_SCHEMA_SAID, i2i: true },
-        { name: 'delsig',   label: 'Delegation Signing',  desc: 'Delegation from AP to OP for call signing', required: true,  schema: GCD_SCHEMA_SAID,    i2i: false },
-        { name: 'bownr',    label: 'Brand Ownership',     desc: 'Brand ownership credential (optional)', required: false, schema: null,               i2i: false },
-        { name: 'bproxy',   label: 'Brand Proxy',         desc: 'Brand proxy delegation (required if brand + OP differs from AP)', required: false, schema: null,               i2i: false },
+        { name: 'vetting',  label: 'Vetting (LE)',       desc: 'Legal Entity credential verifying the AP', required: true,  schema: null,               i2i: false, access: 'ap_org' },
+        { name: 'alloc',    label: 'Allocation (GCD)',    desc: 'Cooperative Delegation credential allocating authority to AP', required: true,  schema: GCD_SCHEMA_SAID,    i2i: true,  access: 'ap_org' },
+        { name: 'tnalloc',  label: 'TN Allocation (RTU)', desc: 'Telephone Number allocation credential', required: true,  schema: TNALLOC_SCHEMA_SAID, i2i: true,  access: 'ap_org' },
+        { name: 'delsig',   label: 'Delegation Signing',  desc: 'Delegation from AP to OP for call signing', required: true,  schema: GCD_SCHEMA_SAID,    i2i: false, access: 'ap_org' },
+        { name: 'bownr',    label: 'Brand Ownership',     desc: 'Brand ownership credential (optional)', required: false, schema: null,               i2i: false, access: 'ap_org' },
+        { name: 'bproxy',   label: 'Brand Proxy',         desc: 'Brand proxy delegation (required if brand + OP differs from AP)', required: false, schema: null,               i2i: false, access: 'principal' },
       ];
 
       // =================================================================
@@ -589,7 +589,10 @@
           container.innerHTML = '<em>Loading credentials...</em>';
 
           try {
-            let url = `/credential?org_id=${selectedApOrgId}&status=issued`;
+            // bproxy uses principal-scoped access (not AP-org scoped)
+            let url = slot.access === 'principal'
+              ? '/credential?status=issued'
+              : `/credential?org_id=${selectedApOrgId}&status=issued`;
             if (slot.schema) {
               url += `&schema_said=${slot.schema}`;
             }

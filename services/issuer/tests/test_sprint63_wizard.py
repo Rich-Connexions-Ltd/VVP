@@ -771,6 +771,114 @@ class TestEdgeValidation:
             assert "bownr" in result_edges
             assert delsig_issuee == ap_org.aid
 
+    @pytest.mark.asyncio
+    async def test_bproxy_principal_access_succeeds(self, in_memory_db, ap_org):
+        """bproxy uses principal-scoped access, not AP-org scoped."""
+        from app.api.dossier import _validate_dossier_edges
+
+        principal = make_operator_principal(organization_id="some-other-org-id")
+
+        bproxy_said = "Ebp_principal".ljust(44, "X")
+        edges = {
+            "vetting": "Ev1".ljust(44, "X"),
+            "alloc": "Ea1".ljust(44, "X"),
+            "tnalloc": "Et1".ljust(44, "X"),
+            "delsig": "Ed1".ljust(44, "X"),
+            "bownr": "Eb1".ljust(44, "X"),
+            "bproxy": bproxy_said,
+        }
+
+        # Register AP-org managed creds for non-bproxy edges
+        for ename, said in edges.items():
+            if ename == "bproxy":
+                continue  # bproxy NOT in AP org's managed credentials
+            mc = ManagedCredential(
+                said=said,
+                organization_id=ap_org.id,
+                schema_said=GCD_SCHEMA_SAID,
+                issuer_aid=ap_org.aid,
+            )
+            in_memory_db.add(mc)
+        in_memory_db.commit()
+
+        different_op_aid = "Eop_aid_different_from_ap_12345678901234"
+
+        def make_cred(said):
+            for ename, esaid in edges.items():
+                if esaid == said:
+                    if ename == "delsig":
+                        return _make_edge_mock(ename, ap_org.aid, recipient_aid=different_op_aid)
+                    return _make_edge_mock(ename, ap_org.aid)
+            return _make_edge_mock("vetting", ap_org.aid)
+
+        mock_issuer = AsyncMock()
+        mock_issuer.get_credential = AsyncMock(side_effect=make_cred)
+
+        # Mock can_access_credential to return True for bproxy (principal-scoped)
+        with (
+            patch("app.api.dossier.get_credential_issuer", return_value=mock_issuer),
+            patch("app.api.dossier.can_access_credential", return_value=True),
+        ):
+            result_edges, delsig_issuee = await _validate_dossier_edges(
+                in_memory_db, principal, ap_org, edges
+            )
+            assert "bproxy" in result_edges
+            assert delsig_issuee == different_op_aid
+
+    @pytest.mark.asyncio
+    async def test_bproxy_principal_access_denied(self, in_memory_db, ap_org):
+        """bproxy access denied when principal cannot access the credential."""
+        from fastapi import HTTPException
+        from app.api.dossier import _validate_dossier_edges
+
+        principal = make_operator_principal(organization_id="some-other-org-id")
+
+        bproxy_said = "Ebp_denied".ljust(44, "X")
+        edges = {
+            "vetting": "Ev1".ljust(44, "X"),
+            "alloc": "Ea1".ljust(44, "X"),
+            "tnalloc": "Et1".ljust(44, "X"),
+            "delsig": "Ed1".ljust(44, "X"),
+            "bownr": "Eb1".ljust(44, "X"),
+            "bproxy": bproxy_said,
+        }
+
+        for ename, said in edges.items():
+            if ename == "bproxy":
+                continue
+            mc = ManagedCredential(
+                said=said,
+                organization_id=ap_org.id,
+                schema_said=GCD_SCHEMA_SAID,
+                issuer_aid=ap_org.aid,
+            )
+            in_memory_db.add(mc)
+        in_memory_db.commit()
+
+        def make_cred(said):
+            for ename, esaid in edges.items():
+                if esaid == said:
+                    if ename == "delsig":
+                        return _make_edge_mock(
+                            ename, ap_org.aid,
+                            recipient_aid="Eop_different".ljust(44, "X"),
+                        )
+                    return _make_edge_mock(ename, ap_org.aid)
+            return _make_edge_mock("vetting", ap_org.aid)
+
+        mock_issuer = AsyncMock()
+        mock_issuer.get_credential = AsyncMock(side_effect=make_cred)
+
+        # Mock can_access_credential to return False for bproxy
+        with (
+            patch("app.api.dossier.get_credential_issuer", return_value=mock_issuer),
+            patch("app.api.dossier.can_access_credential", return_value=False),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _validate_dossier_edges(in_memory_db, principal, ap_org, edges)
+            assert exc_info.value.status_code == 403
+            assert bproxy_said in exc_info.value.detail
+
 
 # =============================================================================
 # Associated Dossiers Endpoint Tests
