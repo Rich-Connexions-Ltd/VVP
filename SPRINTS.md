@@ -53,6 +53,7 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 63 | Dossier Creation Wizard UI | DONE | Sprint 41, 32, 60b |
 | 64 | Repository Migration to Rich-Connexions-Ltd | COMPLETE | - |
 | 65 | Schema-Aware Credential Management | TODO | Sprint 63, 34 |
+| 66 | Multichannel Vetter Constraints (E2E) | TODO | Sprint 62, 44 |
 
 ---
 
@@ -4298,3 +4299,241 @@ Add a view showing organizational readiness for dossier assembly:
 - All new API endpoints have tests
 - All existing tests continue to pass (no regressions)
 - Existing generic edge management (manual "+ Add Edge") still works for non-schema-defined edges
+
+---
+
+## Sprint 66: Multichannel Vetter Constraints — End-to-End (TODO)
+
+**Goal:** Complete the end-to-end multichannel vetter constraint enforcement chain — from GSMA as a new root of trust issuing Vetter Certification credentials, through verifier detection of mis-vetted TNs, to SIP header propagation and WebRTC client display of constraint violations. This sprint wires together the infrastructure built in Sprints 40, 61, and 62 into a user-visible, end-to-end flow.
+
+**Spec Reference:** `Documentation/Specs/How To Constrain Multichannel Vetters.pdf`
+
+### Specification Summary
+
+The "How To Constrain Multichannel Vetters" spec defines a constraint model where:
+
+1. **Vetters** receive a **Vetter Certification** credential from a governance body (GSMA) with two constraint fields:
+   - **ECC Targets**: E.164 country codes for which the vetter may attest TN right-to-use
+   - **Jurisdiction Targets**: ISO 3166-1 alpha-3 codes for which the vetter may attest incorporation and brand rights
+
+2. **Credentials** (Identity, Brand, TN) issued by a vetter contain a **backlink edge** (`certification`) pointing to the vetter's certification credential.
+
+3. **Verifiers** follow the backlink to discover the vetter's authority scope and validate:
+   - **TN/ECC check**: Does the TN's E.164 country code appear in the vetter's `ecc_targets`?
+   - **Identity/Jurisdiction check**: Does the incorporation country appear in `jurisdiction_targets`?
+   - **Brand/Jurisdiction check**: Does the brand assertion country appear in `jurisdiction_targets`?
+
+4. **Status reporting**: Failed constraint checks produce status bits indicating "does not apply to this call". Downstream clients (SIP services, phone UIs) decide how to interpret these (block, warn, suppress brand, etc.).
+
+### What Already Exists
+
+| Component | Sprint | Status | Location |
+|-----------|--------|--------|----------|
+| VetterCertification schema | 40 | COMPLETE | `services/issuer/app/schema/schemas/vetter-certification-credential.json` |
+| Extended LE/Brand/TNAlloc schemas (with `certification` edge) | 40 | COMPLETE | `services/issuer/app/schema/schemas/extended-*.json` |
+| Verifier constraint validation | 40 | COMPLETE | `services/verifier/app/vvp/vetter/` |
+| Country code utilities (E.164 ↔ ISO 3166-1) | 40 | COMPLETE | `services/verifier/app/vvp/vetter/country_codes.py` |
+| `VetterConstraintInfo` in `VerifyResponse` | 40 | COMPLETE | `services/verifier/app/vvp/api_models.py` |
+| VetterCert CRUD API, org-cert association | 61 | TODO | `services/issuer/app/api/vetter_certification.py` |
+| Issuance/dossier/signing-time enforcement | 62 | TODO | `services/issuer/app/vetter/constraints.py` |
+| SIP verify service → X-VVP headers | 44 | COMPLETE | `services/sip-verify/app/verify/handler.py` |
+| SIP response model (X-VVP-Status, Brand-Name, Brand-Logo, Error) | 44 | COMPLETE | `common/common/vvp/sip/models.py` |
+| WebRTC client (SIP.js + vvp-display.js) | 43 | COMPLETE | `services/pbx/webrtc/vvp-phone/` |
+| Trusted root AIDs config | — | COMPLETE | `services/verifier/app/core/config.py` (`TRUSTED_ROOT_AIDS`) |
+
+### What This Sprint Adds
+
+| Gap | Description |
+|-----|-------------|
+| **GSMA root of trust** | No GSMA AID exists; no trust chain from GSMA → VetterCertification. The verifier's `TRUSTED_ROOT_AIDS` only contains GLEIF/QVI roots. |
+| **GSMA → VetterCert issuance chain** | Sprint 61 creates VetterCert credentials but doesn't establish WHO issues them. GSMA must be the issuer, with the VetterCert backlinked to a GSMA-issued governance credential. |
+| **X-VVP-Vetter-Status SIP header** | The verifier returns `vetter_constraints` in JSON but this is never propagated to SIP headers. The SIP verify service only maps brand/status/error today. |
+| **WebRTC display of vetter violations** | `vvp-display.js` shows brand name, logo, and overall status badge. There's no UI for vetter constraint warnings ("mis-vetted TN", "unauthorized jurisdiction"). |
+
+### Deliverables
+
+#### Phase 1: GSMA Root of Trust
+
+- [ ] **Create GSMA KERI identity** — Using the issuer's identity management, create a new AID representing GSMA as a governance body. This is a long-lived AID with a descriptive alias (`gsma-governance`). The AID will be the issuer of all Vetter Certification credentials.
+  - Bootstrap: `scripts/bootstrap-issuer.py` creates the GSMA AID alongside the existing test org
+  - Persistence: stored in the issuer's Habery like other identities
+  - OOBI published to all witnesses
+
+- [ ] **GSMA organization in issuer DB** — Create a dedicated Organization record for GSMA:
+  - `name: "GSMA"`, `pseudo_lei: "GSMA-GOVERNANCE"`, `aid: <gsma_aid>`
+  - This org is the issuer of VetterCertification credentials, not a regular vetter org
+
+- [ ] **Add GSMA AID to verifier trusted roots** — Update verifier configuration:
+  - Add the GSMA AID to `VVP_TRUSTED_ROOT_AIDS` environment variable (comma-separated, alongside existing GLEIF roots)
+  - The verifier's chain walker already checks `TRUSTED_ROOT_AIDS` — adding GSMA means VetterCertification credentials signed by GSMA will be trusted
+  - Update `services/verifier/app/core/config.py` default to include the GSMA AID for local dev
+  - Update Azure deployment env vars via CI/CD
+
+- [ ] **GSMA governance credential schema** — Define a lightweight ACDC schema for the governance credential that GSMA issues to identify itself. The VetterCertification credential's `e.issuer` edge will point to this credential, establishing the trust chain: `GSMA Governance Cred → VetterCertification → Extended TN/LE/Brand`.
+  - Schema attributes: `name` ("GSMA"), `role` ("Vetter Governance Authority"), `dt` (issuance datetime)
+  - Register schema SAID in `common/common/vvp/schema/registry.py`
+  - Add schema JSON to `services/issuer/app/schema/schemas/`
+
+- [ ] **Issue GSMA governance credential** — Bootstrap issues a self-referencing governance credential from the GSMA AID, published to witnesses. This credential is the trust anchor that VetterCertifications chain to.
+
+#### Phase 2: GSMA-Issued Vetter Certifications
+
+- [ ] **Update VetterCert issuance to use GSMA identity** — When Sprint 61's `POST /api/vetter-certifications` issues a VetterCertification credential, it MUST be signed by the GSMA AID (not the vetter's own AID). The vetter is the *issuee* (`a.i`), GSMA is the *issuer* (`i`).
+  - Modify Sprint 61's VetterCertification service to accept an `issuer_alias` parameter (default: `gsma-governance`)
+  - The issuer service resolves the GSMA Habery and uses it to sign the credential
+
+- [ ] **VetterCert → GSMA governance backlink** — Add an `issuer` edge to VetterCertification credentials pointing to the GSMA governance credential:
+  ```json
+  {
+    "e": {
+      "issuer": {
+        "n": "<GSMA_governance_credential_SAID>",
+        "s": "<gsma_governance_schema_SAID>"
+      }
+    }
+  }
+  ```
+  This completes the trust chain: GSMA → VetterCert → Extended credentials.
+
+- [ ] **Bootstrap: Issue test VetterCertifications from GSMA** — Update `scripts/bootstrap-issuer.py`:
+  - GSMA AID issues VetterCertification for the test vetter org with `ecc_targets: ["44", "1"]`, `jurisdiction_targets: ["GBR", "USA"]`
+  - The test vetter org then issues Extended TN/LE/Brand credentials with `certification` edge pointing to the VetterCert
+  - End result: a complete trust chain resolvable by the verifier
+
+#### Phase 3: Verifier X-Header for Vetter Constraint Status
+
+- [ ] **New `X-VVP-Vetter-Status` SIP header** — Extend the SIP verify service to propagate vetter constraint results as a SIP header. Values:
+  | Value | Meaning | When Set |
+  |-------|---------|----------|
+  | `PASS` | All vetter constraints satisfied | All ECC + jurisdiction checks pass |
+  | `FAIL-ECC` | TN country code outside vetter's ECC Targets | TN constraint fails |
+  | `FAIL-JURISDICTION` | Brand/identity jurisdiction outside vetter's Jurisdiction Targets | Jurisdiction constraint fails |
+  | `FAIL-ECC-JURISDICTION` | Both ECC and jurisdiction constraints fail | Both fail |
+  | `INDETERMINATE` | No vetter certification found (legacy credential without backlink) | Missing certification edge |
+
+- [ ] **Extend `SIPResponse` model** — Add `vetter_status` field to `common/common/vvp/sip/models.py`:
+  ```python
+  vetter_status: Optional[str] = None  # X-VVP-Vetter-Status
+  ```
+  Serialize in `to_sip_headers()`:
+  ```python
+  if self.vetter_status:
+      lines.append(f"X-VVP-Vetter-Status: {self.vetter_status}")
+  ```
+
+- [ ] **Map VerifyResponse vetter_constraints → vetter_status** — In `services/sip-verify/app/verify/handler.py`, after calling the verifier:
+  - If `response.vetter_constraints` is None or empty → `vetter_status = None` (no header)
+  - If all constraints have `is_authorized=True` → `vetter_status = "PASS"`
+  - If any ECC constraint fails → include `FAIL-ECC`
+  - If any jurisdiction constraint fails → include `FAIL-JURISDICTION`
+  - If both fail → `FAIL-ECC-JURISDICTION`
+  - If constraints present but no certification found → `INDETERMINATE`
+
+- [ ] **Extend `VerifyCalleeResult`** — Add `vetter_status: Optional[str]` to the SIP verify service's internal model so the mapping is available to the 302 redirect builder.
+
+#### Phase 4: WebRTC Client Display of Vetter Constraints
+
+- [ ] **Extract `X-VVP-Vetter-Status` in SIP.js client** — Update `extractVVPFromSIP()` in `sip-phone.html`:
+  ```javascript
+  function extractVVPFromSIP(session) {
+      // ... existing brand extraction ...
+      let vetterStatus = '';
+      const vetterStatusHeader = session.request.getHeader('X-VVP-Vetter-Status');
+      if (vetterStatusHeader) {
+          vetterStatus = vetterStatusHeader;
+      }
+      return { brand_name, brand_logo, status, vetter_status: vetterStatus };
+  }
+  ```
+
+- [ ] **Add vetter constraint display to `vvp-display.js`** — Extend the VVP display panel to show vetter status:
+  - Below the existing status badge, add a **vetter constraint badge**:
+    | Status | Label | CSS Class | Icon |
+    |--------|-------|-----------|------|
+    | `PASS` | "Vetter Verified" | `vvp-vetter-pass` | ✓ |
+    | `FAIL-ECC` | "Mis-vetted TN" | `vvp-vetter-fail` | ⚠ |
+    | `FAIL-JURISDICTION` | "Unauthorized Jurisdiction" | `vvp-vetter-fail` | ⚠ |
+    | `FAIL-ECC-JURISDICTION` | "Mis-vetted TN & Jurisdiction" | `vvp-vetter-fail` | ⚠ |
+    | `INDETERMINATE` | "Vetter Unknown" | `vvp-vetter-indeterminate` | ? |
+    | (absent) | (no badge shown) | — | — |
+
+  - The badge appears as a secondary row below the main verification status
+  - `FAIL-*` badges use a warning color (amber/orange) distinct from the red "Not Verified" badge — vetter constraint failures are informational warnings, not hard failures (per spec: "The client of the verification API gets to decide whether it considers these bits to be errors, warnings, etc.")
+  - Tooltip on hover explains what the status means (e.g., "The vetter who issued the TN credential is not certified for this country code")
+
+- [ ] **Vetter constraint detail panel** — When the vetter status badge is clicked, show an expandable detail section:
+  - Which constraint(s) failed (ECC, jurisdiction, or both)
+  - The target value that failed (e.g., "Country code: 44")
+  - The vetter's allowed values (e.g., "Allowed: 33, 91, 81, 66, 27, 971")
+  - This requires encoding summary data in additional X-VVP headers or fetching from the verifier API
+
+- [ ] **CSS styles for vetter badges** — Add styles to `sip-phone.html` or a linked stylesheet:
+  ```css
+  .vvp-vetter-pass { background: #e8f5e9; color: #2e7d32; }
+  .vvp-vetter-fail { background: #fff3e0; color: #e65100; }
+  .vvp-vetter-indeterminate { background: #e3f2fd; color: #1565c0; }
+  ```
+
+#### Phase 5: Integration & Tests
+
+- [ ] **Unit tests: GSMA identity creation** — Bootstrap creates GSMA AID, publishes OOBI, creates Organization record
+- [ ] **Unit tests: GSMA governance credential** — Schema validation, SAID computation, issuance from GSMA AID
+- [ ] **Unit tests: VetterCert signed by GSMA** — Credential has GSMA as issuer (`i`), vetter as issuee (`a.i`), `issuer` edge pointing to GSMA governance credential
+- [ ] **Unit tests: Verifier trusts GSMA root** — Chain walk from Extended TN → VetterCert → GSMA governance → trusted root succeeds
+- [ ] **Unit tests: X-VVP-Vetter-Status mapping** — All 5 status values correctly derived from `vetter_constraints`
+- [ ] **Unit tests: SIPResponse serialization** — `X-VVP-Vetter-Status` header appears in SIP output
+- [ ] **Integration test: Full chain** — GSMA issues VetterCert → vetter issues Extended TN with certification edge → verifier validates → SIP verify maps to X-VVP-Vetter-Status → WebRTC client displays badge
+- [ ] **Integration test: Mis-vetted TN detection** — Issue Extended TN for +44xxx, VetterCert has `ecc_targets: ["33", "91"]` (no "44") → verifier returns constraint failure → SIP header = `FAIL-ECC` → WebRTC shows "Mis-vetted TN"
+- [ ] **Integration test: Happy path** — VetterCert has `ecc_targets: ["44"]`, TN is +44xxx → all checks pass → SIP header = `PASS` → WebRTC shows "Vetter Verified"
+
+### Key Files to Create/Modify
+
+| File | Action | Purpose |
+|------|--------|---------|
+| `scripts/bootstrap-issuer.py` | Modify | Create GSMA AID, GSMA org, governance credential, VetterCert issuance from GSMA |
+| `services/issuer/app/schema/schemas/gsma-governance-credential.json` | Create | GSMA governance credential schema |
+| `common/common/vvp/schema/registry.py` | Modify | Register GSMA governance schema SAID |
+| `services/verifier/app/core/config.py` | Modify | Add GSMA AID to default `TRUSTED_ROOT_AIDS` |
+| `common/common/vvp/sip/models.py` | Modify | Add `vetter_status` field, `X-VVP-Vetter-Status` serialization |
+| `services/sip-verify/app/verify/handler.py` | Modify | Map `vetter_constraints` → `vetter_status` header |
+| `services/sip-verify/app/verify/client.py` | Modify | Add `vetter_status` to `VerifyResult` |
+| `services/sip-redirect/app/redirect/client.py` | Modify | Add `vetter_status` to `VerifyCalleeResult` |
+| `services/pbx/webrtc/vvp-phone/sip-phone.html` | Modify | Extract `X-VVP-Vetter-Status`, pass to display |
+| `services/pbx/webrtc/vvp-phone/js/vvp-display.js` | Modify | Vetter constraint badge, detail panel, CSS |
+| `services/issuer/tests/test_gsma_root.py` | Create | GSMA identity + governance credential tests |
+| `services/sip-verify/tests/test_vetter_header.py` | Create | X-VVP-Vetter-Status mapping tests |
+| `.github/workflows/deploy.yml` | Modify | Add GSMA AID to verifier env vars |
+
+### Technical Notes
+
+- **GSMA is a logical root, not a separate service**: The GSMA AID is managed by the existing issuer service — it's a second identity (alongside the vetter identity) stored in the same Habery. In production, GSMA would operate its own infrastructure, but for this implementation the issuer acts as both GSMA and vetter.
+
+- **Trust chain depth**: The full chain is: GSMA root AID (in `TRUSTED_ROOT_AIDS`) → GSMA Governance Credential → VetterCertification → Extended TN/LE/Brand → Dossier. The verifier's existing chain walker (`services/verifier/app/vvp/acdc/chain.py`) already handles arbitrary depth — it follows edges recursively until it hits a trusted root.
+
+- **X-VVP-Vetter-Status is informational**: Per the spec, "The client of the verification API gets to decide whether it considers these bits to be errors (don't route the call), warnings (route but suppress brand), etc." The header is a signal, not a hard block. The WebRTC client displays it as an amber warning, not a red error.
+
+- **Backward compatibility with legacy credentials**: Credentials issued under base schemas (without `certification` edges) produce `vetter_status = INDETERMINATE` (or no header). The WebRTC client handles this gracefully — the vetter badge is simply absent or shows "Vetter Unknown". No regression for existing flows.
+
+- **SIP header size considerations**: `X-VVP-Vetter-Status` is a single short string (max ~25 chars). For the detail panel, rather than encoding constraint details in additional SIP headers (which would bloat the INVITE), the WebRTC client can make an async fetch to the verifier API using the call ID to retrieve full `vetter_constraints` details.
+
+- **Header propagation through FreeSWITCH**: The PBX dialplan must be configured to pass `X-VVP-Vetter-Status` through from the SIP verify 302 redirect to the final INVITE. This follows the same pattern used for `X-VVP-Brand-Name` and `X-VVP-Brand-Logo` (Sprint 50). Update `services/pbx/config/public-sip.xml` if needed.
+
+### Dependencies
+
+- Sprint 62 (Multichannel Vetter Constraint Enforcement) — issuer-side enforcement infrastructure
+- Sprint 44 (SIP Redirect Verification Service) — SIP verify handler and X-VVP header framework
+
+### Exit Criteria
+
+- GSMA AID exists as a KERI identity managed by the issuer, with OOBI published to witnesses
+- GSMA AID is in the verifier's `TRUSTED_ROOT_AIDS` configuration
+- GSMA governance credential is issued and serves as the trust anchor for VetterCertifications
+- VetterCertification credentials are signed by GSMA and contain an `issuer` edge to the GSMA governance credential
+- The verifier resolves the full trust chain: Extended TN → VetterCert → GSMA governance → trusted root
+- `X-VVP-Vetter-Status` SIP header is present on verified calls, with values `PASS`, `FAIL-ECC`, `FAIL-JURISDICTION`, `FAIL-ECC-JURISDICTION`, or `INDETERMINATE`
+- WebRTC client displays a vetter constraint badge below the main verification status
+- Mis-vetted TN calls show an amber "Mis-vetted TN" warning in the WebRTC phone UI
+- Calls with valid vetter constraints show a green "Vetter Verified" badge
+- Legacy calls without vetter certification edges display gracefully (no badge or "Vetter Unknown")
+- All existing tests continue to pass (no regressions)
+- New tests cover GSMA root creation, VetterCert chain, SIP header mapping, and WebRTC display
