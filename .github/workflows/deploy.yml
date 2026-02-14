@@ -5,6 +5,11 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
     inputs:
+      force_all:
+        description: 'Deploy ALL services regardless of changed paths'
+        type: boolean
+        required: false
+        default: false
       lock_wait_seconds:
         description: 'Max seconds to poll for LMDB lock release (default: 120)'
         required: false
@@ -22,12 +27,12 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      witness: ${{ steps.filter.outputs.witness }}
-      issuer: ${{ steps.filter.outputs.issuer }}
-      verifier: ${{ steps.filter.outputs.verifier }}
-      sip-redirect: ${{ steps.filter.outputs.sip-redirect }}
-      sip-verify: ${{ steps.filter.outputs.sip-verify }}
-      pbx-config: ${{ steps.filter.outputs.pbx-config }}
+      witness: ${{ inputs.force_all == true && 'true' || steps.filter.outputs.witness }}
+      issuer: ${{ inputs.force_all == true && 'true' || steps.filter.outputs.issuer }}
+      verifier: ${{ inputs.force_all == true && 'true' || steps.filter.outputs.verifier }}
+      sip-redirect: ${{ inputs.force_all == true && 'true' || steps.filter.outputs.sip-redirect }}
+      sip-verify: ${{ inputs.force_all == true && 'true' || steps.filter.outputs.sip-verify }}
+      pbx-config: ${{ inputs.force_all == true && 'true' || steps.filter.outputs.pbx-config }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
