@@ -137,9 +137,12 @@ def init_database() -> None:
             db_dir.mkdir(parents=True, exist_ok=True)
             log.info(f"Ensured database directory exists: {db_dir}")
 
-    # Run explicit column migrations before create_all (Sprint 61)
-    from app.db.migrations.sprint61_vetter_cert import run_migrations
-    run_migrations(engine)
-
+    # Create tables first (idempotent — fresh DBs get all columns from models)
     Base.metadata.create_all(bind=engine)
     log.info("Database tables created successfully")
+
+    # Run column migrations for existing databases that predate these sprints
+    from app.db.migrations.sprint61_vetter_cert import run_migrations as run_sprint61
+    run_sprint61(engine)
+    from app.db.migrations.sprint62_gsma_governance import run_migrations as run_sprint62
+    run_sprint62(engine)
