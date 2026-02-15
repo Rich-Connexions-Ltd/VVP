@@ -207,6 +207,13 @@ Lightweight org name list for any authenticated user. Used by dossier wizard for
 | `POST` | `/credential/{said}/revoke` | Revoke credential |
 | `DELETE` | `/credential/{said}` | Delete credential |
 
+#### POST /credential/issue — Sprint 67 Validation
+
+In addition to schema validation and edge injection, `POST /credential/issue` enforces:
+- **Schema authorization** — org type must be authorized for the schema SAID (`is_schema_authorized()`). Returns 403 if unauthorized.
+- **Issuer binding** — org must have an AID and registry_key. Returns 400 if missing (fail-closed).
+- **Registry match** — the registry's issuer AID must match the org's AID.
+
 #### GET /credential Query Filters (Sprint 63)
 
 - `schema_said` (optional): Filter to credentials matching this schema SAID

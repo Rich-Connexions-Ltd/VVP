@@ -88,9 +88,13 @@ Configured in `app/config.py:get_auth_exempt_paths()`:
 - Always exempt: `/healthz`, `/version`, `/auth/*`, `/auth/oauth/*`
 - When `VVP_UI_AUTH_ENABLED=false` (default): all `/ui/*` pages, `/login`, `/profile`, legacy redirects, `/ui/walkthrough`
 
-## Multi-Tenancy (Sprint 41+)
+## Multi-Tenancy (Sprint 41+, Sprint 67)
 
 - Organizations are isolated tenants with AID and pseudo-LEI
+- **Org types** (Sprint 67): `root_authority` (GLEIF), `qvi`, `vetter_authority` (GSMA), `regular` (default). Enum: `OrgType` in `db/models.py`
+- **Trust anchor promotion**: On startup, `MockVLEIManager._promote_trust_anchors()` promotes mock GLEIF/QVI/GSMA to first-class Organization records with correct org_type
+- **Schema authorization** (Sprint 67): `app/auth/schema_auth.py` restricts which schemas each org type can issue. `POST /credential/issue` enforces this.
+- **Org context switching** (Sprint 67): `POST /session/switch-org` lets admins operate as another org. `Session.home_org_id` (immutable) vs `Session.active_org_id` (mutable). `Session.get()` clones the session with overridden principal.
 - API keys scoped to organizations via `OrgAPIKey` + `OrgAPIKeyRole`
 - Users belong to organizations via `UserOrgRole` join table
 - Credentials tracked per-org via `ManagedCredential`
@@ -187,6 +191,7 @@ Located in `web/` — HTML + HTMX + vanilla JS, served as `FileResponse`:
 | `/ui/benchmarks` | Performance benchmarks | `benchmarks.html` |
 | `/ui/help` | Help/documentation | `help.html` |
 | `/ui/walkthrough` | Interactive split-pane walkthrough | `walkthrough.html` |
+| `/ui/organization-detail` | Organization detail with tabs | `organization-detail.html` |
 | `/organizations/ui` | Organization management | `organizations.html` |
 | `/users/ui` | User management | `users.html` |
 | `/profile` | User profile | `profile.html` |

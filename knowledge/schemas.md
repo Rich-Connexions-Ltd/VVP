@@ -159,6 +159,28 @@ The signer AID appears as the `issuee` (`a.i`) of the delegation credential.
 
 ---
 
+## Schema Authorization by Organization Type (Sprint 67)
+
+The issuer enforces which schemas each organization type can issue. This mapping is hard-coded in `services/issuer/app/auth/schema_auth.py` because the trust chain structure is defined by the vLEI/VVP specification.
+
+| Org Type | Authorized Schemas | Schema SAIDs |
+|----------|-------------------|-------------|
+| `root_authority` (GLEIF) | QVI | `EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao` |
+| `qvi` (QVI) | LE, Extended LE | `ENPXp1vQzRF6JwIuS-mp2U8Uf1MoADoP_GqQ62VsDZWY`, `EPknTwPpSZi379molapnuN4V5AyhCxz_6TLYdiVNWvbV` |
+| `vetter_authority` (GSMA) | VetterCert, Governance | `EOefmhWU2qTpMiEQhXohE6z3xRXkpLloZdhTYIenlD4H`, `EIBowJmxx5hNWQlfXqGcbN0aP_RBuucMW6mle4tAN6TL` |
+| `regular` (standard org) | Extended Brand, TNAlloc, Extended TNAlloc, DE/GCD | `EK7kPhs5YkPsq9mZgUfPYfU-zq5iSlU8XVYJWqrVPk6g`, `EFvnoHDY7I-kaBBeKlbDbkjG4BaI0nKLGadxBdjMGgSQ`, `EGUh_fVLbjfkYFb5zAsY2Rqq0NqwnD3r5jsdKWLTpU8_`, `EL7irIKYJL9Io0hhKSGWI4OznhwC7qgJG5Qf4aEs6j0o` |
+
+**Enforcement points:**
+- `POST /credential/issue` — rejects unauthorized schemas with 403
+- `GET /schema/authorized` — returns only schemas the org type is allowed to issue
+- Credential UI — filters schema dropdown based on `GET /schema/authorized`
+
+**Helper functions** in `schema_auth.py`:
+- `is_schema_authorized(org_type, schema_said) -> bool`
+- `get_authorized_schemas(org_type) -> set[str]`
+
+---
+
 ## Schema Governance
 
 ### Official vs Demo SAIDs

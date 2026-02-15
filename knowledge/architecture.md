@@ -63,14 +63,14 @@ The system consists of three services plus shared infrastructure:
 | Directory | Purpose |
 |-----------|---------|
 | `app/main.py` | FastAPI app with all routers |
-| `app/api/` | API routers (health, identity, registry, credential, dossier, auth, organization, tn_mapping, schema, admin, vvp, vetter_certification) |
+| `app/api/` | API routers (health, identity, registry, credential, dossier, auth, organization, tn_mapping, schema, admin, vvp, vetter_certification, session) |
 | `app/vetter/` | Vetter certification business logic and constants (Sprint 61) |
 | `app/keri/` | KERI integration (identity management, witness interaction) |
 | `app/auth/` | Authentication (API keys, sessions, OAuth M365, RBAC) |
 | `app/db/` | Database models and session management |
 | `app/audit/` | Audit logging |
 | `app/config.py` | Configuration |
-| `web/` | Multi-page web UI (19 pages: identity, registry, schemas, credentials, dossier, vvp, dashboard, admin, vetter, tn-mappings, benchmarks, help, walkthrough, organizations, users, profile, login, 404) |
+| `web/` | Multi-page web UI (20 pages: identity, registry, schemas, credentials, dossier, vvp, dashboard, admin, vetter, tn-mappings, benchmarks, help, walkthrough, organizations, organization-detail, users, profile, login, 404) |
 | `config/witnesses.json` | Witness pool configuration |
 | `tests/` | Test suite |
 
@@ -191,6 +191,44 @@ The issuer bootstraps two parallel mock trust chains on startup:
 - Bootstrapped by `_bootstrap_gsma()` in `app/org/mock_vlei.py`
 - Config: `MOCK_GSMA_NAME` in `app/config.py`
 - VetterCerts issued via `mock_vlei.issue_vetter_certification()`
+
+**Trust Anchor Promotion** (Sprint 67): After bootstrapping, `_promote_trust_anchors()` promotes mock GLEIF, QVI, and GSMA to first-class `Organization` records with appropriate `org_type`:
+- GLEIF → `root_authority`, QVI → `qvi`, GSMA → `vetter_authority`
+- Three-strategy matching: persisted `MockVLEIState.*_org_id` → find existing org by AID → create new
+- Idempotent and safe on every startup; name collisions handled with disambiguators
+- State: `MockVLEIState.gleif_org_id`, `qvi_org_id`, `gsma_org_id`
+
+### Organization Type Hierarchy (Sprint 67)
+
+Organizations have an `org_type` (enum `OrgType`) that determines their role in the trust chain:
+
+```
+root_authority    GLEIF — issues QVI credentials
+     └── qvi              QVI — issues LE, Extended LE credentials
+vetter_authority  GSMA — issues VetterCert, Governance credentials
+     └── regular           Standard org — issues Brand, TNAlloc, DE/GCD credentials
+```
+
+### Schema Authorization (Sprint 67)
+
+Each org type is restricted to issuing specific credential schemas. Defined in `app/auth/schema_auth.py`:
+
+| Org Type | Authorized Schemas |
+|----------|-------------------|
+| `root_authority` | QVI |
+| `qvi` | LE, Extended LE |
+| `vetter_authority` | VetterCertification, GSMA Governance |
+| `regular` | Extended Brand, TNAlloc, Extended TNAlloc, DE/GCD |
+
+Enforcement: `POST /credential/issue` checks `is_schema_authorized(org.org_type, schema_said)` and rejects unauthorized schemas (403). The credential UI filters schemas via `GET /schema/authorized`.
+
+### Admin Org Context Switching (Sprint 67)
+
+System admins can switch their session's "active org" to operate on behalf of another organization:
+- `POST /session/switch-org` — sets `Session.active_org_id`
+- `Session.get()` returns a cloned session with overridden `principal.organization_id`
+- `Session.home_org_id` (immutable) preserves the admin's actual org
+- Passing `organization_id=null` reverts to home org
 
 **Vetter Module** (`app/vetter/`):
 - `service.py`: `resolve_active_vetter_cert()` performs 7-point validation (existence, schema match, not revoked, issuer is GSMA, issuee matches org AID, not expired). Also contains `issue_vetter_certification()`, `revoke_vetter_certification()`, `get_org_constraints()`.

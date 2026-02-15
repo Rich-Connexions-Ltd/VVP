@@ -300,14 +300,20 @@
         title: "Organizations",
         content: `
           <p>The <strong>Organizations</strong> page manages the multi-tenant structure. Each organization is a separate tenant with its own credentials, users, and API keys.</p>
-          <p>An organization is the root entity for all VVP operations. Before you can issue credentials, you need at least one organization with a KERI identity (AID).</p>
-          <div class="tip"><strong>Tip:</strong> In a fresh deployment, a bootstrap script creates an initial organization. In production, organizations are managed by administrators.</div>
+          <p>Organizations have a <strong>type</strong> that determines their role in the trust chain:</p>
+          <ul>
+            <li><strong>Root Authority</strong> (GLEIF) &mdash; Issues QVI credentials</li>
+            <li><strong>QVI</strong> &mdash; Issues Legal Entity credentials</li>
+            <li><strong>Vetter Authority</strong> (GSMA) &mdash; Issues VetterCertification credentials</li>
+            <li><strong>Regular</strong> &mdash; Issues Brand, TN Allocation, and delegation credentials</li>
+          </ul>
+          <div class="tip"><strong>Tip:</strong> On startup, the mock trust infrastructure promotes GLEIF, QVI, and GSMA to first-class organizations. Click on any organization to see its detail page with credentials, API keys, and users.</div>
           <p>Key actions on this page:</p>
           <ul>
-            <li>View all organizations and their status</li>
+            <li>View all organizations with their type badges</li>
             <li>Create a new organization</li>
-            <li>Manage organization API keys for programmatic access</li>
-            <li>Assign users to organizations with specific roles</li>
+            <li>Click an organization to see its detail page</li>
+            <li>Admins can <strong>switch org context</strong> to operate on behalf of another organization</li>
           </ul>
         `,
         uiPath: "/organizations/ui"
@@ -340,6 +346,7 @@
             <li><strong>GCD</strong> &mdash; General Cooperative Delegation (used for alloc and delsig edges)</li>
             <li><strong>Dossier</strong> &mdash; The root credential that bundles everything</li>
           </ul>
+          <div class="note"><strong>Note:</strong> Each organization type can only issue specific schemas. For example, a Regular org can issue Brand and TNAlloc credentials but not QVI or LE credentials. The credential issuance page filters schemas automatically based on your organization type.</div>
           <div class="tip"><strong>Tip:</strong> Each schema has a unique SAID (Self-Addressing Identifier) derived from its content hash. Click on a schema to see its full edge structure and attribute definitions.</div>
         `,
         uiPath: "/ui/schemas"
@@ -347,15 +354,17 @@
       {
         title: "Credential Issuance",
         content: `
-          <p>The <strong>Credentials</strong> page is where you issue ACDC credentials. The form is schema-driven &mdash; when you select a schema, the UI dynamically renders input fields based on the schema's attribute definitions.</p>
-          <p>Typical credential issuance order:</p>
+          <p>The <strong>Credentials</strong> page is where you issue ACDC credentials. The schema dropdown is filtered to show only schemas your organization type is authorized to issue.</p>
+          <p>Typical credential issuance order (across the trust chain):</p>
           <ul>
-            <li><strong>1.</strong> Issue a Legal Entity (LE) credential to identify the organization</li>
-            <li><strong>2.</strong> Issue a Brand credential with display name and logo URL</li>
-            <li><strong>3.</strong> Issue TN Allocation credential(s) covering the organization's phone numbers</li>
-            <li><strong>4.</strong> Issue a GCD credential for delegation (delsig edge)</li>
+            <li><strong>1.</strong> Root Authority issues a QVI credential</li>
+            <li><strong>2.</strong> QVI issues a Legal Entity (LE) credential to identify the organization</li>
+            <li><strong>3.</strong> Regular org issues a Brand credential with display name and logo URL</li>
+            <li><strong>4.</strong> Regular org issues TN Allocation credential(s) covering its phone numbers</li>
+            <li><strong>5.</strong> Regular org issues a GCD credential for delegation (delsig edge)</li>
           </ul>
           <div class="note"><strong>Note:</strong> Credentials are linked via edges. When issuing a Brand credential, you'll select the LE credential as an edge dependency. The UI shows available edges based on the schema definition.</div>
+          <div class="tip"><strong>Tip:</strong> Admins can switch org context to issue credentials on behalf of different organizations. The schema filter updates automatically when you switch.</div>
         `,
         uiPath: "/ui/credentials"
       },

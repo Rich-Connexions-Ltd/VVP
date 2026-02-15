@@ -13,7 +13,11 @@
 | GET | `/registry/ui` |
 | GET | `/schemas/ui` |
 
-**PASS**: No extra documented endpoints.
+**INFO**: 1 documented endpoints not found in code (may use dynamic routes):
+
+| Method | Path |
+|--------|------|
+| GET | `/schemas/authorized` |
 
 ## 6b. Model Coverage
 
