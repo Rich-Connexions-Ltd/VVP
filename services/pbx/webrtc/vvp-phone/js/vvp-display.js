@@ -8,6 +8,7 @@
  * - vvp_brand_name: Verified caller brand name
  * - vvp_brand_logo: URL to brand logo
  * - vvp_status: VALID | INVALID | INDETERMINATE | UNKNOWN
+ * - vvp_vetter_status: PASS | FAIL-ECC | FAIL-JURISDICTION | FAIL-ECC-JURISDICTION (Sprint 62)
  */
 
 const VVPDisplay = {
@@ -32,6 +33,30 @@ const VVPDisplay = {
             label: 'Unknown',
             className: 'vvp-status-unknown',
             icon: '—'
+        }
+    },
+
+    // Sprint 62: Vetter constraint status badge configuration
+    vetterStatusConfig: {
+        'PASS': {
+            label: 'Vetter: Authorized',
+            className: 'vvp-vetter-pass',
+            icon: '✓'
+        },
+        'FAIL-ECC': {
+            label: 'Vetter: ECC Violation',
+            className: 'vvp-vetter-fail',
+            icon: '!'
+        },
+        'FAIL-JURISDICTION': {
+            label: 'Vetter: Jurisdiction Violation',
+            className: 'vvp-vetter-fail',
+            icon: '!'
+        },
+        'FAIL-ECC-JURISDICTION': {
+            label: 'Vetter: ECC + Jurisdiction Violation',
+            className: 'vvp-vetter-fail',
+            icon: '!'
         }
     },
 
@@ -66,10 +91,18 @@ const VVPDisplay = {
             'UNKNOWN'
         ).toUpperCase();
 
+        // Sprint 62: Vetter constraint status
+        const vetterStatus = (
+            params.vvp_vetter_status ||
+            params['vvp_vetter_status'] ||
+            ''
+        ).toUpperCase() || null;
+
         return {
             brand_name: brandName,
             brand_logo: brandLogo || this.placeholderLogo,
             status: this.statusConfig[status] ? status : 'UNKNOWN',
+            vetter_status: vetterStatus,
             raw_params: params
         };
     },
@@ -97,6 +130,21 @@ const VVPDisplay = {
         const config = this.statusConfig[status] || this.statusConfig['UNKNOWN'];
         const badge = document.createElement('span');
         badge.className = `vvp-status-badge ${config.className}`;
+        badge.innerHTML = `<span class="vvp-status-icon">${config.icon}</span> ${config.label}`;
+        return badge;
+    },
+
+    /**
+     * Create vetter status badge element (Sprint 62)
+     * @param {string|null} vetterStatus - Vetter constraint status
+     * @returns {HTMLElement|null} Badge element or null if no status
+     */
+    createVetterBadge(vetterStatus) {
+        if (!vetterStatus) return null;
+        const config = this.vetterStatusConfig[vetterStatus];
+        if (!config) return null;
+        const badge = document.createElement('span');
+        badge.className = `vvp-vetter-badge ${config.className}`;
         badge.innerHTML = `<span class="vvp-status-icon">${config.icon}</span> ${config.label}`;
         return badge;
     },
@@ -148,6 +196,12 @@ const VVPDisplay = {
         // Status badge
         const badge = this.createStatusBadge(vvpData.status);
         panel.appendChild(badge);
+
+        // Sprint 62: Vetter constraint badge (shown below main status)
+        const vetterBadge = this.createVetterBadge(vvpData.vetter_status);
+        if (vetterBadge) {
+            panel.appendChild(vetterBadge);
+        }
 
         return panel;
     },

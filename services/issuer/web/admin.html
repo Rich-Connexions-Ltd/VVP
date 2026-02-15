@@ -605,6 +605,27 @@
       </div>
     </details>
 
+    <!-- Sprint 62: Vetter Constraint Enforcement -->
+    <details class="config-section" open>
+      <summary>
+        <span class="section-title">Vetter Constraint Enforcement</span>
+        <span class="badge" id="vetter-badge">Loading...</span>
+      </summary>
+      <div style="padding: 1rem;">
+        <p style="margin-bottom: 1rem; color: var(--vvp-muted); font-size: 0.9em;">
+          Controls whether vetter constraint violations block credential issuance and signing on the <strong>issuer side</strong>.
+          The <strong>verifier always evaluates</strong> constraints regardless of this setting.
+          Turn OFF to create test credential chains with deliberate constraint violations.
+        </p>
+        <div style="display: flex; align-items: center; gap: 1rem;">
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+            <input type="checkbox" id="vetter-enforcement-toggle" onchange="toggleVetterEnforcement(this.checked)" style="width: 18px; height: 18px;">
+            <span id="vetter-enforcement-label">Loading...</span>
+          </label>
+        </div>
+      </div>
+    </details>
+
     <!-- User Management -->
     <details class="config-section" open>
       <summary>
@@ -1030,6 +1051,56 @@
       }
     }
 
+    // Sprint 62: Vetter constraint enforcement toggle
+    async function loadVetterEnforcement() {
+      try {
+        const resp = await authFetch('/admin/settings/vetter-enforcement');
+        if (!resp.ok) {
+          if (resp.status === 401) {
+            document.getElementById('vetter-badge').textContent = 'Auth Required';
+            document.getElementById('vetter-badge').className = 'badge badge-warning';
+            return;
+          }
+          throw new Error('Failed to fetch vetter enforcement');
+        }
+        const data = await resp.json();
+        const toggle = document.getElementById('vetter-enforcement-toggle');
+        const label = document.getElementById('vetter-enforcement-label');
+        const badge = document.getElementById('vetter-badge');
+
+        toggle.checked = data.enforce_vetter_constraints;
+        if (data.enforce_vetter_constraints) {
+          label.textContent = 'Enforcement ON — constraint violations will block issuance/signing';
+          badge.textContent = 'Enforcing';
+          badge.className = 'badge badge-success';
+        } else {
+          label.textContent = 'Enforcement OFF — constraint violations logged as warnings only';
+          badge.textContent = 'Soft (warnings)';
+          badge.className = 'badge badge-warning';
+        }
+      } catch (err) {
+        console.error('Failed to load vetter enforcement:', err);
+        document.getElementById('vetter-badge').textContent = 'Error';
+        document.getElementById('vetter-badge').className = 'badge badge-danger';
+      }
+    }
+
+    async function toggleVetterEnforcement(enabled) {
+      try {
+        const resp = await authFetch(`/admin/settings/vetter-enforcement?enabled=${enabled}`, {
+          method: 'PUT',
+          headers: { 'X-Requested-With': 'XMLHttpRequest' }
+        });
+        if (!resp.ok) throw new Error('Failed to update enforcement');
+        const data = await resp.json();
+        showToast(data.message, 'success');
+        loadVetterEnforcement();
+      } catch (err) {
+        showToast('Failed to toggle vetter enforcement: ' + err.message, 'error');
+        loadVetterEnforcement(); // Reset toggle to actual state
+      }
+    }
+
     async function reloadWitnesses() {
       try {
         const resp = await authFetch('/admin/witnesses/reload', {
@@ -1320,6 +1391,7 @@
     document.addEventListener('DOMContentLoaded', () => {
       loadAdminData();
       loadDeploymentTests();
+      loadVetterEnforcement();
       loadUsers();
       loadAuditLogs();
     });

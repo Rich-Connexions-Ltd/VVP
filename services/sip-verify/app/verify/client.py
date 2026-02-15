@@ -41,6 +41,7 @@ class VerifyResult:
     error_code: Optional[str] = None
     error_message: Optional[str] = None
     request_id: Optional[str] = None
+    vetter_status: Optional[str] = None  # Sprint 62: PASS/FAIL-ECC/FAIL-JURISDICTION/...
 
 
 @dataclass
@@ -276,6 +277,40 @@ class VerifierClient:
                 error_message=str(e),
             )
 
+    @staticmethod
+    def _derive_vetter_status(constraints: Optional[list]) -> Optional[str]:
+        """Derive a single X-VVP-Vetter-Status from vetter_constraints array.
+
+        Deterministic precedence:
+        - If any constraint has is_authorized=False for ECC+jurisdiction → FAIL-ECC-JURISDICTION
+        - If any ECC failure → FAIL-ECC
+        - If any jurisdiction failure → FAIL-JURISDICTION
+        - If all constraints authorized → PASS
+        - If no constraints present → None (omit header)
+        """
+        if not constraints:
+            return None
+
+        has_ecc_fail = False
+        has_jurisdiction_fail = False
+
+        for c in constraints:
+            if c.get("is_authorized"):
+                continue
+            check = c.get("check_type", "")
+            if "ecc" in check.lower():
+                has_ecc_fail = True
+            if "jurisdiction" in check.lower():
+                has_jurisdiction_fail = True
+
+        if has_ecc_fail and has_jurisdiction_fail:
+            return "FAIL-ECC-JURISDICTION"
+        if has_ecc_fail:
+            return "FAIL-ECC"
+        if has_jurisdiction_fail:
+            return "FAIL-JURISDICTION"
+        return "PASS"
+
     def _parse_response(self, data: dict) -> VerifyResult:
         """Parse Verifier API response.
 
@@ -312,6 +347,9 @@ class VerifierClient:
                             caller_id = ev.split(":", 1)[1]
                             break
 
+        # Sprint 62: Map vetter_constraints array → single status string
+        vetter_status = self._derive_vetter_status(data.get("vetter_constraints"))
+
         return VerifyResult(
             status=status,
             brand_name=brand_name,
@@ -320,6 +358,7 @@ class VerifierClient:
             error_code=error_code,
             error_message=error_message,
             request_id=request_id,
+            vetter_status=vetter_status,
         )
 
 

@@ -60,6 +60,7 @@ def build_302_redirect(
     brand_logo_url: Optional[str] = None,
     caller_id: Optional[str] = None,
     error_code: Optional[str] = None,
+    vetter_status: Optional[str] = None,
 ) -> SIPResponse:
     """Build 302 Moved Temporarily response with VVP headers.
 
@@ -74,6 +75,7 @@ def build_302_redirect(
     - X-VVP-Brand-Logo: Logo URL (optional)
     - X-VVP-Caller-ID: Caller's phone number (optional)
     - X-VVP-Status: VALID | INVALID | INDETERMINATE
+    - X-VVP-Vetter-Status: PASS | FAIL-ECC | FAIL-JURISDICTION | ... (Sprint 62)
     - X-VVP-Error: Error code if INVALID (optional)
 
     Args:
@@ -87,6 +89,7 @@ def build_302_redirect(
         brand_logo_url: Logo URL for display
         caller_id: Caller's phone number
         error_code: Error code if INVALID
+        vetter_status: Vetter constraint status (Sprint 62)
 
     Returns:
         SIPResponse ready to send
@@ -103,6 +106,7 @@ def build_302_redirect(
         brand_logo_url=brand_logo_url,
         caller_id=caller_id,
         error_code=error_code,
+        vetter_status=vetter_status,
     )
     _copy_transaction_headers(request, response)
     return response

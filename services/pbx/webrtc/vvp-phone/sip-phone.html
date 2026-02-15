@@ -430,6 +430,7 @@
             let brandName = 'Unknown Caller';
             let brandLogo = '';
             let status = 'UNKNOWN';
+            let vetterStatus = null;
 
             try {
                 const request = session.request;
@@ -447,6 +448,8 @@
                             brandLogo = decodeURIComponent(String(value));
                         } else if (lowerName === 'x-vvp-status') {
                             status = String(value).toUpperCase();
+                        } else if (lowerName === 'x-vvp-vetter-status') {
+                            vetterStatus = String(value).toUpperCase();
                         }
                     }
                 }
@@ -462,7 +465,8 @@
             return {
                 brand_name: brandName,
                 brand_logo: brandLogo || VVPDisplay.placeholderLogo,
-                status: VVPDisplay.statusConfig[status] ? status : 'UNKNOWN'
+                status: VVPDisplay.statusConfig[status] ? status : 'UNKNOWN',
+                vetter_status: vetterStatus
             };
         }
 

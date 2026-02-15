@@ -527,6 +527,8 @@ def main():
             "gleif_aid": vlei_state["gleif_aid"] if vlei_state else None,
             "qvi_aid": vlei_state["qvi_aid"] if vlei_state else None,
             "qvi_credential_said": vlei_state["qvi_credential_said"] if vlei_state else None,
+            "gsma_aid": vlei_state.get("gsma_aid") if vlei_state else None,
+            "gsma_governance_said": vlei_state.get("gsma_governance_said") if vlei_state else None,
         },
         "organization": {
             "id": org_id,
@@ -569,6 +571,14 @@ def main():
         print(f"  Org API Key:      {org_api_key}")
         print(f"  Test TN:          {args.tn}")
         print(f"  Dossier Verified: {'YES' if dossier_info else 'NO'}")
+        # Sprint 62: Print GSMA AID for verifier trusted roots configuration
+        gsma_aid = vlei_state.get("gsma_aid") if vlei_state else None
+        if gsma_aid:
+            print(f"\n  GSMA AID:         {gsma_aid}")
+            print(f"  GSMA Governance:  {vlei_state.get('gsma_governance_said', 'N/A')}")
+            print()
+            print("  Verifier Trusted Roots (add GSMA AID to VVP_TRUSTED_ROOT_AIDS):")
+            print(f"    VVP_TRUSTED_ROOT_AIDS=EDP1vHcw_wc4M__Fj53-cJaBnZZASd-aMTaSyWEQ-PC2,{gsma_aid}")
         print()
         print("  SIP Redirect Config (for sip-redirect service):")
         print(f"    API_KEY={org_api_key}")

@@ -116,6 +116,8 @@ async def _capture_event(
             response_vvp_headers["X-VVP-Caller-ID"] = response.caller_id
         if response.error_code:
             response_vvp_headers["X-VVP-Error"] = response.error_code
+        if response.vetter_status:
+            response_vvp_headers["X-VVP-Vetter-Status"] = response.vetter_status
 
     event_data = {
         "service": "VERIFICATION",
@@ -327,6 +329,7 @@ async def handle_verify_invite(request: SIPRequest) -> Optional[SIPResponse]:
         brand_logo_url=result.brand_logo_url,
         caller_id=result.caller_id,
         error_code=result.error_code if result.status == "INVALID" else None,
+        vetter_status=result.vetter_status,  # Sprint 62
     )
 
     log.info(

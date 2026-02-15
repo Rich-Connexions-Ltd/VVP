@@ -718,6 +718,17 @@ function renderResponseTab(event) {
         `;
     }
 
+    // Sprint 62: Vetter constraint status sub-banner
+    const vetterStatus = responseVvpHeaders['X-VVP-Vetter-Status'] || '';
+    if (vetterStatus) {
+        const vetterClass = vetterStatus === 'PASS' ? 'status-valid' : 'status-invalid';
+        html += `
+            <div class="vvp-status-banner ${vetterClass}" style="font-size: 0.85em; margin-top: 0.25rem;">
+                Vetter: <strong>${escapeHtml(vetterStatus)}</strong>
+            </div>
+        `;
+    }
+
     // Response VVP headers table
     const entries = Object.entries(responseVvpHeaders);
     if (entries.length > 0) {

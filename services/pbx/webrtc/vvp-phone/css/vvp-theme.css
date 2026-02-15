@@ -143,6 +143,30 @@
     border: 1px solid var(--vvp-muted);
 }
 
+/* Sprint 62: Vetter Constraint Badge */
+.vvp-vetter-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--vvp-spacing-xs);
+    padding: 0.25rem 0.75rem;
+    border-radius: var(--vvp-radius-sm);
+    font-size: 0.75rem;
+    font-weight: 500;
+    margin-top: var(--vvp-spacing-sm);
+}
+
+.vvp-vetter-pass {
+    background: #e8f5e9;
+    color: #2e7d32;
+    border: 1px solid #a5d6a7;
+}
+
+.vvp-vetter-fail {
+    background: #fff3e0;
+    color: #e65100;
+    border: 1px solid #ffcc80;
+}
+
 /* Animations */
 @keyframes vvp-fade-in {
     from {

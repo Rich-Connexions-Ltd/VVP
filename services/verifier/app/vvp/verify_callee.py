@@ -1063,6 +1063,147 @@ async def verify_callee_vvp(
             )
 
     # -------------------------------------------------------------------------
+    # Phase 11: Vetter Constraint Evaluation (Sprint 62)
+    # -------------------------------------------------------------------------
+    # Port of verify.py Phase 11 — validates VetterCert geographic constraints.
+    # Results are informational status bits, not hard blocks.
+    from .vetter import verify_vetter_constraints, get_overall_constraint_status
+    from .api_models import VetterConstraintInfo
+    from app.core.config import ENFORCE_VETTER_CONSTRAINTS
+
+    vetter_constraints_claim = ClaimBuilder("vetter_constraints_valid")
+    vetter_constraint_results: Dict[str, VetterConstraintInfo] = {}
+
+    if dag is not None and passport is not None:
+        # Extract orig.tn and dest.tn from passport
+        orig_tn_for_vetter = None
+        dest_tn_for_vetter = None
+
+        if passport.payload.orig and isinstance(passport.payload.orig, dict):
+            tn_array = passport.payload.orig.get("tn")
+            if isinstance(tn_array, list) and len(tn_array) == 1:
+                orig_tn_for_vetter = tn_array[0]
+
+        if passport.payload.dest and isinstance(passport.payload.dest, dict):
+            dest_tn_array = passport.payload.dest.get("tn")
+            if isinstance(dest_tn_array, list) and len(dest_tn_array) >= 1:
+                dest_tn_for_vetter = dest_tn_array[0]
+
+        if orig_tn_for_vetter:
+            # Classify credentials by type for vetter constraint validation
+            tn_credentials = []
+            identity_credentials = []
+            brand_credentials = []
+
+            for said, acdc in dossier_acdcs.items():
+                raw = getattr(acdc, "raw", {}) or {}
+                attrs = raw.get("a", {})
+                if not isinstance(attrs, dict):
+                    continue
+                attrs_lower = {k.lower(): v for k, v in attrs.items()}
+
+                if "numbers" in attrs_lower or "tn" in attrs_lower:
+                    tn_credentials.append(raw)
+                elif (
+                    "assertioncountry" in attrs_lower
+                    or "brandname" in attrs_lower
+                    or "branddisplayname" in attrs_lower
+                    or "card" in attrs_lower
+                    or "logo" in attrs_lower
+                    or "logourl" in attrs_lower
+                ):
+                    brand_credentials.append(raw)
+                elif (
+                    "lei" in attrs_lower
+                    or "country" in attrs_lower
+                    or "jurisdiction" in attrs_lower
+                    or "incorporation_country" in attrs_lower
+                    or "incorporationcountry" in attrs_lower
+                    or "legalname" in attrs_lower
+                ):
+                    identity_credentials.append(raw)
+
+            dossier_raw_acdcs = {said: acdc.raw for said, acdc in dossier_acdcs.items()}
+
+            try:
+                constraint_results = verify_vetter_constraints(
+                    dossier_acdcs=dossier_raw_acdcs,
+                    orig_tn=orig_tn_for_vetter,
+                    dest_tn=dest_tn_for_vetter,
+                    tn_credentials=tn_credentials,
+                    identity_credentials=identity_credentials,
+                    brand_credentials=brand_credentials,
+                )
+
+                for cred_said, result in constraint_results.items():
+                    vetter_constraint_results[cred_said] = VetterConstraintInfo(
+                        credential_said=result.credential_said,
+                        credential_type=result.credential_type.value,
+                        vetter_certification_said=result.vetter_certification_said,
+                        constraint_type=result.constraint_type.value,
+                        target_value=result.target_value,
+                        allowed_values=result.allowed_values,
+                        is_authorized=result.is_authorized,
+                        reason=result.reason,
+                    )
+
+                    if result.is_authorized:
+                        vetter_constraints_claim.add_evidence(
+                            f"authorized:{cred_said[:12]}...|{result.constraint_type.value}:{result.target_value}"
+                        )
+                    else:
+                        vetter_constraints_claim.add_evidence(
+                            f"unauthorized:{cred_said[:12]}...|{result.constraint_type.value}:{result.target_value}"
+                        )
+
+                vetter_status = get_overall_constraint_status(constraint_results)
+                if vetter_status == ClaimStatus.INVALID:
+                    vetter_constraints_claim.fail(
+                        ClaimStatus.INVALID,
+                        "Vetter constraint violation: credential issuer not authorized for region"
+                    )
+                    if ENFORCE_VETTER_CONSTRAINTS:
+                        for result in constraint_results.values():
+                            if not result.is_authorized:
+                                error_code = (
+                                    ErrorCode.VETTER_ECC_UNAUTHORIZED
+                                    if result.constraint_type.value == "ecc"
+                                    else ErrorCode.VETTER_JURISDICTION_UNAUTHORIZED
+                                )
+                                errors.append(ErrorDetail(
+                                    code=error_code,
+                                    message=result.reason,
+                                    recoverable=ERROR_RECOVERABILITY.get(error_code, False),
+                                ))
+                elif vetter_status == ClaimStatus.INDETERMINATE:
+                    vetter_constraints_claim.fail(
+                        ClaimStatus.INDETERMINATE,
+                        "Vetter certification missing for one or more credentials"
+                    )
+            except Exception as e:
+                log.warning(f"Phase 11 vetter constraint evaluation failed: {e}")
+                vetter_constraints_claim.fail(
+                    ClaimStatus.INDETERMINATE,
+                    f"Vetter constraint evaluation error: {e}"
+                )
+        else:
+            vetter_constraints_claim.fail(
+                ClaimStatus.INDETERMINATE,
+                "Cannot validate vetter constraints: orig.tn not available"
+            )
+    else:
+        if dag is None:
+            vetter_constraints_claim.fail(
+                ClaimStatus.INDETERMINATE,
+                "Cannot validate vetter constraints: dossier failed"
+            )
+        else:
+            vetter_constraints_claim.fail(
+                ClaimStatus.INDETERMINATE,
+                "Cannot validate vetter constraints: passport failed"
+            )
+
+    # -------------------------------------------------------------------------
     # Build Claim Tree
     # -------------------------------------------------------------------------
     # Build passport_verified with dialog_matched, timing_valid, signature_valid as REQUIRED children
@@ -1142,6 +1283,10 @@ async def verify_callee_vvp(
         )
         root_children.append(ChildLink(required=True, node=goal_overlap_node))
 
+    # Sprint 62: Add vetter_constraints_valid node (REQUIRED only when enforcing)
+    vetter_node = vetter_constraints_claim.build()
+    root_children.append(ChildLink(required=ENFORCE_VETTER_CONSTRAINTS, node=vetter_node))
+
     # Build root claim
     root_claim = ClaimNode(
         name="callee_verified",
@@ -1180,4 +1325,5 @@ async def verify_callee_vvp(
         brand_logo_url=response_brand_logo_url,
         revocation_pending=_revocation_pending,
         cache_hit=_verification_cache_hit,
+        vetter_constraints=vetter_constraint_results if vetter_constraint_results else None,
     )

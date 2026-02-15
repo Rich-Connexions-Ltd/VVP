@@ -554,6 +554,22 @@ class ConfigResponse(BaseModel):
     environment: dict
 
 
+def _get_gsma_aid() -> str:
+    """Get the GSMA AID from mock vLEI state (Sprint 62).
+
+    Operators need this to add to verifier VVP_TRUSTED_ROOT_AIDS.
+    Returns empty string if GSMA identity not yet bootstrapped.
+    """
+    try:
+        from app.org.mock_vlei import get_mock_vlei
+        vlei = get_mock_vlei()
+        if vlei._state and vlei._state.gsma_aid:
+            return vlei._state.gsma_aid
+    except Exception:
+        pass
+    return ""
+
+
 @router.get("/config", response_model=ConfigResponse)
 async def get_config(
     principal: Principal = require_admin,
@@ -615,6 +631,7 @@ async def get_config(
         environment={
             "log_level": logging.getLogger().getEffectiveLevel(),
             "log_level_name": logging.getLevelName(logging.getLogger().getEffectiveLevel()),
+            "gsma_aid": _get_gsma_aid(),  # Sprint 62: for verifier trusted roots config
         },
     )
 

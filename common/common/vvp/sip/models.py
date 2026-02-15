@@ -119,6 +119,9 @@ class SIPResponse:
     brand_logo_url: Optional[str] = None
     caller_id: Optional[str] = None  # Sprint 44: X-VVP-Caller-ID
 
+    # Sprint 62: Vetter constraint status
+    vetter_status: Optional[str] = None  # PASS | FAIL-ECC | FAIL-JURISDICTION | FAIL-ECC-JURISDICTION | INDETERMINATE
+
     # Error info (for non-2xx responses)
     error_reason: Optional[str] = None
     error_code: Optional[str] = None  # Sprint 44: X-VVP-Error code
@@ -160,6 +163,10 @@ class SIPResponse:
 
         # Always include VVP status
         lines.append(f"X-VVP-Status: {self.vvp_status}")
+
+        # Sprint 62: Vetter constraint status
+        if self.vetter_status:
+            lines.append(f"X-VVP-Vetter-Status: {self.vetter_status}")
 
         # Error code for INVALID status (Sprint 44)
         if self.error_code:
