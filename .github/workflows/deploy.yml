@@ -358,19 +358,21 @@ jobs:
           MAX_WAIT=${{ inputs.lock_wait_seconds || '120' }}
           DEACTIVATE_RETRIES=3
 
-          # --- Phase 1: Scale to zero (forces container shutdown faster) ---
-          echo "Scaling vvp-issuer to 0 replicas..."
-          az containerapp update \
-            --name vvp-issuer \
-            --resource-group "${{ secrets.AZURE_RG }}" \
-            --min-replicas 0 \
-            --max-replicas 0 2>/dev/null || echo "::warning::Scale-to-zero command failed (non-fatal)"
-
-          # --- Phase 2: Deactivate all active revisions with retry ---
+          # --- Phase 1: Deactivate all active revisions with retry ---
+          # NOTE: We do NOT call `az containerapp update --min-replicas 0` here
+          # because that creates a phantom intermediate revision as a side effect.
+          # Deactivation alone is sufficient to stop containers and release the
+          # LMDB lock. The polling loop (Phase 2) waits for full stop.
           ACTIVE_REVS=$(az containerapp revision list \
             --name vvp-issuer \
             --resource-group "${{ secrets.AZURE_RG }}" \
             --query "[?properties.active].name" -o tsv)
+
+          REV_COUNT=$(echo "$ACTIVE_REVS" | grep -c '[a-z]' || echo "0")
+          echo "Found $REV_COUNT active revision(s) to deactivate"
+          if [ "$REV_COUNT" -gt 3 ]; then
+            echo "::warning::Unusually high number of active revisions ($REV_COUNT)"
+          fi
 
           if [ -n "$ACTIVE_REVS" ]; then
             for REV in $ACTIVE_REVS; do
@@ -388,7 +390,7 @@ jobs:
               done
             done
 
-            # --- Phase 3: Poll until all revisions are fully stopped ---
+            # --- Phase 2: Poll until all revisions are fully stopped ---
             ELAPSED=0
             INTERVAL=5
             while [ $ELAPSED -lt $MAX_WAIT ]; do
@@ -422,7 +424,7 @@ jobs:
             echo "No active revisions to deactivate"
           fi
 
-          # --- Phase 4: LMDB lock release buffer ---
+          # --- Phase 3: LMDB lock release buffer ---
           # Azure Files mount may hold the lock briefly after container reports stopped.
           echo "Waiting 10s for LMDB file lock release on Azure Files..."
           sleep 10
@@ -446,9 +448,66 @@ jobs:
               "VVP_POSTGRES_DB=${{ secrets.POSTGRES_DB }}" \
               "VVP_ISSUER_BASE_URL=https://vvp-issuer.rcnx.io"
 
+      - name: Ensure new revision is active
+        run: |
+          RG="${{ secrets.AZURE_RG }}"
+
+          # Get the name of the newest revision (just created by the deploy step)
+          NEW_REV=$(az containerapp show \
+            --name vvp-issuer \
+            --resource-group "$RG" \
+            --query "properties.latestRevisionName" -o tsv)
+
+          echo "New revision: $NEW_REV"
+
+          if [ -z "$NEW_REV" ]; then
+            echo "::error::Could not determine latest revision name"
+            exit 1
+          fi
+
+          # Check if the new revision is active
+          IS_ACTIVE=$(az containerapp revision show \
+            --name vvp-issuer \
+            --resource-group "$RG" \
+            --revision "$NEW_REV" \
+            --query "properties.active" -o tsv)
+
+          echo "Revision $NEW_REV active=$IS_ACTIVE"
+
+          if [ "$IS_ACTIVE" != "true" ]; then
+            echo "::warning::New revision is not active — activating explicitly"
+            az containerapp revision activate \
+              --name vvp-issuer \
+              --resource-group "$RG" \
+              --revision "$NEW_REV"
+            echo "Activated revision $NEW_REV"
+            sleep 5
+
+            # Verify activation succeeded
+            IS_ACTIVE=$(az containerapp revision show \
+              --name vvp-issuer \
+              --resource-group "$RG" \
+              --revision "$NEW_REV" \
+              --query "properties.active" -o tsv)
+
+            if [ "$IS_ACTIVE" != "true" ]; then
+              echo "::error::Failed to activate revision $NEW_REV"
+              az containerapp revision list \
+                --name vvp-issuer \
+                --resource-group "$RG" \
+                --query "[].{name:name, active:properties.active, state:properties.runningState, replicas:properties.replicas, traffic:properties.trafficWeight}" -o table 2>/dev/null || true
+              exit 1
+            fi
+          fi
+
+          echo "Revision $NEW_REV is active and should be starting"
+
       - name: Verify deployed version
         run: |
           EXPECTED="${{ github.sha }}"
+          RG="${{ secrets.AZURE_RG }}"
+          ACTIVATION_FIXED=false
+
           # LMDB/Habery initialization on Azure Files takes ~3 minutes.
           # Poll for 5 minutes total: short intervals early, longer later.
           INTERVALS=(10 10 10 15 15 15 15 20 20 20 20 20 20 20 20 20)
@@ -461,18 +520,37 @@ jobs:
               echo "Version verified: ${DEPLOYED:0:7} (attempt ${ATTEMPT}/${TOTAL})"
               exit 0
             fi
-            # Check revision health — fail fast if unhealthy
-            HEALTH=$(az containerapp revision list \
+
+            # Check revision health and activation state
+            REV_INFO=$(az containerapp revision list \
               --name vvp-issuer \
-              --resource-group "${{ secrets.AZURE_RG }}" \
-              --query "[?properties.trafficWeight > \`0\`].properties.healthState" -o tsv 2>/dev/null)
+              --resource-group "$RG" \
+              --query "[?properties.trafficWeight > \`0\`].{name:name, active:properties.active, health:properties.healthState, running:properties.runningState}" -o json 2>/dev/null || echo "[]")
+
+            HEALTH=$(echo "$REV_INFO" | jq -r '.[0].health // empty')
+            IS_ACTIVE=$(echo "$REV_INFO" | jq -r '.[0].active // empty')
+            REV_NAME=$(echo "$REV_INFO" | jq -r '.[0].name // empty')
+            RUNNING=$(echo "$REV_INFO" | jq -r '.[0].running // empty')
+
+            # Fail fast if unhealthy
             if [ "$HEALTH" = "Unhealthy" ]; then
               echo "::error::New revision is unhealthy — check container logs"
               az containerapp logs show --name vvp-issuer \
-                --resource-group "${{ secrets.AZURE_RG }}" --tail 30 2>/dev/null || true
+                --resource-group "$RG" --tail 30 2>/dev/null || true
               exit 1
             fi
-            echo "Attempt ${ATTEMPT}/${TOTAL}: expected ${EXPECTED:0:7}, got ${DEPLOYED:-unknown} (health: ${HEALTH:-unknown})"
+
+            # Self-heal: if revision has traffic but is not active, activate it
+            if [ "$IS_ACTIVE" = "false" ] && [ -n "$REV_NAME" ] && [ "$ACTIVATION_FIXED" = "false" ]; then
+              echo "::warning::Revision $REV_NAME has traffic but active=false — activating"
+              az containerapp revision activate \
+                --name vvp-issuer \
+                --resource-group "$RG" \
+                --revision "$REV_NAME" 2>/dev/null || echo "::warning::Activation attempt failed"
+              ACTIVATION_FIXED=true
+            fi
+
+            echo "Attempt ${ATTEMPT}/${TOTAL}: expected ${EXPECTED:0:7}, got ${DEPLOYED:-unknown} (health: ${HEALTH:-unknown}, active: ${IS_ACTIVE:-unknown}, running: ${RUNNING:-unknown})"
             sleep "${INTERVALS[$i]}"
           done
           echo "::error::Issuer version mismatch after 5 minutes"

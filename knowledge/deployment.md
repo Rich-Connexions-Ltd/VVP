@@ -38,14 +38,18 @@ All path filters are bypassed when `force_all=true` is passed via workflow dispa
 
 ### Issuer LMDB Constraint
 
-The issuer uses LMDB (keripy) on a shared Azure Files volume. **Two revisions CANNOT run simultaneously** — the LMDB lock blocks the new revision's startup. CI/CD uses a 4-phase stop-before-deploy sequence:
+The issuer uses LMDB (keripy) on a shared Azure Files volume. **Two revisions CANNOT run simultaneously** — the LMDB lock blocks the new revision's startup. CI/CD uses a 3-phase stop-before-deploy sequence with self-healing activation:
 
-1. **Scale to zero** — `--min-replicas 0 --max-replicas 0` forces container shutdown faster than deactivation alone
-2. **Deactivate revisions** — with up to 3 retries per revision to handle transient Azure API failures
-3. **Poll until stopped** — checks both `runningState` and `replicas` count, with 120s timeout (configurable via `lock_wait_seconds` workflow input). **Fails hard** on timeout instead of proceeding
-4. **Lock release buffer** — 10s sleep after all revisions report stopped, to allow the Azure Files mount to release the LMDB file lock
+1. **Deactivate revisions** — with up to 3 retries per revision to handle transient Azure API failures. (We do NOT use `az containerapp update --min-replicas 0` because that creates a phantom intermediate revision as a side effect, which can leave the new revision `active=false`.)
+2. **Poll until stopped** — checks both `runningState` and `replicas` count, with 120s timeout (configurable via `lock_wait_seconds` workflow input). **Fails hard** on timeout instead of proceeding.
+3. **Lock release buffer** — 10s sleep after all revisions report stopped, to allow the Azure Files mount to release the LMDB file lock.
 
-Brief downtime is ~30-40s. The deploy step restores `--min-replicas 1 --max-replicas 3`.
+After the deploy step (`az containerapp update --min-replicas 1 --max-replicas 3`), two self-healing checks run:
+
+- **Ensure new revision is active** — queries `latestRevisionName`, checks `active` state. If `active=false`, explicitly calls `az containerapp revision activate`. Fails the pipeline if activation cannot be achieved.
+- **Verify deployed version** — polls `/version` for 5 minutes. Additionally checks revision activation state via `az containerapp revision list`. If the traffic-weighted revision shows `active=false`, activates it (second safety net). Fails fast if revision is `Unhealthy`.
+
+Brief downtime is ~30-40s.
 
 **Verification timeout**: Issuer version check polls for **5 minutes** (16 intervals of 10-20s) because LMDB/Habery initialization on Azure Files takes ~3 minutes.
 
