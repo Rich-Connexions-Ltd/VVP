@@ -1,5 +1,74 @@
 # VVP Verifier Change Log
 
+## Sprint 62: Multichannel Vetter Constraints — End-to-End
+
+**Date:** 2026-02-15
+**Status:** Complete
+
+### Summary
+
+End-to-end multichannel vetter constraint enforcement — from GSMA governance credential issuance through issuer-side enforcement at issuance/dossier/signing time, SIP header propagation, verifier Phase 11 evaluation, to WebRTC display. Wires together Sprint 40 verifier infrastructure with Sprint 61's VetterCert CRUD into a fully enforced, user-visible flow.
+
+### Key Changes
+
+- **GSMA Governance Credential**: Self-issued ACDC from GSMA AID establishing root of trust; VetterCerts chain to it via `issuer` edge. Schema with `name`, `role`, `i` attributes.
+- **Constraint Validator** (`app/vetter/constraints.py`): Two-layer architecture — Layer 1 pure checks (`check_tn_ecc_constraint`, `check_jurisdiction_constraint`), Layer 2 endpoint adapters (`validate_issuance_constraints`, `validate_dossier_constraints`, `validate_signing_constraints`).
+- **Admin Enforcement Toggle**: `GET/PUT /admin/settings/vetter-enforcement` — runtime toggle for issuer-side constraint enforcement. Default: off (soft-fail with warnings). Verifier always evaluates.
+- **Issuance-time enforcement**: Validates org's VetterCert constraints before issuing credentials.
+- **Dossier-creation-time enforcement**: Validates all credentials in dossier against their VetterCert constraints.
+- **Signing-time enforcement**: Walks dossier credential chain (root + edges) and validates signing TN ECC against VetterCert.
+- **Verifier Phase 11**: Vetter constraint evaluation in both caller (`verify.py`) and callee (`verify_callee.py`) flows with VETTER_CERTIFICATION_MISSING error parity.
+- **SIP Header Propagation**: `vetter_status` field on SIPResponse, `X-VVP-Vetter-Status` header in 302 redirect and monitor events. `_derive_vetter_status()` maps dict-shaped verifier response to PASS/FAIL-*/INDETERMINATE.
+- **WebRTC Display**: Vetter badge (PASS/FAIL/INDETERMINATE) on caller panel, admin enforcement toggle on dashboard, monitor sub-banner with amber INDETERMINATE styling.
+- **Bootstrap**: `scripts/bootstrap-issuer.py` outputs GSMA AID and `VVP_TRUSTED_ROOT_AIDS` config line.
+
+### Files Changed
+
+| File | Action | Summary |
+|------|--------|---------|
+| `services/issuer/app/vetter/constraints.py` | Created | Two-layer constraint validator (~490 lines) |
+| `services/issuer/app/vetter/constants.py` | Modified | Added GSMA_GOVERNANCE_SCHEMA_SAID |
+| `services/issuer/app/schema/schemas/gsma-governance-credential.json` | Created | GSMA governance credential schema |
+| `services/issuer/app/config.py` | Modified | ENFORCE_VETTER_CONSTRAINTS + setter |
+| `services/issuer/app/api/admin.py` | Modified | Vetter enforcement toggle endpoints + GSMA AID in config |
+| `services/issuer/app/api/credential.py` | Modified | Issuance-time constraint validation |
+| `services/issuer/app/api/dossier.py` | Modified | Dossier-creation-time constraint validation |
+| `services/issuer/app/api/vvp.py` | Modified | Signing-time constraint validation |
+| `services/issuer/app/db/models.py` | Modified | gsma_governance_said column |
+| `services/issuer/app/db/migrations/sprint62_gsma_governance.py` | Created | DB migration |
+| `services/issuer/web/admin.html` | Modified | Vetter enforcement toggle UI |
+| `services/verifier/app/vvp/verify_callee.py` | Modified | Phase 11 vetter constraint evaluation + VETTER_CERTIFICATION_MISSING parity |
+| `services/verifier/app/core/config.py` | Modified | GSMA trusted-root documentation |
+| `common/common/vvp/sip/models.py` | Modified | vetter_status field + to_bytes() serialization |
+| `common/common/vvp/sip/builder.py` | Modified | vetter_status parameter in build_302_redirect() |
+| `services/sip-verify/app/verify/client.py` | Modified | _derive_vetter_status with INDETERMINATE, dict payload support |
+| `services/sip-verify/app/verify/handler.py` | Modified | vetter_status in 302 redirect + monitor capture |
+| `services/pbx/webrtc/vvp-phone/js/vvp-display.js` | Modified | Vetter badge (PASS/FAIL/INDETERMINATE) |
+| `services/pbx/webrtc/vvp-phone/css/vvp-theme.css` | Modified | Vetter badge CSS |
+| `services/pbx/webrtc/vvp-phone/sip-phone.html` | Modified | X-VVP-Vetter-Status extraction |
+| `services/sip-redirect/app/monitor_web/sip-monitor.js` | Modified | Vetter sub-banner with amber INDETERMINATE |
+| `scripts/bootstrap-issuer.py` | Modified | GSMA AID + config line output |
+| `services/issuer/tests/test_sprint62_constraints.py` | Created | 29 tests |
+| `services/sip-verify/tests/test_vetter_sip.py` | Created | 21 tests |
+
+### Test Results
+
+- Issuer: 633 passed, 5 skipped
+- SIP-verify: 65 passed (21 new Sprint 62 tests)
+- Verifier: 1844 passed, 9 skipped
+
+### Commits
+
+- `6d35c2f` Add missing Sprint 62/66 files: constraints, migration, enforcement
+- `bd82531` Make GSMA bootstrap non-fatal to prevent startup crash
+- `3da3512` Add Sprint 62: SIP/WebRTC/Verifier integration + tests
+- `ccc32f5` Fix review: dict payload, chain walk, INDETERMINATE badge
+- `c8572dc` Fix review round 2: INDETERMINATE status, callee parity, stale config
+- `9e073c2` Fix monitor vetter badge: INDETERMINATE uses amber styling
+- `1ff0f86` Mark Sprint 62 COMPLETE, update knowledge files
+
+---
+
 ## Sprint 61: Organization Vetter Certification Association
 
 **Date:** 2026-02-15
