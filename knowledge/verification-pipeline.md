@@ -169,6 +169,26 @@ Recursive walk from leaf credential to trusted root.
 
 **Errors**: `AUTHORIZATION_FAILED`, `TN_RIGHTS_INVALID`
 
+### Phase 11b: Vetter Constraint Evaluation (Sprint 62)
+**File**: `app/vvp/vetter/constraints.py`, `app/vvp/verify.py`, `app/vvp/verify_callee.py`
+
+Evaluates whether each credential in the dossier was issued by a vetter authorized for its geographic scope. Runs after dossier validation succeeds.
+
+**Algorithm**:
+1. Walk dossier credentials, find `certification` edges linking to VetterCertification ACDCs
+2. Extract `ecc_targets` (E.164 country codes) and `jurisdiction_targets` (ISO 3166-1 alpha-3) from VetterCert
+3. For TN credentials: check calling TN's country code against `ecc_targets`
+4. For Identity/Brand credentials: check jurisdiction against `jurisdiction_targets`
+5. Derive overall status: VALID (all pass), INVALID (hard auth failure), INDETERMINATE (cert missing)
+
+**Claim**: `vetter_constraints` (OPTIONAL — does not block overall VALID when INDETERMINATE)
+
+**Response field**: `vetter_constraints: Dict[str, VetterConstraintInfo]` keyed by credential SAID
+
+**SIP propagation**: `X-VVP-Vetter-Status` header (PASS / FAIL-ECC / FAIL-JURISDICTION / FAIL-ECC-JURISDICTION / INDETERMINATE)
+
+**Errors**: `VETTER_ECC_UNAUTHORIZED`, `VETTER_JURISDICTION_UNAUTHORIZED`, `VETTER_CERTIFICATION_MISSING`
+
 ---
 
 ## Claim Tree Output
@@ -190,6 +210,7 @@ caller_verified (root)
 │   └── tn_rights_valid (REQUIRED)
 ├── context_aligned (REQUIRED or OPTIONAL per policy)
 ├── brand_verified (OPTIONAL)
+├── vetter_constraints (OPTIONAL, Sprint 62)
 └── business_logic_verified (OPTIONAL)
 ```
 

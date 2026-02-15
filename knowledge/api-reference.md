@@ -443,6 +443,8 @@ Convenience endpoint — resolves current user's org and returns constraints. Re
 | `GET` | `/api/admin/audit-logs` | Audit log viewer |
 | `POST` | `/api/admin/mock-vlei/reinitialize` | Clear all data and re-create mock GLEIF/QVI infrastructure |
 | `GET` | `/api/admin/features` | Feature flags and cache status |
+| `GET` | `/admin/settings/vetter-enforcement` | Get vetter constraint enforcement status |
+| `PUT` | `/admin/settings/vetter-enforcement?enabled=true\|false` | Toggle vetter constraint enforcement |
 
 ### Issuer UI Pages
 

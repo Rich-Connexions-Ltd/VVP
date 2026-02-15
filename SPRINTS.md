@@ -3633,7 +3633,7 @@ These are different dimensions. A vetter might be authorized for jurisdiction "G
 
 ---
 
-## Sprint 62: Multichannel Vetter Constraints — End-to-End (TODO)
+## Sprint 62: Multichannel Vetter Constraints — End-to-End (COMPLETE)
 
 **Goal:** Complete the end-to-end multichannel vetter constraint enforcement chain — from GSMA as a root of trust issuing Vetter Certification credentials, through issuer-side enforcement at issuance/dossier/signing time, to SIP header propagation and WebRTC client display of constraint violations. This sprint wires together the verifier infrastructure built in Sprint 40 with Sprint 61's VetterCert CRUD into a fully enforced, user-visible flow.
 
