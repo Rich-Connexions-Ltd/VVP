@@ -662,12 +662,13 @@ jobs:
 
             echo "Attempt ${ATTEMPT}/${TOTAL}: state=$STATE replicas=$REPLICAS"
 
-            if [ "$STATE" = "Running" ] && [ "$REPLICAS" -gt 0 ] 2>/dev/null; then
-              echo "KERI Agent revision $NEW_REV is running with $REPLICAS replica(s)"
+            # Running* matches Running, RunningAtMaxScale, and any future variants
+            if [[ "$STATE" == Running* ]] && [ "$REPLICAS" -gt 0 ] 2>/dev/null; then
+              echo "KERI Agent revision $NEW_REV is running (state=$STATE) with $REPLICAS replica(s)"
               exit 0
             fi
 
-            if [ "$STATE" = "Failed" ] || [ "$STATE" = "Degraded" ]; then
+            if [ "$STATE" = "Failed" ] || [ "$STATE" = "Degraded" ] || [ "$STATE" = "Stopped" ]; then
               echo "::error::KERI Agent revision $NEW_REV is in $STATE state"
               az containerapp revision show \
                 --name vvp-keri-agent \
