@@ -1,7 +1,4 @@
-"""VVP Issuer FastAPI application.
-
-Sprint 69: Issuer-only deploy test — verify KERI Agent is not redeployed.
-"""
+"""VVP Issuer FastAPI application."""
 import asyncio
 import logging
 import os
