@@ -1040,6 +1040,7 @@ jobs:
         id: integration_tests
         env:
           VVP_TEST_API_KEY: ${{ secrets.VVP_ADMIN_API_KEY }}
+          VVP_TEST_ORG_ID: ${{ secrets.VVP_TEST_ORG_ID }}
           VVP_AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
         run: |
           echo "Test suite: ${{ steps.suite.outputs.suite_name }}"

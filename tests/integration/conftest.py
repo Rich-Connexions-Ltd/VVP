@@ -34,6 +34,7 @@ class EnvironmentConfig:
     verifier_url: str
     api_key: str
     azure_storage_connection_string: str | None = None
+    org_id: str | None = None
 
     @property
     def is_azure(self) -> bool:
@@ -54,6 +55,7 @@ def environment_config() -> EnvironmentConfig:
         VVP_VERIFIER_URL: Verifier service URL. Default: http://localhost:8000
         VVP_TEST_API_KEY: API key for authentication. Default: test-admin-key-12345
         VVP_AZURE_STORAGE_CONNECTION_STRING: Azure Storage connection string (Azure mode only)
+        VVP_TEST_ORG_ID: Organization ID for credential issuance (Sprint 67+)
     """
     return EnvironmentConfig(
         mode=os.getenv("VVP_TEST_MODE", "local"),
@@ -61,6 +63,7 @@ def environment_config() -> EnvironmentConfig:
         verifier_url=os.getenv("VVP_VERIFIER_URL", "http://localhost:8000"),
         api_key=os.getenv("VVP_TEST_API_KEY", "test-admin-key-12345"),
         azure_storage_connection_string=os.getenv("VVP_AZURE_STORAGE_CONNECTION_STRING"),
+        org_id=os.getenv("VVP_TEST_ORG_ID"),
     )
 
 
@@ -76,6 +79,7 @@ async def issuer_client(
     client = IssuerClient(
         base_url=environment_config.issuer_url,
         api_key=environment_config.api_key,
+        default_organization_id=environment_config.org_id,
     )
     yield client
     await client.close()
@@ -176,29 +180,52 @@ async def dossier_server(
 # =============================================================================
 
 @pytest_asyncio.fixture(loop_scope="session")
-async def test_identity(issuer_client: IssuerClient) -> dict:
-    """Create a test identity for credential issuance.
+async def test_identity(
+    issuer_client: IssuerClient,
+    environment_config: EnvironmentConfig,
+) -> dict:
+    """Get or create a test identity for credential issuance.
 
-    Creates a unique identity for each test to ensure isolation.
+    When VVP_TEST_ORG_ID is set (Sprint 67+), returns the org's identity
+    so credentials are issued under the org's AID. Otherwise creates a
+    fresh identity for local/pre-org testing.
     """
-    import uuid
-
-    name = f"test-identity-{uuid.uuid4().hex[:8]}"
-    result = await issuer_client.create_identity(name, publish_to_witnesses=False)
-    return result["identity"]
+    if environment_config.org_id:
+        # Use the org's identity — credential endpoint uses org AID for issuance
+        org_info = await issuer_client.get_organization(environment_config.org_id)
+        org_aid = org_info["aid"]
+        identity = await issuer_client.get_identity(org_aid)
+        return identity
+    else:
+        import uuid
+        name = f"test-identity-{uuid.uuid4().hex[:8]}"
+        result = await issuer_client.create_identity(name, publish_to_witnesses=False)
+        return result["identity"]
 
 
 @pytest_asyncio.fixture(loop_scope="session")
-async def test_registry(issuer_client: IssuerClient, test_identity: dict) -> dict:
-    """Create a test registry linked to test identity."""
-    import uuid
+async def test_registry(
+    issuer_client: IssuerClient,
+    test_identity: dict,
+    environment_config: EnvironmentConfig,
+) -> dict:
+    """Get or create a test registry linked to test identity.
 
-    name = f"test-registry-{uuid.uuid4().hex[:8]}"
-    result = await issuer_client.create_registry(
-        name=name,
-        identity_name=test_identity["name"],
-    )
-    return result["registry"]
+    When VVP_TEST_ORG_ID is set, returns the org's registry (derived from
+    the org identity name). Otherwise creates a fresh registry.
+    """
+    if environment_config.org_id:
+        # Org registry name follows the pattern: org-{org_id[:8]}-registry
+        org_identity_name = f"org-{environment_config.org_id[:8]}"
+        return {"name": f"{org_identity_name}-registry"}
+    else:
+        import uuid
+        name = f"test-registry-{uuid.uuid4().hex[:8]}"
+        result = await issuer_client.create_registry(
+            name=name,
+            identity_name=test_identity["name"],
+        )
+        return result["registry"]
 
 
 # =============================================================================
@@ -235,7 +262,11 @@ def benchmark_thresholds() -> dict:
 # =============================================================================
 
 TN_ALLOCATION_SCHEMA = "EFvnoHDY7I-kaBBeKlbDbkjG4BaI0nKLGadxBdjMGgSQ"
-LEGAL_ENTITY_SCHEMA = "ENPXp1vQzRF6JwIuS-mp2U8Uf1MoADoP_GqQ62VsDZWY"
+# Sprint 67: Integration tests use Extended Brand Credential instead of Legal Entity
+# because both TN Alloc and Extended Brand are authorized for "regular" org type.
+# Legal Entity requires "qvi" org type which can't issue TN Alloc credentials.
+# Tests exercise credential lifecycle mechanics, not schema-specific behavior.
+LEGAL_ENTITY_SCHEMA = "EK7kPhs5YkPsq9mZgUfPYfU-zq5iSlU8XVYJWqrVPk6g"  # Extended Brand Credential
 
 
 @pytest.fixture
@@ -246,5 +277,5 @@ def tn_allocation_schema() -> str:
 
 @pytest.fixture
 def legal_entity_schema() -> str:
-    """Legal Entity schema SAID."""
+    """Extended Brand Credential schema SAID (aliased as legal_entity for test compat)."""
     return LEGAL_ENTITY_SCHEMA

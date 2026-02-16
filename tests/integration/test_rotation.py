@@ -181,6 +181,8 @@ async def test_rotation_not_found(issuer_client: IssuerClient):
 @pytest.mark.asyncio
 async def test_credential_still_valid_after_rotation(
     issuer_client: IssuerClient,
+    test_identity: dict,
+    test_registry: dict,
     tn_allocation_schema: str,
 ):
     """Test that credentials issued before rotation remain valid.
@@ -188,25 +190,21 @@ async def test_credential_still_valid_after_rotation(
     This is an important security property: existing credentials should
     still verify even after the issuer rotates their keys.
 
+    Sprint 67: Uses the org's identity and registry for credential issuance,
+    then rotates the org's identity and verifies the credential persists.
+
     Verifies:
     - Credential issued pre-rotation is still accessible post-rotation
     - Credential status is unchanged after rotation
     """
-    # Create identity and registry
-    name = unique_name("cred-rotate")
-    create_result = await issuer_client.create_identity(name, publish_to_witnesses=False)
-    identity = create_result["identity"]
-    aid = identity["aid"]
-
-    reg_name = f"reg-{uuid.uuid4().hex[:8]}"
-    await issuer_client.create_registry(name=reg_name, identity_name=name)
+    aid = test_identity["aid"]
 
     # Issue credential before rotation
     cred_result = await issuer_client.issue_credential(
-        registry_name=reg_name,
+        registry_name=test_registry["name"],
         schema_said=tn_allocation_schema,
         attributes={
-            "d": "",  # Will be auto-filled
+            "d": "",
             "i": aid,
             "LEI": "254900OPPU84GM83MG36",
             "tn": "123-456-7890",
@@ -219,7 +217,6 @@ async def test_credential_still_valid_after_rotation(
 
     # Rotate issuer keys (sequence_number increases by 1 from whatever it was)
     rotate_result = await issuer_client.rotate_identity(aid, publish_to_witnesses=False)
-    # Just verify rotation succeeded - sequence number varies based on prior state
     assert "identity" in rotate_result
     assert rotate_result["identity"]["aid"] == aid
 

@@ -8,15 +8,22 @@ import httpx
 class IssuerClient:
     """Wrapper for issuer API calls in integration tests."""
 
-    def __init__(self, base_url: str, api_key: str):
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        default_organization_id: str | None = None,
+    ):
         """Initialize the issuer client.
 
         Args:
             base_url: Base URL of the issuer service (e.g., http://localhost:8001)
             api_key: API key for authentication
+            default_organization_id: Default org ID to include in credential calls
         """
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
+        self.default_organization_id = default_organization_id
         self._client: httpx.AsyncClient | None = None
 
     def _get_client(self) -> httpx.AsyncClient:
@@ -39,6 +46,13 @@ class IssuerClient:
         """Check issuer service health."""
         async with self._get_client() as client:
             response = await client.get("/healthz")
+            response.raise_for_status()
+            return response.json()
+
+    async def get_organization(self, org_id: str) -> dict:
+        """Get organization details by ID."""
+        async with self._get_client() as client:
+            response = await client.get(f"/organizations/{org_id}")
             response.raise_for_status()
             return response.json()
 
@@ -138,6 +152,7 @@ class IssuerClient:
         rules: dict[str, Any] | None = None,
         private: bool = False,
         publish_to_witnesses: bool = False,
+        organization_id: str | None = None,
     ) -> dict:
         """Issue a new ACDC credential.
 
@@ -150,14 +165,20 @@ class IssuerClient:
             rules: Optional rules section
             private: Whether to add privacy-preserving nonces
             publish_to_witnesses: Whether to publish TEL to witnesses
+            organization_id: Org ID for cross-org issuance (required for admin keys)
 
         Returns:
             Response containing credential SAID and details
         """
+        # Strip 'dt' from attributes so the KERI Agent generates a unique
+        # timestamp per issuance.  Without this, repeated runs with the same
+        # static attributes produce identical credential SAIDs, triggering
+        # LikelyDuplicitousError in the TEL.
+        attrs = {k: v for k, v in attributes.items() if k != "dt"}
         payload = {
             "registry_name": registry_name,
             "schema_said": schema_said,
-            "attributes": attributes,
+            "attributes": attrs,
             "private": private,
             "publish_to_witnesses": publish_to_witnesses,
         }
@@ -167,6 +188,9 @@ class IssuerClient:
             payload["edges"] = edges
         if rules:
             payload["rules"] = rules
+        org_id = organization_id or self.default_organization_id
+        if org_id:
+            payload["organization_id"] = org_id
 
         async with self._get_client() as client:
             response = await client.post("/credential/issue", json=payload)
