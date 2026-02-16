@@ -36,7 +36,7 @@ async def livez():
     Indicates the process is alive. Never returns 503 for dependency
     failures (prevents ACA from killing the container in restart loops).
     """
-    return {"status": "alive"}
+    return {"status": "alive", "service": "issuer"}
 
 
 @router.get("/healthz")
