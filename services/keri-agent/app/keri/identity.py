@@ -265,8 +265,8 @@ class IssuerIdentityManager:
     async def get_kel_bytes(self, aid: str) -> bytes:
         """Get the serialized KEL for an identity.
 
-        Returns the inception event with attached signatures in CESR format,
-        suitable for publishing to witnesses.
+        Returns all KEL events (inception + rotations) with attached signatures
+        in CESR format, suitable for publishing to witnesses.
         """
         async with self._lock:
             hab = self.hby.habByPre(aid)
@@ -276,18 +276,20 @@ class IssuerIdentityManager:
             pre = aid.encode() if isinstance(aid, str) else aid
             msg = bytearray()
 
-            for dig in self.hby.db.getKelIter(pre, sn=0):
+            # Iterate through all KEL events (inception + rotations)
+            fn = 0
+            for fn, dig in enumerate(self.hby.db.getKelIter(pre)):
                 try:
-                    evt_msg = self.hby.db.cloneEvtMsg(pre=pre, fn=0, dig=dig)
+                    evt_msg = self.hby.db.cloneEvtMsg(pre=pre, fn=fn, dig=dig)
                     msg.extend(evt_msg)
-                    break
                 except Exception as e:
-                    log.warning(f"Failed to clone event: {e}")
+                    log.warning(f"Failed to clone event fn={fn}: {e}")
                     continue
 
             if not msg:
                 raise ValueError(f"No KEL found for {aid}")
 
+            log.info(f"KEL for {aid}: {fn + 1} events, {len(msg)} bytes")
             return bytes(msg)
 
     def _validate_rotation_threshold(
