@@ -1,0 +1,41 @@
+[project]
+name = "vvp-keri-agent"
+version = "0.1.0"
+description = "VVP KERI Agent Service — LMDB/keripy state management"
+requires-python = ">=3.12"
+dependencies = [
+  "vvp-common",
+  "fastapi==0.115.6",
+  "uvicorn[standard]==0.34.0",
+  "pydantic==2.10.6",
+  "pysodium>=0.7.18",
+  "httpx>=0.27.0",
+  "hio>=0.6.9",
+  "lmdb>=1.4.0",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8.0.0",
+  "pytest-asyncio>=0.23.0",
+  "pytest-cov>=4.1.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["*/tests/*", "*/__pycache__/*"]
+
+[tool.coverage.report]
+fail_under = 70
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]

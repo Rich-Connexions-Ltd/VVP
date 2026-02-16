@@ -16,6 +16,7 @@ class TestCredentialChains:
     """Test chained credential verification."""
 
     @pytest.mark.asyncio
+    @pytest.mark.issuer
     async def test_two_level_chain_le_to_tn(
         self,
         issuer_client: IssuerClient,
@@ -80,6 +81,7 @@ class TestCredentialChains:
         assert tn_credential["said"] in saids, "TN credential should be in dossier"
 
     @pytest.mark.asyncio
+    @pytest.mark.issuer
     async def test_chain_order_is_topological(
         self,
         issuer_client: IssuerClient,
@@ -136,6 +138,7 @@ class TestCredentialChains:
         assert le_index < tn_index, "LE should come before TN in dossier"
 
     @pytest.mark.asyncio
+    @pytest.mark.issuer
     async def test_three_level_chain(
         self,
         issuer_client: IssuerClient,
@@ -220,6 +223,7 @@ class TestCredentialChains:
         assert root_idx < mid_idx < leaf_idx
 
     @pytest.mark.asyncio
+    @pytest.mark.e2e
     async def test_chain_verification_flow(
         self,
         issuer_client: IssuerClient,

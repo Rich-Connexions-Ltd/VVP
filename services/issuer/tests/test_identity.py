@@ -544,6 +544,7 @@ async def test_rotate_endpoint_not_found(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Sprint 68b: threshold validation moved to KERI Agent service")
 async def test_rotate_endpoint_invalid_threshold(client: AsyncClient):
     """Test rotation with invalid threshold returns 400."""
     name = unique_name("api-rotate-invalid")
@@ -570,6 +571,7 @@ async def test_rotate_endpoint_invalid_threshold(client: AsyncClient):
 # =============================================================================
 
 
+@pytest.mark.skip(reason="Sprint 68b: _get_oobi_base_urls moved to KERI Agent; identity module no longer imports witness config")
 def test_get_oobi_base_urls_uses_configured_urls(monkeypatch):
     """Test that _get_oobi_base_urls uses oobi_base_urls when configured."""
     from app.api import identity
@@ -593,6 +595,7 @@ def test_get_oobi_base_urls_uses_configured_urls(monkeypatch):
     ]
 
 
+@pytest.mark.skip(reason="Sprint 68b: _get_oobi_base_urls moved to KERI Agent; identity module no longer imports witness config")
 def test_get_oobi_base_urls_fallback_to_iurls(monkeypatch):
     """Test that _get_oobi_base_urls falls back to extracting from iurls."""
     from app.api import identity
@@ -613,6 +616,7 @@ def test_get_oobi_base_urls_fallback_to_iurls(monkeypatch):
     ]
 
 
+@pytest.mark.skip(reason="Sprint 68b: _get_oobi_base_urls moved to KERI Agent; identity module no longer imports witness config")
 def test_get_oobi_base_urls_empty_config(monkeypatch):
     """Test _get_oobi_base_urls with empty configuration."""
     from app.api import identity

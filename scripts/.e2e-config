@@ -9,7 +9,7 @@
 # =============================================================================
 
 # Org API key for signing tests (issued by bootstrap-issuer.py)
-VVP_TEST_API_KEY=Z3JTXm4TODFpTiLaGEU_8AhOMIdR_a10kQvikZTf0TQ
+VVP_TEST_API_KEY=cE4oFUsiyCHwsELXRf4FSVN9yu-bEL_QTfkYWPfreBg
 
 # Admin key for issuer admin endpoints (status, cache clear, etc.)
 VVP_ADMIN_KEY=sQO2aE-foISGVUYcY6aj3hhCiXnaE1sRqfaW87hMoeE

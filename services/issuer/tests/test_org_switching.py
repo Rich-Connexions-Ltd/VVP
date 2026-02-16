@@ -411,6 +411,7 @@ class TestIssuerBinding:
     async def test_mismatched_registry_org_returns_403(self, client_with_auth: AsyncClient):
         """Credential issuance with registry not owned by resolved org returns 403."""
         from unittest.mock import patch, AsyncMock, MagicMock
+        from common.vvp.models.keri_agent import RegistryResponse
 
         # Create an org with a specific AID
         org_aid = f"E{uuid.uuid4().hex[:43]}"
@@ -437,19 +438,21 @@ class TestIssuerBinding:
             headers={"X-Requested-With": "XMLHttpRequest"},
         )
 
-        # Mock registry manager to return a RegistryInfo with a DIFFERENT issuer AID
+        # Sprint 68b: Mock keri_client to return a registry with a DIFFERENT issuer AID
         different_aid = f"E{uuid.uuid4().hex[:43]}"
-        mock_registry_info = MagicMock()
-        mock_registry_info.issuer_aid = different_aid  # Different from org_aid
-        mock_registry_info.registry_key = f"E{uuid.uuid4().hex[:43]}"
-        mock_registry_info.name = "mismatched-registry"
+        mock_registry = RegistryResponse(
+            registry_key=f"E{uuid.uuid4().hex[:43]}",
+            name="mismatched-registry",
+            identity_aid=different_aid,  # Different from org_aid
+            identity_name="other-identity",
+            credential_count=0,
+        )
 
-        mock_reg_mgr = AsyncMock()
-        mock_reg_mgr.get_registry_by_name = AsyncMock(return_value=mock_registry_info)
+        mock_client = MagicMock()
+        mock_client.get_registry = AsyncMock(return_value=mock_registry)
 
         # Mock schema auth to allow the issuance
-        # get_registry_manager is imported inside the function body, so patch at source
-        with patch("app.keri.registry.get_registry_manager", new_callable=AsyncMock, return_value=mock_reg_mgr), \
+        with patch("app.api.credential.get_keri_client", return_value=mock_client), \
              patch("app.auth.schema_auth.is_schema_authorized", return_value=True):
             response = await client_with_auth.post(
                 "/credential/issue",

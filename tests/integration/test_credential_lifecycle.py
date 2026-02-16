@@ -14,6 +14,7 @@ class TestSingleCredentialLifecycle:
     """Test complete lifecycle of a single credential."""
 
     @pytest.mark.asyncio
+    @pytest.mark.e2e
     async def test_issue_build_verify_valid(
         self,
         issuer_client: IssuerClient,
@@ -96,6 +97,7 @@ class TestSingleCredentialLifecycle:
         assert result.overall_status in ("VALID", "INVALID", "INDETERMINATE")
 
     @pytest.mark.asyncio
+    @pytest.mark.issuer
     async def test_credential_has_required_fields(
         self,
         issuer_client: IssuerClient,
@@ -126,6 +128,7 @@ class TestSingleCredentialLifecycle:
         assert credential["issuance_dt"], "Must have issuance timestamp"
 
     @pytest.mark.asyncio
+    @pytest.mark.issuer
     async def test_dossier_contains_credential(
         self,
         issuer_client: IssuerClient,
@@ -174,6 +177,7 @@ class TestSingleCredentialLifecycle:
         assert found, f"Credential {credential['said']} not found in dossier"
 
     @pytest.mark.asyncio
+    @pytest.mark.issuer
     async def test_credential_retrieval_by_said(
         self,
         issuer_client: IssuerClient,
@@ -203,6 +207,7 @@ class TestSingleCredentialLifecycle:
 
 @pytest.mark.integration
 @pytest.mark.azure
+@pytest.mark.e2e
 class TestAzureFullLifecycle:
     """Azure-specific full lifecycle tests.
 

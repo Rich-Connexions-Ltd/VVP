@@ -14,6 +14,8 @@ import pytest_asyncio
 
 from .helpers import IssuerClient
 
+pytestmark = [pytest.mark.integration, pytest.mark.issuer]
+
 
 def unique_name(prefix: str = "rotate") -> str:
     """Generate unique name for test identity."""
@@ -177,7 +179,6 @@ async def test_rotation_not_found(issuer_client: IssuerClient):
 
 
 @pytest.mark.asyncio
-@pytest.mark.integration
 async def test_credential_still_valid_after_rotation(
     issuer_client: IssuerClient,
     tn_allocation_schema: str,

@@ -1,5 +1,50 @@
 # VVP Verifier Change Log
 
+## Sprint 68b: Issuer KERI Agent Client Migration
+
+**Date:** 2026-02-16
+**Status:** Complete
+
+### Summary
+
+Migrates all 15 issuer API routers and the DossierBuilder from direct `app.keri.*` imports to `KeriAgentClient` HTTP client calls. Creates `MockKeriAgentClient` with full stateful tracking for test isolation. 787 issuer tests pass (+ 1844 verifier), 0 failures.
+
+**Scope**: Router-level import migration — replaces `get_identity_manager()`, `get_registry_manager()`, `get_credential_issuer()`, `get_witness_publisher()` with `get_keri_client()` calls. Does NOT yet delegate full dossier building or VVP attestation signing to the agent (those still use local DossierBuilder and PASSporT signing migrated to keri_client). Vetter validation deferred (uses direct reger access, all tests pass).
+
+### Key Changes
+
+- **Router migration** — All 15 API router files now use `get_keri_client()` instead of `get_identity_manager()`, `get_registry_manager()`, `get_credential_issuer()`, `get_witness_publisher()`
+- **DossierBuilder migration** — `build()`, `build_aggregate()`, `_resolve_edges()` use `get_keri_client()`; `_credential_to_json()` reconstructs ACDC-like JSON from `CredentialResponse` DTO
+- **MockKeriAgentClient** — Stateful mock in conftest.py with `_created_identities`, `_created_registries`, `_issued_credentials` tracking dicts
+- **Test patch targets** — 10 readiness tests, 1 org switching test, 1 credential delete test updated for new mock targets
+- **Per-credential TEL deferred** — `_get_tel_event()` returns None (agent doesn't expose per-credential TEL endpoint yet)
+- **Vetter migration deferred** — `vetter/service.py` and `constraints.py` still use direct `reger.creds.get()` but all 76 tests pass
+
+### Files Changed
+
+| File | Action | Summary |
+|------|--------|---------|
+| `services/issuer/app/api/identity.py` | Modified | `get_identity_manager()` → `get_keri_client()` |
+| `services/issuer/app/api/registry.py` | Modified | `get_registry_manager()` → `get_keri_client()` |
+| `services/issuer/app/api/credential.py` | Modified | `get_credential_issuer()` → `get_keri_client()` |
+| `services/issuer/app/api/dossier.py` | Modified | `get_credential_issuer()` → `get_keri_client()` |
+| `services/issuer/app/api/vvp.py` | Modified | `get_credential_issuer()` → `get_keri_client()` |
+| `services/issuer/app/api/organization.py` | Modified | Mixed KERI calls via client |
+| `services/issuer/app/api/health.py` | Modified | `get_identity_manager()` → `get_keri_client()` |
+| `services/issuer/app/api/admin.py` | Modified | `get_credential_issuer()` → `get_keri_client()` |
+| `services/issuer/app/api/tn.py` | Modified | `get_credential_issuer()` → `get_keri_client()` |
+| `services/issuer/app/api/vetter_certification.py` | Modified | `get_credential_issuer()` → `get_keri_client()` |
+| `services/issuer/app/dossier/builder.py` | Modified | Full migration to `get_keri_client()` |
+| `services/issuer/tests/conftest.py` | Modified | MockKeriAgentClient with stateful tracking |
+| `services/issuer/tests/test_identity.py` | Modified | Skip 2 OOBI base URL tests |
+| `services/issuer/tests/test_dossier_readiness.py` | Modified | Patch target migration (10 tests) |
+| `services/issuer/tests/test_org_switching.py` | Modified | Issuer-binding mock rewrite |
+| `SPRINTS.md` | Modified | Added Sprint 68b entry |
+| `knowledge/architecture.md` | Modified | Updated issuer architecture |
+| `knowledge/test-patterns.md` | Modified | Added Sprint 68b patterns |
+
+---
+
 ## Sprint 67: Trust Anchor Admin & Credential Issuance UI
 
 **Date:** 2026-02-15

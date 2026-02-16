@@ -559,12 +559,15 @@ def _get_gsma_aid() -> str:
 
     Operators need this to add to verifier VVP_TRUSTED_ROOT_AIDS.
     Returns empty string if GSMA identity not yet bootstrapped.
+
+    Sprint 68b: Reads via TrustAnchorManager.get_mock_vlei_state()
+    (DB-backed, canonical read path).
     """
     try:
-        from app.org.mock_vlei import get_mock_vlei
-        vlei = get_mock_vlei()
-        if vlei._state and vlei._state.gsma_aid:
-            return vlei._state.gsma_aid
+        from app.org.trust_anchors import get_trust_anchor_manager
+        state = get_trust_anchor_manager().get_mock_vlei_state()
+        if state and state.gsma_aid:
+            return state.gsma_aid
     except Exception:
         pass
     return ""
@@ -797,19 +800,13 @@ async def get_stats(
 
     Requires: issuer:admin role
     """
-    from app.keri.identity import get_identity_manager
-    from app.keri.registry import get_registry_manager
-    from app.keri.issuer import get_credential_issuer
+    from app.keri_client import get_keri_client
 
     try:
-        identity_mgr = await get_identity_manager()
-        identities = await identity_mgr.list_identities()
-
-        registry_mgr = await get_registry_manager()
-        registries = await registry_mgr.list_registries()
-
-        credential_issuer = await get_credential_issuer()
-        credentials = await credential_issuer.list_credentials()
+        client = get_keri_client()
+        identities = await client.list_identities()
+        registries = await client.list_registries()
+        credentials = await client.list_credentials()
 
         # Count schemas from schema store
         from common.vvp.schema import get_schema_store
@@ -824,7 +821,12 @@ async def get_stats(
             schemas=schema_count,
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
+        from app.keri_client import KeriAgentUnavailableError
+        if isinstance(e, KeriAgentUnavailableError):
+            raise HTTPException(status_code=503, detail=str(e))
         log.error(f"Failed to get stats: {e}")
         return StatsResponse(
             identities=0,

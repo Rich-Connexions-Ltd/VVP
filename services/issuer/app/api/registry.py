@@ -1,4 +1,9 @@
-"""Registry management endpoints."""
+"""Registry management endpoints.
+
+Sprint 68b: Migrated from direct app.keri.* imports to KeriAgentClient.
+All KERI operations are delegated to the KERI Agent service. Witness
+publishing is handled internally by the agent during registry creation.
+"""
 import logging
 
 from fastapi import APIRouter, HTTPException, Request
@@ -9,18 +14,29 @@ from app.api.models import (
     DeleteResponse,
     RegistryResponse,
     RegistryListResponse,
-    WitnessPublishResult,
 )
 from app.auth.api_key import Principal
 from app.auth.roles import require_admin, require_readonly
 from app.audit import get_audit_logger
-from app.config import WITNESS_IURLS
-from app.keri.identity import get_identity_manager
-from app.keri.registry import get_registry_manager
-from app.keri.witness import get_witness_publisher
+from app.keri_client import get_keri_client, KeriAgentUnavailableError
+from common.vvp.models.keri_agent import (
+    CreateRegistryRequest as AgentCreateRegistryRequest,
+)
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/registry", tags=["registry"])
+
+
+def _agent_to_issuer_registry(agent_reg) -> RegistryResponse:
+    """Map agent RegistryResponse DTO to issuer RegistryResponse model."""
+    return RegistryResponse(
+        registry_key=agent_reg.registry_key,
+        name=agent_reg.name,
+        issuer_aid=agent_reg.identity_aid,
+        created_at=None,  # Agent doesn't track this
+        sequence_number=0,  # Agent doesn't expose this
+        no_backers=getattr(agent_reg, 'no_backers', True),
+    )
 
 
 @router.post("", response_model=CreateRegistryResponse)
@@ -32,91 +48,68 @@ async def create_registry(
     """Create a new credential registry.
 
     Creates a TEL (Transaction Event Log) registry for tracking
-    credential issuance and revocation.
+    credential issuance and revocation. The KERI Agent handles
+    witness publishing internally.
 
     Requires: issuer:admin role
     """
-    identity_mgr = await get_identity_manager()
-    registry_mgr = await get_registry_manager()
     audit = get_audit_logger()
 
     try:
-        # Resolve issuer AID from name or AID
-        if request.issuer_aid:
-            issuer_aid = request.issuer_aid
+        client = get_keri_client()
+
+        # Resolve identity name for the agent request
+        if request.identity_name:
+            identity_name = request.identity_name
             # Verify identity exists
-            info = await identity_mgr.get_identity(issuer_aid)
-            if info is None:
-                raise HTTPException(status_code=404, detail=f"Identity not found: {issuer_aid}")
-        elif request.identity_name:
-            info = await identity_mgr.get_identity_by_name(request.identity_name)
-            if info is None:
-                raise HTTPException(status_code=404, detail=f"Identity not found: {request.identity_name}")
-            issuer_aid = info.aid
+            identity = await client.get_identity(identity_name)
+            if identity is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Identity not found: {identity_name}",
+                )
+        elif request.issuer_aid:
+            # Resolve AID to name
+            identity = await client.get_identity_by_aid(request.issuer_aid)
+            if identity is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Identity not found: {request.issuer_aid}",
+                )
+            identity_name = identity.name
         else:
-            raise HTTPException(status_code=400, detail="Either identity_name or issuer_aid is required")
+            raise HTTPException(
+                status_code=400,
+                detail="Either identity_name or issuer_aid is required",
+            )
 
-        # Create the registry
-        registry_info = await registry_mgr.create_registry(
+        # Create registry via KERI Agent
+        agent_reg = await client.create_registry(AgentCreateRegistryRequest(
             name=request.name,
-            issuer_aid=issuer_aid,
+            identity_name=identity_name,
             no_backers=request.no_backers,
-        )
-
-        # Publish anchoring IXN event to witnesses
-        # Note: Witnesses receipt KEL events (ixn), not TEL events (vcp) directly.
-        # The registry vcp is anchored to the issuer's KEL via an ixn event.
-        publish_results: list[WitnessPublishResult] | None = None
-        if request.publish_to_witnesses and WITNESS_IURLS:
-            try:
-                # Get the anchoring ixn event from the issuer's KEL
-                ixn_bytes = await registry_mgr.get_anchor_ixn_bytes(registry_info.registry_key)
-                publisher = get_witness_publisher()
-                result = await publisher.publish_event(registry_info.issuer_aid, ixn_bytes)
-
-                publish_results = [
-                    WitnessPublishResult(
-                        url=wr.url,
-                        success=wr.success,
-                        error=wr.error,
-                    )
-                    for wr in result.witnesses
-                ]
-
-                if not result.threshold_met:
-                    log.warning(
-                        f"Witness threshold not met for registry {registry_info.registry_key[:16]}...: "
-                        f"{result.success_count}/{result.total_count}"
-                    )
-            except Exception as e:
-                log.error(f"Failed to publish anchor ixn to witnesses: {e}")
-                # Don't fail registry creation if witness publishing fails
+        ))
 
         # Audit log the creation
         audit.log_access(
             action="registry.create",
             principal_id=principal.key_id,
-            resource=registry_info.registry_key,
-            details={"name": request.name, "issuer_aid": issuer_aid},
+            resource=agent_reg.registry_key,
+            details={"name": request.name, "issuer_aid": agent_reg.identity_aid},
             request=http_request,
         )
 
         return CreateRegistryResponse(
-            registry=RegistryResponse(
-                registry_key=registry_info.registry_key,
-                name=registry_info.name,
-                issuer_aid=registry_info.issuer_aid,
-                created_at=registry_info.created_at,
-                sequence_number=registry_info.sequence_number,
-                no_backers=registry_info.no_backers,
-            ),
-            publish_results=publish_results,
+            registry=_agent_to_issuer_registry(agent_reg),
+            publish_results=None,  # Agent handles publishing internally
         )
 
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except KeriAgentUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except HTTPException:
         raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         log.exception(f"Failed to create registry: {e}")
         raise HTTPException(status_code=500, detail="Internal error creating registry")
@@ -128,23 +121,16 @@ async def list_registries() -> RegistryListResponse:
 
     This endpoint is public (no auth required) for UI access.
     """
-    registry_mgr = await get_registry_manager()
-    registries = await registry_mgr.list_registries()
+    try:
+        client = get_keri_client()
+        agent_registries = await client.list_registries()
 
-    return RegistryListResponse(
-        registries=[
-            RegistryResponse(
-                registry_key=r.registry_key,
-                name=r.name,
-                issuer_aid=r.issuer_aid,
-                created_at=r.created_at or None,
-                sequence_number=r.sequence_number,
-                no_backers=r.no_backers,
-            )
-            for r in registries
-        ],
-        count=len(registries),
-    )
+        return RegistryListResponse(
+            registries=[_agent_to_issuer_registry(r) for r in agent_registries],
+            count=len(agent_registries),
+        )
+    except KeriAgentUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
 
 @router.get("/{registry_key}", response_model=RegistryResponse)
@@ -154,20 +140,18 @@ async def get_registry(registry_key: str) -> RegistryResponse:
     This endpoint is public (no auth required) for UI access.
     """
     try:
-        registry_mgr = await get_registry_manager()
-        info = await registry_mgr.get_registry(registry_key)
+        client = get_keri_client()
+        agent_reg = await client.get_registry_by_key(registry_key)
 
-        if info is None:
-            raise HTTPException(status_code=404, detail=f"Registry not found: {registry_key}")
+        if agent_reg is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Registry not found: {registry_key}",
+            )
 
-        return RegistryResponse(
-            registry_key=info.registry_key,
-            name=info.name,
-            issuer_aid=info.issuer_aid,
-            created_at=info.created_at or None,
-            sequence_number=info.sequence_number,
-            no_backers=info.no_backers,
-        )
+        return _agent_to_issuer_registry(agent_reg)
+    except KeriAgentUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:
@@ -189,26 +173,28 @@ async def delete_registry(
 
     Requires: issuer:admin role
     """
-    registry_mgr = await get_registry_manager()
     audit = get_audit_logger()
 
     try:
-        # Get registry info before deletion for audit
-        info = await registry_mgr.get_registry(registry_key)
-        if info is None:
-            raise HTTPException(status_code=404, detail=f"Registry not found: {registry_key}")
+        client = get_keri_client()
 
-        registry_name = info.name
+        # Look up registry by key to get name
+        agent_reg = await client.get_registry_by_key(registry_key)
+        if agent_reg is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Registry not found: {registry_key}",
+            )
 
-        # Delete the registry
-        await registry_mgr.delete_registry(registry_key)
+        # Delete via KERI Agent
+        await client.delete_registry(agent_reg.name)
 
         # Audit log the deletion
         audit.log_access(
             action="registry.delete",
             principal_id=principal.key_id,
             resource=registry_key,
-            details={"name": registry_name},
+            details={"name": agent_reg.name},
             request=http_request,
         )
 
@@ -216,11 +202,11 @@ async def delete_registry(
             deleted=True,
             resource_type="registry",
             resource_id=registry_key,
-            message=f"Registry '{registry_name}' removed from local storage. Note: The registry still exists in the KERI ecosystem.",
+            message=f"Registry '{agent_reg.name}' removed from local storage. Note: The registry still exists in the KERI ecosystem.",
         )
 
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except KeriAgentUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:

@@ -18,6 +18,7 @@ from app.audit import get_audit_logger
 from app.db.session import get_db
 from app.db.models import Organization, ManagedCredential, OrgType
 from app.config import MOCK_VLEI_ENABLED
+from app.keri_client import KeriAgentUnavailableError
 from app.org.lei_generator import generate_pseudo_lei
 from app.org.mock_vlei import get_mock_vlei_manager
 
@@ -120,39 +121,32 @@ async def create_organization(
     # Create KERI identity and credentials if mock vLEI is enabled
     if MOCK_VLEI_ENABLED:
         try:
-            from app.keri.identity import get_identity_manager
-            from app.keri.registry import get_registry_manager
-            from app.keri.witness import get_witness_publisher
+            from app.keri_client import get_keri_client
+            from common.vvp.models.keri_agent import (
+                CreateIdentityRequest as AgentCreateIdentityRequest,
+                CreateRegistryRequest as AgentCreateRegistryRequest,
+            )
 
-            identity_mgr = await get_identity_manager()
-            registry_mgr = await get_registry_manager()
+            client = get_keri_client()
             mock_vlei = get_mock_vlei_manager()
 
-            # Create KERI identity for org
+            # Create KERI identity for org via agent
             org_identity_name = f"org-{org_id[:8]}"
-            org_identity = await identity_mgr.create_identity(
+            org_identity = await client.create_identity(AgentCreateIdentityRequest(
                 name=org_identity_name,
                 transferable=True,
-            )
+            ))
             org.aid = org_identity.aid
             log.info(f"Created org identity: {org_identity.aid[:16]}...")
 
-            # Publish org identity to witnesses for OOBI resolution
-            try:
-                kel_bytes = await identity_mgr.get_kel_bytes(org_identity.aid)
-                publisher = get_witness_publisher()
-                pub_result = await publisher.publish_oobi(org_identity.aid, kel_bytes)
-                log.info(f"Published org identity to witnesses: "
-                         f"{pub_result.success_count}/{pub_result.total_count}")
-            except Exception as e:
-                log.warning(f"Failed to publish org identity to witnesses: {e}")
+            # Agent handles witness publishing internally during create_identity
 
-            # Create credential registry for org
+            # Create credential registry for org via agent
             org_registry_name = f"{org_identity_name}-registry"
-            org_registry = await registry_mgr.create_registry(
+            org_registry = await client.create_registry(AgentCreateRegistryRequest(
                 name=org_registry_name,
-                issuer_aid=org_identity.aid,
-            )
+                identity_name=org_identity_name,
+            ))
             org.registry_key = org_registry.registry_key
             log.info(f"Created org registry: {org_registry.registry_key[:16]}...")
 
@@ -166,14 +160,28 @@ async def create_organization(
             log.info(f"Issued LE credential: {le_cred_said[:16]}...")
 
             # Record the LE credential as managed by this org
+            from app.org.trust_anchors import get_trust_anchor_manager
+            tam_state = get_trust_anchor_manager().get_mock_vlei_state()
             managed_cred = ManagedCredential(
                 said=le_cred_said,
                 organization_id=org_id,
                 schema_said="ENPXp1vQzRF6JwIuS-mp2U8Uf1MoADoP_GqQ62VsDZWY",
-                issuer_aid=mock_vlei.state.qvi_aid if mock_vlei.state else "",
+                issuer_aid=tam_state.qvi_aid if tam_state else "",
             )
             db.add(managed_cred)
 
+        except KeriAgentUnavailableError as e:
+            log.warning(f"KERI agent unavailable during org creation: {e}")
+            raise HTTPException(status_code=503, detail=str(e))
+        except RuntimeError as e:
+            # Trust-anchor state not ready (bootstrap probe hasn't synced yet)
+            if "not initialized" in str(e).lower():
+                log.warning(f"Trust anchor not ready during org creation: {e}")
+                raise HTTPException(status_code=503, detail=str(e))
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to create KERI infrastructure: {str(e)}",
+            )
         except Exception as e:
             log.exception(f"Failed to create KERI infrastructure for org: {e}")
             raise HTTPException(

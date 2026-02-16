@@ -12,6 +12,7 @@ from .helpers import IssuerClient
 
 
 @pytest.mark.integration
+@pytest.mark.issuer
 class TestDossierFormats:
     """Test dossier format handling."""
 

@@ -563,7 +563,7 @@ class TestEdgeValidation:
         mock_issuer = AsyncMock()
         mock_issuer.get_credential = AsyncMock(side_effect=make_cred)
 
-        with patch("app.api.dossier.get_credential_issuer", return_value=mock_issuer):
+        with patch("app.api.dossier.get_keri_client", return_value=mock_issuer):
             with pytest.raises(HTTPException) as exc_info:
                 await _validate_dossier_edges(in_memory_db, principal, ap_org, edges)
             assert exc_info.value.status_code == 400
@@ -586,7 +586,7 @@ class TestEdgeValidation:
         mock_issuer = AsyncMock()
         mock_issuer.get_credential = AsyncMock(return_value=None)
 
-        with patch("app.api.dossier.get_credential_issuer", return_value=mock_issuer):
+        with patch("app.api.dossier.get_keri_client", return_value=mock_issuer):
             with pytest.raises(HTTPException) as exc_info:
                 await _validate_dossier_edges(in_memory_db, principal, ap_org, edges)
             assert exc_info.value.status_code == 404
@@ -611,7 +611,7 @@ class TestEdgeValidation:
         mock_issuer = AsyncMock()
         mock_issuer.get_credential = AsyncMock(return_value=mock_cred)
 
-        with patch("app.api.dossier.get_credential_issuer", return_value=mock_issuer):
+        with patch("app.api.dossier.get_keri_client", return_value=mock_issuer):
             with pytest.raises(HTTPException) as exc_info:
                 await _validate_dossier_edges(in_memory_db, principal, ap_org, edges)
             assert exc_info.value.status_code == 400
@@ -656,7 +656,7 @@ class TestEdgeValidation:
         mock_issuer = AsyncMock()
         mock_issuer.get_credential = AsyncMock(side_effect=make_cred)
 
-        with patch("app.api.dossier.get_credential_issuer", return_value=mock_issuer):
+        with patch("app.api.dossier.get_keri_client", return_value=mock_issuer):
             with pytest.raises(HTTPException) as exc_info:
                 await _validate_dossier_edges(in_memory_db, principal, ap_org, edges)
             assert exc_info.value.status_code == 400
@@ -703,7 +703,7 @@ class TestEdgeValidation:
         mock_issuer = AsyncMock()
         mock_issuer.get_credential = AsyncMock(side_effect=make_cred)
 
-        with patch("app.api.dossier.get_credential_issuer", return_value=mock_issuer):
+        with patch("app.api.dossier.get_keri_client", return_value=mock_issuer):
             with pytest.raises(HTTPException) as exc_info:
                 await _validate_dossier_edges(in_memory_db, principal, ap_org, edges)
             assert exc_info.value.status_code == 400
@@ -753,7 +753,7 @@ class TestEdgeValidation:
         mock_issuer = AsyncMock()
         mock_issuer.get_credential = AsyncMock(side_effect=make_cred)
 
-        with patch("app.api.dossier.get_credential_issuer", return_value=mock_issuer):
+        with patch("app.api.dossier.get_keri_client", return_value=mock_issuer):
             with pytest.raises(HTTPException) as exc_info:
                 await _validate_dossier_edges(in_memory_db, principal, ap_org, edges)
             assert exc_info.value.status_code == 400
@@ -795,7 +795,7 @@ class TestEdgeValidation:
         mock_issuer = AsyncMock()
         mock_issuer.get_credential = AsyncMock(side_effect=make_cred)
 
-        with patch("app.api.dossier.get_credential_issuer", return_value=mock_issuer):
+        with patch("app.api.dossier.get_keri_client", return_value=mock_issuer):
             result_edges, delsig_issuee = await _validate_dossier_edges(
                 in_memory_db, principal, ap_org, edges
             )
@@ -849,7 +849,7 @@ class TestEdgeValidation:
 
         # Mock can_access_credential to return True for bproxy (principal-scoped)
         with (
-            patch("app.api.dossier.get_credential_issuer", return_value=mock_issuer),
+            patch("app.api.dossier.get_keri_client", return_value=mock_issuer),
             patch("app.api.dossier.can_access_credential", return_value=True),
         ):
             result_edges, delsig_issuee = await _validate_dossier_edges(
@@ -904,7 +904,7 @@ class TestEdgeValidation:
 
         # Mock can_access_credential to return False for bproxy
         with (
-            patch("app.api.dossier.get_credential_issuer", return_value=mock_issuer),
+            patch("app.api.dossier.get_keri_client", return_value=mock_issuer),
             patch("app.api.dossier.can_access_credential", return_value=False),
         ):
             with pytest.raises(HTTPException) as exc_info:
@@ -1257,7 +1257,7 @@ class TestDelsigIssueeValidation:
         mock_issuer = AsyncMock()
         mock_issuer.get_credential = AsyncMock(side_effect=make_cred)
 
-        with patch("app.api.dossier.get_credential_issuer", return_value=mock_issuer):
+        with patch("app.api.dossier.get_keri_client", return_value=mock_issuer):
             with pytest.raises(HTTPException) as exc_info:
                 await _validate_dossier_edges(in_memory_db, principal, ap_org, edges)
             assert exc_info.value.status_code == 400
@@ -1332,30 +1332,39 @@ class TestDossierAuditLogging:
     """Tests verifying audit logging call counts and arguments."""
 
     def _setup_happy_path_mocks(self, org_aid, dossier_said):
-        """Build mock objects for a successful dossier creation."""
-        from app.keri.issuer import CredentialInfo
+        """Build mock objects for a successful dossier creation.
+
+        Sprint 68b: Returns (mock_edges, mock_client) — single client replaces
+        the old (mock_issuer, mock_reg_mgr) pair.
+        """
+        from common.vvp.models.keri_agent import (
+            CredentialResponse, IdentityResponse, RegistryResponse,
+        )
 
         mock_edges = (
             {"vetting": {"n": "Ev"}, "alloc": {"n": "Ea"},
              "tnalloc": {"n": "Et"}, "delsig": {"n": "Ed"}},
             None,
         )
-        mock_cred = CredentialInfo(
+        mock_cred = CredentialResponse(
             said=dossier_said, issuer_aid=org_aid, recipient_aid=None,
             registry_key=f"E{uuid.uuid4().hex[:43]}", schema_said=DOSSIER_SCHEMA_SAID,
             issuance_dt="2026-01-01T00:00:00.000000+00:00", status="issued",
             revocation_dt=None, attributes={"d": "", "dt": "2026-01-01T00:00:00.000000+00:00"},
             edges=None, rules=None,
         )
-        mock_issuer = AsyncMock()
-        mock_issuer.issue_credential = AsyncMock(return_value=(mock_cred, b"\x00"))
+        mock_client = AsyncMock()
+        mock_client.issue_credential = AsyncMock(return_value=mock_cred)
+        mock_client.get_registry_by_key = AsyncMock(return_value=RegistryResponse(
+            registry_key="test-key", name="test-registry",
+            identity_aid=org_aid, identity_name="test-id", credential_count=0,
+        ))
+        mock_client.get_identity_by_aid = AsyncMock(return_value=IdentityResponse(
+            aid=org_aid, name="test-id", created_at="2025-01-01T00:00:00Z",
+            witness_count=3, key_count=1, sequence_number=0, transferable=True,
+        ))
 
-        mock_registry_info = MagicMock()
-        mock_registry_info.name = "test-registry"
-        mock_reg_mgr = AsyncMock()
-        mock_reg_mgr.get_registry = AsyncMock(return_value=mock_registry_info)
-
-        return mock_edges, mock_issuer, mock_reg_mgr
+        return mock_edges, mock_client
 
     @pytest.mark.asyncio
     async def test_create_org_not_found_no_audit(self, client_with_auth, admin_headers):
@@ -1398,14 +1407,12 @@ class TestDossierAuditLogging:
             db.close()
 
         dossier_said = f"E{uuid.uuid4().hex[:43]}"
-        mock_edges, mock_issuer, mock_reg_mgr = self._setup_happy_path_mocks(org_aid, dossier_said)
+        mock_edges, mock_client = self._setup_happy_path_mocks(org_aid, dossier_said)
         mock_audit = MagicMock()
 
         with (
             patch("app.api.dossier._validate_dossier_edges", new_callable=AsyncMock, return_value=mock_edges),
-            patch("app.api.dossier.get_credential_issuer", new_callable=AsyncMock, return_value=mock_issuer),
-            patch("app.keri.registry.get_registry_manager", new_callable=AsyncMock, return_value=mock_reg_mgr),
-            patch("app.api.dossier.WITNESS_IURLS", []),
+            patch("app.api.dossier.get_keri_client", return_value=mock_client),
             patch("app.api.dossier.get_audit_logger", return_value=mock_audit),
         ):
             response = await client_with_auth.post(
@@ -1464,14 +1471,12 @@ class TestDossierAuditLogging:
              "tnalloc": {"n": "Et"}, "delsig": {"n": "Ed"}},
             osp_aid,
         )
-        mock_edges_tuple, mock_issuer, mock_reg_mgr = self._setup_happy_path_mocks(ap_aid, dossier_said)
+        _, mock_client = self._setup_happy_path_mocks(ap_aid, dossier_said)
         mock_audit = MagicMock()
 
         with (
             patch("app.api.dossier._validate_dossier_edges", new_callable=AsyncMock, return_value=mock_edges),
-            patch("app.api.dossier.get_credential_issuer", new_callable=AsyncMock, return_value=mock_issuer),
-            patch("app.keri.registry.get_registry_manager", new_callable=AsyncMock, return_value=mock_reg_mgr),
-            patch("app.api.dossier.WITNESS_IURLS", []),
+            patch("app.api.dossier.get_keri_client", return_value=mock_client),
             patch("app.api.dossier.get_audit_logger", return_value=mock_audit),
         ):
             response = await client_with_auth.post(
@@ -1559,9 +1564,9 @@ class TestDossierCreateHappyPath:
         return org
 
     def _mock_cred_info(self, said, issuer_aid):
-        """Build a mock CredentialInfo matching issue_credential return."""
-        from app.keri.issuer import CredentialInfo
-        return CredentialInfo(
+        """Build a CredentialResponse matching issue_credential return."""
+        from common.vvp.models.keri_agent import CredentialResponse
+        return CredentialResponse(
             said=said,
             issuer_aid=issuer_aid,
             recipient_aid=None,
@@ -1574,6 +1579,21 @@ class TestDossierCreateHappyPath:
             edges=None,
             rules=None,
         )
+
+    def _mock_keri_client(self, org_aid, mock_cred):
+        """Build a mock KeriAgentClient for happy-path dossier creation."""
+        from common.vvp.models.keri_agent import IdentityResponse, RegistryResponse
+        mock_client = AsyncMock()
+        mock_client.issue_credential = AsyncMock(return_value=mock_cred)
+        mock_client.get_registry_by_key = AsyncMock(return_value=RegistryResponse(
+            registry_key="test-key", name="test-registry",
+            identity_aid=org_aid, identity_name="test-id", credential_count=0,
+        ))
+        mock_client.get_identity_by_aid = AsyncMock(return_value=IdentityResponse(
+            aid=org_aid, name="test-id", created_at="2025-01-01T00:00:00Z",
+            witness_count=3, key_count=1, sequence_number=0, transferable=True,
+        ))
+        return mock_client
 
     @pytest.mark.asyncio
     async def test_create_required_edges_only(self, client_with_auth, admin_headers):
@@ -1599,21 +1619,11 @@ class TestDossierCreateHappyPath:
             None,  # delsig_issuee_aid
         )
         mock_cred = self._mock_cred_info(dossier_said, ap_aid)
-
-        mock_issuer = AsyncMock()
-        mock_issuer.issue_credential = AsyncMock(return_value=(mock_cred, b"\x00"))
-        mock_issuer.get_anchor_ixn_bytes = AsyncMock(return_value=b"\x00")
-
-        mock_registry_info = MagicMock()
-        mock_registry_info.name = "test-registry"
-        mock_reg_mgr = AsyncMock()
-        mock_reg_mgr.get_registry = AsyncMock(return_value=mock_registry_info)
+        mock_client = self._mock_keri_client(ap_aid, mock_cred)
 
         with (
             patch("app.api.dossier._validate_dossier_edges", new_callable=AsyncMock, return_value=mock_edges),
-            patch("app.api.dossier.get_credential_issuer", new_callable=AsyncMock, return_value=mock_issuer),
-            patch("app.keri.registry.get_registry_manager", new_callable=AsyncMock, return_value=mock_reg_mgr),
-            patch("app.api.dossier.WITNESS_IURLS", []),  # no witnesses
+            patch("app.api.dossier.get_keri_client", return_value=mock_client),
         ):
             response = await client_with_auth.post(
                 "/dossier/create",
@@ -1671,20 +1681,11 @@ class TestDossierCreateHappyPath:
             f"E{uuid.uuid4().hex[:43]}",  # delsig issuee AID
         )
         mock_cred = self._mock_cred_info(dossier_said, ap_aid)
-
-        mock_issuer = AsyncMock()
-        mock_issuer.issue_credential = AsyncMock(return_value=(mock_cred, b"\x00"))
-
-        mock_registry_info = MagicMock()
-        mock_registry_info.name = "test-registry"
-        mock_reg_mgr = AsyncMock()
-        mock_reg_mgr.get_registry = AsyncMock(return_value=mock_registry_info)
+        mock_client = self._mock_keri_client(ap_aid, mock_cred)
 
         with (
             patch("app.api.dossier._validate_dossier_edges", new_callable=AsyncMock, return_value=mock_edges),
-            patch("app.api.dossier.get_credential_issuer", new_callable=AsyncMock, return_value=mock_issuer),
-            patch("app.keri.registry.get_registry_manager", new_callable=AsyncMock, return_value=mock_reg_mgr),
-            patch("app.api.dossier.WITNESS_IURLS", []),
+            patch("app.api.dossier.get_keri_client", return_value=mock_client),
         ):
             response = await client_with_auth.post(
                 "/dossier/create",
@@ -1726,20 +1727,11 @@ class TestDossierCreateHappyPath:
             osp_aid,  # delsig issuee matches OSP AID
         )
         mock_cred = self._mock_cred_info(dossier_said, ap_aid)
-
-        mock_issuer = AsyncMock()
-        mock_issuer.issue_credential = AsyncMock(return_value=(mock_cred, b"\x00"))
-
-        mock_registry_info = MagicMock()
-        mock_registry_info.name = "test-registry"
-        mock_reg_mgr = AsyncMock()
-        mock_reg_mgr.get_registry = AsyncMock(return_value=mock_registry_info)
+        mock_client = self._mock_keri_client(ap_aid, mock_cred)
 
         with (
             patch("app.api.dossier._validate_dossier_edges", new_callable=AsyncMock, return_value=mock_edges),
-            patch("app.api.dossier.get_credential_issuer", new_callable=AsyncMock, return_value=mock_issuer),
-            patch("app.keri.registry.get_registry_manager", new_callable=AsyncMock, return_value=mock_reg_mgr),
-            patch("app.api.dossier.WITNESS_IURLS", []),
+            patch("app.api.dossier.get_keri_client", return_value=mock_client),
         ):
             response = await client_with_auth.post(
                 "/dossier/create",
@@ -1791,21 +1783,11 @@ class TestDossierCreateHappyPath:
             None,
         )
         mock_cred = self._mock_cred_info(dossier_said, ap_aid)
-
-        mock_issuer = AsyncMock()
-        mock_issuer.issue_credential = AsyncMock(return_value=(mock_cred, b"\x00"))
-        mock_issuer.get_anchor_ixn_bytes = AsyncMock(side_effect=Exception("IXN bytes not found"))
-
-        mock_registry_info = MagicMock()
-        mock_registry_info.name = "test-registry"
-        mock_reg_mgr = AsyncMock()
-        mock_reg_mgr.get_registry = AsyncMock(return_value=mock_registry_info)
+        mock_client = self._mock_keri_client(ap_aid, mock_cred)
 
         with (
             patch("app.api.dossier._validate_dossier_edges", new_callable=AsyncMock, return_value=mock_edges),
-            patch("app.api.dossier.get_credential_issuer", new_callable=AsyncMock, return_value=mock_issuer),
-            patch("app.keri.registry.get_registry_manager", new_callable=AsyncMock, return_value=mock_reg_mgr),
-            patch("app.api.dossier.WITNESS_IURLS", ["http://witness:5642"]),
+            patch("app.api.dossier.get_keri_client", return_value=mock_client),
         ):
             response = await client_with_auth.post(
                 "/dossier/create",
@@ -1969,8 +1951,8 @@ class TestDossierBuildability:
             None,
         )
 
-        from app.keri.issuer import CredentialInfo
-        mock_cred = CredentialInfo(
+        from common.vvp.models.keri_agent import CredentialResponse, IdentityResponse, RegistryResponse
+        mock_cred = CredentialResponse(
             said=dossier_said,
             issuer_aid=org_aid,
             recipient_aid=None,
@@ -1984,20 +1966,21 @@ class TestDossierBuildability:
             rules=None,
         )
 
-        mock_issuer = AsyncMock()
-        mock_issuer.issue_credential = AsyncMock(return_value=(mock_cred, b"\x00"))
-
-        mock_registry_info = MagicMock()
-        mock_registry_info.name = "test-registry"
-        mock_reg_mgr = AsyncMock()
-        mock_reg_mgr.get_registry = AsyncMock(return_value=mock_registry_info)
+        mock_client = AsyncMock()
+        mock_client.issue_credential = AsyncMock(return_value=mock_cred)
+        mock_client.get_registry_by_key = AsyncMock(return_value=RegistryResponse(
+            registry_key="test-key", name="test-registry",
+            identity_aid=org_aid, identity_name="test-id", credential_count=0,
+        ))
+        mock_client.get_identity_by_aid = AsyncMock(return_value=IdentityResponse(
+            aid=org_aid, name="test-id", created_at="2025-01-01T00:00:00Z",
+            witness_count=3, key_count=1, sequence_number=0, transferable=True,
+        ))
 
         # Step 1: Create the dossier
         with (
             patch("app.api.dossier._validate_dossier_edges", new_callable=AsyncMock, return_value=mock_edges),
-            patch("app.api.dossier.get_credential_issuer", new_callable=AsyncMock, return_value=mock_issuer),
-            patch("app.keri.registry.get_registry_manager", new_callable=AsyncMock, return_value=mock_reg_mgr),
-            patch("app.api.dossier.WITNESS_IURLS", []),
+            patch("app.api.dossier.get_keri_client", return_value=mock_client),
         ):
             create_resp = await client_with_auth.post(
                 "/dossier/create",

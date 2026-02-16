@@ -14,6 +14,16 @@ on:
         description: 'Max seconds to poll for LMDB lock release (default: 120)'
         required: false
         default: '120'
+      test_suite:
+        description: 'Post-deployment integration test suite (auto=based on changes, all=everything, issuer=issuer-only, e2e=verifier+issuer)'
+        type: choice
+        options:
+          - auto
+          - all
+          - issuer
+          - e2e
+        required: false
+        default: 'auto'
 
 permissions:
   contents: read
@@ -712,7 +722,11 @@ jobs:
   # =========================================================================
   # POST-DEPLOYMENT INTEGRATION TESTS
   # =========================================================================
-  # Run full E2E integration tests after deployment to verify the system works
+  # Run selective integration tests after deployment based on which services changed.
+  # - Only issuer changed → run issuer-only tests (~39 tests)
+  # - Only verifier changed → run E2E tests that exercise the verifier (~5 tests)
+  # - Both changed → run all integration tests (~44 tests)
+  # - Manual override via workflow_dispatch test_suite input
   post-deployment-tests:
     needs: [changes, deploy-verifier, deploy-issuer]
     if: (needs.changes.outputs.verifier == 'true' || needs.changes.outputs.issuer == 'true') && !failure()
@@ -724,6 +738,44 @@ jobs:
       VVP_TEST_MODE: azure
 
     steps:
+      - name: Determine test suite
+        id: suite
+        run: |
+          ISSUER_CHANGED="${{ needs.changes.outputs.issuer }}"
+          VERIFIER_CHANGED="${{ needs.changes.outputs.verifier }}"
+          SUITE_OVERRIDE="${{ inputs.test_suite }}"
+
+          # Default to auto if not specified (push trigger has no inputs)
+          if [ -z "$SUITE_OVERRIDE" ] || [ "$SUITE_OVERRIDE" = "auto" ]; then
+            if [ "$ISSUER_CHANGED" = "true" ] && [ "$VERIFIER_CHANGED" = "true" ]; then
+              MARKERS="integration and not benchmark"
+              SUITE_NAME="all (both services changed)"
+            elif [ "$ISSUER_CHANGED" = "true" ]; then
+              MARKERS="integration and issuer and not benchmark"
+              SUITE_NAME="issuer-only (verifier unchanged)"
+            elif [ "$VERIFIER_CHANGED" = "true" ]; then
+              MARKERS="integration and e2e and not benchmark"
+              SUITE_NAME="e2e-only (issuer unchanged)"
+            else
+              MARKERS="integration and not benchmark"
+              SUITE_NAME="all (fallback)"
+            fi
+          elif [ "$SUITE_OVERRIDE" = "all" ]; then
+            MARKERS="integration and not benchmark"
+            SUITE_NAME="all (manual override)"
+          elif [ "$SUITE_OVERRIDE" = "issuer" ]; then
+            MARKERS="integration and issuer and not benchmark"
+            SUITE_NAME="issuer-only (manual override)"
+          elif [ "$SUITE_OVERRIDE" = "e2e" ]; then
+            MARKERS="integration and e2e and not benchmark"
+            SUITE_NAME="e2e-only (manual override)"
+          fi
+
+          echo "markers=$MARKERS" >> $GITHUB_OUTPUT
+          echo "suite_name=$SUITE_NAME" >> $GITHUB_OUTPUT
+          echo "Selected test suite: $SUITE_NAME"
+          echo "Marker expression: $MARKERS"
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -768,14 +820,14 @@ jobs:
           VVP_TEST_API_KEY: ${{ secrets.VVP_ADMIN_API_KEY }}
           VVP_AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
         run: |
+          echo "Test suite: ${{ steps.suite.outputs.suite_name }}"
           START_TIME=$(date +%s)
           set +e
 
-          # Run a subset of integration tests (skip benchmarks for speed)
           python -m pytest tests/integration/ \
             -v \
             --tb=short \
-            -m "integration and not benchmark" \
+            -m "${{ steps.suite.outputs.markers }}" \
             --ignore=tests/integration/benchmarks/ \
             2>&1 | tee test_output.txt
 

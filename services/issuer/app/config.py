@@ -176,6 +176,16 @@ DASHBOARD_REQUEST_TIMEOUT: float = float(os.getenv("VVP_DASHBOARD_REQUEST_TIMEOU
 
 
 # =============================================================================
+# KERI AGENT CLIENT CONFIGURATION (Sprint 68: Service Extraction)
+# =============================================================================
+
+KERI_AGENT_URL: str = os.getenv("VVP_KERI_AGENT_URL", "http://localhost:8002")
+KERI_AGENT_AUTH_TOKEN: str = os.getenv("VVP_KERI_AGENT_AUTH_TOKEN", "")
+KERI_AGENT_TIMEOUT: float = float(os.getenv("VVP_KERI_AGENT_TIMEOUT", "30"))
+KERI_AGENT_WRITE_TIMEOUT: float = float(os.getenv("VVP_KERI_AGENT_WRITE_TIMEOUT", "120"))
+
+
+# =============================================================================
 # OPERATIONAL
 # =============================================================================
 

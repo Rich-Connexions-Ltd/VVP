@@ -76,11 +76,11 @@ async def _extract_brand_info(dossier_said: str) -> tuple[Optional[str], Optiona
         Tuple of (brand_name, logo_url), either may be None
     """
     try:
-        from app.keri.issuer import get_credential_issuer
-        issuer = await get_credential_issuer()
+        from app.keri_client import get_keri_client
+        client = get_keri_client()
 
         # Get root credential
-        root_cred = await issuer.get_credential(dossier_said)
+        root_cred = await client.get_credential(dossier_said)
         if not root_cred:
             return None, None
 
@@ -428,9 +428,9 @@ async def test_tn_lookup(
     # Verify dossier still exists
     if mapping.dossier_said:
         try:
-            from app.keri.issuer import get_credential_issuer
-            issuer = await get_credential_issuer()
-            cred = await issuer.get_credential(mapping.dossier_said)
+            from app.keri_client import get_keri_client
+            client = get_keri_client()
+            cred = await client.get_credential(mapping.dossier_said)
             if not cred:
                 validation_errors.append(f"Dossier {mapping.dossier_said[:16]}... not found")
         except Exception as e:

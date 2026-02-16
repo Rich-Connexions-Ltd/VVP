@@ -292,7 +292,7 @@ class TestDossierReadiness:
         mock_issuer = AsyncMock()
         mock_issuer.list_credentials = AsyncMock(return_value=creds)
 
-        with patch("app.api.dossier.get_credential_issuer", new_callable=AsyncMock, return_value=mock_issuer):
+        with patch("app.api.dossier.get_keri_client", return_value=mock_issuer):
             response = await client_with_auth.get(
                 f"/dossier/readiness?org_id={org_id}",
                 headers=admin_headers,
@@ -346,7 +346,7 @@ class TestDossierReadiness:
         mock_issuer = AsyncMock()
         mock_issuer.list_credentials = AsyncMock(return_value=creds)
 
-        with patch("app.api.dossier.get_credential_issuer", new_callable=AsyncMock, return_value=mock_issuer):
+        with patch("app.api.dossier.get_keri_client", return_value=mock_issuer):
             response = await client_with_auth.get(
                 f"/dossier/readiness?org_id={org_id}",
                 headers=admin_headers,
@@ -401,7 +401,7 @@ class TestDossierReadiness:
         mock_issuer = AsyncMock()
         mock_issuer.list_credentials = AsyncMock(return_value=creds)
 
-        with patch("app.api.dossier.get_credential_issuer", new_callable=AsyncMock, return_value=mock_issuer):
+        with patch("app.api.dossier.get_keri_client", return_value=mock_issuer):
             response = await client_with_auth.get(
                 f"/dossier/readiness?org_id={org_id}",
                 headers=admin_headers,
@@ -453,7 +453,7 @@ class TestDossierReadiness:
         mock_issuer = AsyncMock()
         mock_issuer.list_credentials = AsyncMock(return_value=creds)
 
-        with patch("app.api.dossier.get_credential_issuer", new_callable=AsyncMock, return_value=mock_issuer):
+        with patch("app.api.dossier.get_keri_client", return_value=mock_issuer):
             response = await client_with_auth.get(
                 f"/dossier/readiness?org_id={org_id}",
                 headers=admin_headers,
@@ -511,7 +511,7 @@ class TestDossierReadiness:
         mock_issuer = AsyncMock()
         mock_issuer.list_credentials = AsyncMock(return_value=creds)
 
-        with patch("app.api.dossier.get_credential_issuer", new_callable=AsyncMock, return_value=mock_issuer):
+        with patch("app.api.dossier.get_keri_client", return_value=mock_issuer):
             response = await client_with_auth.get(
                 f"/dossier/readiness?org_id={org_id}",
                 headers=admin_headers,
@@ -563,7 +563,7 @@ class TestDossierReadiness:
         mock_issuer = AsyncMock()
         mock_issuer.list_credentials = AsyncMock(return_value=creds)
 
-        with patch("app.api.dossier.get_credential_issuer", new_callable=AsyncMock, return_value=mock_issuer):
+        with patch("app.api.dossier.get_keri_client", return_value=mock_issuer):
             response = await client_with_auth.get(
                 f"/dossier/readiness?org_id={org_id}",
                 headers=admin_headers,
@@ -699,7 +699,7 @@ class TestDossierReadiness:
         mock_issuer = AsyncMock()
         mock_issuer.list_credentials = AsyncMock(return_value=creds)
 
-        with patch("app.api.dossier.get_credential_issuer", new_callable=AsyncMock, return_value=mock_issuer):
+        with patch("app.api.dossier.get_keri_client", return_value=mock_issuer):
             response = await client_with_auth.get(
                 f"/dossier/readiness?org_id={org_id}",
                 headers=admin_headers,
@@ -752,7 +752,7 @@ class TestDossierReadiness:
         mock_issuer = AsyncMock()
         mock_issuer.list_credentials = AsyncMock(return_value=creds)
 
-        with patch("app.api.dossier.get_credential_issuer", new_callable=AsyncMock, return_value=mock_issuer):
+        with patch("app.api.dossier.get_keri_client", return_value=mock_issuer):
             response = await client_with_auth.get(
                 f"/dossier/readiness?org_id={org_id}",
                 headers=admin_headers,
@@ -798,7 +798,7 @@ class TestDossierReadiness:
         mock_issuer = AsyncMock()
         mock_issuer.list_credentials = AsyncMock(return_value=[])
 
-        with patch("app.api.dossier.get_credential_issuer", new_callable=AsyncMock, return_value=mock_issuer):
+        with patch("app.api.dossier.get_keri_client", return_value=mock_issuer):
             response = await client_with_auth.get(
                 f"/dossier/readiness?org_id={org_id}",
                 headers=admin_headers,
@@ -850,7 +850,7 @@ class TestDossierReadiness:
         mock_issuer = AsyncMock()
         mock_issuer.list_credentials = AsyncMock(return_value=creds)
 
-        with patch("app.api.dossier.get_credential_issuer", new_callable=AsyncMock, return_value=mock_issuer):
+        with patch("app.api.dossier.get_keri_client", return_value=mock_issuer):
             response = await client_with_auth.get(
                 f"/dossier/readiness?org_id={org_id}",
                 headers=admin_headers,

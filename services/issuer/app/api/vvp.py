@@ -11,10 +11,9 @@ from fastapi import APIRouter, HTTPException
 from app.api.models import CreateVVPRequest, CreateVVPResponse, ErrorResponse
 from app.auth.api_key import Principal
 from app.auth.roles import check_credential_write_role, require_auth
-from app.keri.identity import get_identity_manager
+from app.keri_client import get_keri_client, KeriAgentUnavailableError
 from common.vvp.dossier.trust import TrustDecision
 
-from app.keri.issuer import get_credential_issuer
 from app.vvp.card import build_card_claim
 from app.vvp.dossier_service import check_dossier_revocation
 from app.vvp.exceptions import (
@@ -91,9 +90,9 @@ async def create_vvp_attestation(
     check_credential_write_role(principal)
 
     try:
-        # Get identity info
-        identity_mgr = await get_identity_manager()
-        identity = await identity_mgr.get_identity_by_name(body.identity_name)
+        # Get identity info via KERI Agent
+        client = get_keri_client()
+        identity = await client.get_identity(body.identity_name)
         if identity is None:
             raise HTTPException(
                 status_code=404,
@@ -161,9 +160,8 @@ async def create_vvp_attestation(
             builder = await get_dossier_builder()
             content = await builder.build(body.dossier_said, include_tel=False)
 
-            cred_issuer = await get_credential_issuer()
             for said in content.credential_saids:
-                cred_info = await cred_issuer.get_credential(said)
+                cred_info = await client.get_credential(said)
                 if cred_info and cred_info.attributes:
                     card = build_card_claim(cred_info.attributes)
                     if card is not None:
@@ -226,6 +224,15 @@ async def create_vvp_attestation(
     except VVPCreationError as e:
         log.error(f"VVP creation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+    except KeriAgentUnavailableError as e:
+        log.warning(f"KERI agent unavailable during VVP creation: {e}")
+        raise HTTPException(status_code=503, detail=str(e))
+
+    except HTTPException:
+        # Re-raise intentional HTTPException responses (404, 403, etc.)
+        # so they are not swallowed by the generic handler below.
+        raise
 
     except Exception as e:
         log.exception(f"Unexpected error creating VVP attestation: {e}")

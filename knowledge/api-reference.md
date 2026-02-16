@@ -120,6 +120,21 @@ Same structure as `/verify` but requires:
 
 Base URL: `https://vvp-issuer.rcnx.io`
 
+### Error Responses (Sprint 68b)
+
+All issuer endpoints use consistent HTTP status codes:
+
+| Status | Meaning | When |
+|--------|---------|------|
+| 400 | Bad Request | Validation failure, invalid input |
+| 401 | Unauthorized | Missing/invalid API key or session |
+| 403 | Forbidden | Insufficient role, revoked credentials |
+| 404 | Not Found | Resource doesn't exist |
+| 503 | Service Unavailable | KERI agent unreachable (all KERI-dependent endpoints) |
+| 500 | Internal Server Error | Unexpected error |
+
+**503 KERI Agent Unavailable**: When the KERI Agent service is down, all endpoints that require KERI operations (identity, registry, credential, dossier, VVP, organization creation) return HTTP 503. This applies to both read and mutation endpoints. Check `/healthz` for service status.
+
 ### Health & Dashboard
 
 | Method | Path | Purpose |

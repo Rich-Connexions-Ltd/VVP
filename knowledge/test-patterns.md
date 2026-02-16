@@ -140,7 +140,7 @@ Key shared fixtures:
 
 1. **File naming**: `test_{module_name}.py` mirrors `app/{module_name}.py`
 2. **Fixtures**: Shared in `conftest.py`, service-specific
-3. **Mocking**: External services (witnesses, OOBI endpoints) are mocked
+3. **Mocking**: `MockKeriAgentClient` in conftest.py replaces all KERI operations (Sprint 68b). External services (witnesses, OOBI endpoints) are mocked
 4. **Test vectors**: Formal vectors in `tests/vectors/` with schema validation
 5. **libsodium**: Required for crypto tests - always use test runner script
 6. **keripy exclusion**: `keripy/` directory excluded in `pytest.ini` to avoid conflicts
@@ -201,3 +201,26 @@ def _full_cred_set(org_id, org_aid):
 ```
 
 **Schema edge parsing mock**: Tests mock `_parse_schema_edges()` and `_check_edge_schema()` to test slot validation logic without loading real schema JSON files
+
+### Sprint 68b Test Patterns
+
+**`MockKeriAgentClient`**: All issuer tests use `MockKeriAgentClient` (conftest.py) instead of real KERI managers. The mock is installed as the `keri_client` singleton in the `client` and `client_with_auth` fixtures:
+```python
+keri_client_module._client = MockKeriAgentClient()
+```
+
+**Stateful tracking**: The mock tracks created identities, registries, and credentials in internal dicts (`_created_identities`, `_created_registries`, `_issued_credentials`). Operations like `create_identity`, `issue_credential`, and `delete_credential` update these dicts, so subsequent lookups (`get_credential`, `get_registry`) return consistent data.
+
+**Patch target for `get_keri_client`**: Since `get_keri_client()` is a sync function (not async), patches must NOT use `new_callable=AsyncMock`:
+```python
+# Correct:
+with patch("app.api.dossier.get_keri_client", return_value=mock_client):
+# Wrong — will fail:
+with patch("app.api.dossier.get_keri_client", new_callable=AsyncMock, return_value=mock_client):
+```
+
+**CESR mock includes SAID**: `get_credential_cesr(said)` returns bytes containing the credential SAID, enabling CESR format tests that check `said.encode() in content`:
+```python
+async def _get_credential_cesr(said):
+    return f'{{"d":"{said}","v":"ACDC10JSON"}}'.encode()
+```

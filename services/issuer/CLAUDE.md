@@ -9,13 +9,14 @@ The Issuer manages the full lifecycle of VVP credentials: organization managemen
 |------|---------|
 | `app/main.py` | FastAPI app, router mounts, UI routes, lifespan |
 | `app/config.py` | All configuration (DB, OAuth, session, witnesses, auth) |
-| `app/api/` | API routers (16 router files) |
+| `app/api/` | API routers (15 router files — all use `get_keri_client()`) |
 | `app/api/models.py` | All Pydantic request/response models (~45 models) |
-| `app/keri/identity.py` | `IssuerIdentityManager` — KERI inception, rotation, OOBI |
-| `app/keri/registry.py` | `CredentialRegistryManager` — TEL registry lifecycle |
-| `app/keri/issuer.py` | `CredentialIssuer` — 7-step ACDC issuance + revocation |
-| `app/keri/witness.py` | `WitnessPublisher` — two-phase witness receipt protocol |
-| `app/dossier/builder.py` | `DossierBuilder` — DFS edge walk, topological sort |
+| `app/keri_client.py` | `KeriAgentClient` — HTTP client for KERI Agent (circuit breaker, retry) |
+| `app/keri/identity.py` | `IssuerIdentityManager` — legacy, used only by mock_vlei/vetter |
+| `app/keri/registry.py` | `CredentialRegistryManager` — legacy, used only by mock_vlei/vetter |
+| `app/keri/issuer.py` | `CredentialIssuer` — legacy, used only by mock_vlei/vetter |
+| `app/keri/witness.py` | `WitnessPublisher` — legacy, used only by mock_vlei/vetter |
+| `app/dossier/builder.py` | `DossierBuilder` — DFS edge walk via KeriAgentClient |
 | `app/vetter/service.py` | `VetterCertificationManager` — 7-point validation |
 | `app/vetter/constants.py` | Schema SAIDs, ECC/jurisdiction code lists |
 | `app/org/mock_vlei.py` | `MockVLEIManager` — dual trust chains (GLEIF+GSMA) |

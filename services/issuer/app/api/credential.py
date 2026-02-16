@@ -1,12 +1,13 @@
 """Credential management endpoints.
 
 Sprint 41: Updated with organization scoping for multi-tenant isolation.
+Sprint 68b: Migrated from direct app.keri.* imports to KeriAgentClient.
+All KERI operations are delegated to the KERI Agent service.
 """
 import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from keri.kering import LikelyDuplicitousError, ValidationError
 from sqlalchemy.orm import Session
 
 from app.api.models import (
@@ -18,7 +19,6 @@ from app.api.models import (
     CredentialListResponse,
     RevokeCredentialRequest,
     RevokeCredentialResponse,
-    WitnessPublishResult,
 )
 from app.auth.api_key import Principal
 from app.auth.roles import (
@@ -36,13 +36,29 @@ from app.auth.scoping import (
 )
 from app.db.models import ManagedCredential, Organization
 from app.audit import get_audit_logger
-from app.config import WITNESS_IURLS
 from app.db.session import get_db
-from app.keri.issuer import get_credential_issuer
-from app.keri.witness import get_witness_publisher
+from app.keri_client import get_keri_client, KeriAgentUnavailableError
+from common.vvp.models.keri_agent import (
+    IssueCredentialRequest as AgentIssueCredentialRequest,
+)
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/credential", tags=["credential"])
+
+
+def _agent_to_issuer_credential(agent_cred, **extra) -> CredentialResponse:
+    """Map agent CredentialResponse DTO to issuer CredentialResponse model."""
+    return CredentialResponse(
+        said=agent_cred.said,
+        issuer_aid=agent_cred.issuer_aid,
+        recipient_aid=agent_cred.recipient_aid,
+        registry_key=agent_cred.registry_key,
+        schema_said=agent_cred.schema_said,
+        issuance_dt=agent_cred.issuance_dt,
+        status=agent_cred.status,
+        revocation_dt=agent_cred.revocation_dt,
+        **extra,
+    )
 
 
 def schema_requires_certification_edge(schema_said: str) -> bool:
@@ -143,8 +159,8 @@ async def issue_credential(
 ) -> IssueCredentialResponse:
     """Issue a new ACDC credential.
 
-    Creates a credential, generates TEL issuance event, and optionally
-    publishes to witnesses.
+    Creates a credential via the KERI Agent and registers it with the
+    organization.
 
     **Sprint 41:** If the principal has an organization, the credential is
     registered as managed by that organization. System admins issuing without
@@ -215,20 +231,25 @@ async def issue_credential(
             detail=f"Organization '{resolved_org.name}' has incomplete issuer identity "
                    f"(missing AID or registry). Cannot issue credentials.",
         )
-    if request.registry_name:
-        from app.keri.registry import get_registry_manager
-        registry_manager = await get_registry_manager()
-        registry_info = await registry_manager.get_registry_by_name(request.registry_name)
-        if not registry_info:
+
+    # Sprint 68b: Resolve registry name via KERI Agent if explicit registry_name
+    registry_name = request.registry_name
+    if registry_name:
+        try:
+            client = get_keri_client()
+            reg_info = await client.get_registry(registry_name)
+        except KeriAgentUnavailableError as e:
+            raise HTTPException(status_code=503, detail=str(e))
+        if not reg_info:
             raise HTTPException(
                 status_code=400,
-                detail=f"Registry '{request.registry_name}' not found.",
+                detail=f"Registry '{registry_name}' not found.",
             )
         # Registry issuer AID must match the org's AID
-        if registry_info.issuer_aid and registry_info.issuer_aid != resolved_org.aid:
+        if reg_info.identity_aid and reg_info.identity_aid != resolved_org.aid:
             raise HTTPException(
                 status_code=403,
-                detail=f"Registry '{request.registry_name}' does not belong to "
+                detail=f"Registry '{registry_name}' does not belong to "
                        f"organization '{resolved_org.name}'. Use the org's own registry.",
             )
 
@@ -259,67 +280,51 @@ async def issue_credential(
             else:
                 log.warning(f"Vetter constraint warning (soft): {detail}")
 
-    issuer = await get_credential_issuer()
     audit = get_audit_logger()
 
     try:
-        # Issue the credential
-        cred_info, acdc_bytes = await issuer.issue_credential(
-            registry_name=request.registry_name,
+        client = get_keri_client()
+
+        # Sprint 68b: Resolve identity name from org's AID
+        identity = await client.get_identity_by_aid(resolved_org.aid)
+        if identity is None:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Could not find identity for org AID {resolved_org.aid}. "
+                       "KERI Agent may not have this identity.",
+            )
+
+        # Issue credential via KERI Agent
+        agent_cred = await client.issue_credential(AgentIssueCredentialRequest(
+            identity_name=identity.name,
+            registry_name=registry_name or "",
             schema_said=request.schema_said,
             attributes=request.attributes,
             recipient_aid=request.recipient_aid,
             edges=edges,
             rules=request.rules,
-            private=request.private,
-        )
+            publish=True,
+        ))
 
         # Sprint 41/61: Register credential with organization
-        # Sprint 61: Use resolved_org_id for admin cross-org support
         managed = False
         reg_org_id = resolved_org_id or principal.organization_id
         if reg_org_id:
             register_credential(
                 db=db,
-                credential_said=cred_info.said,
+                credential_said=agent_cred.said,
                 organization_id=reg_org_id,
                 schema_said=request.schema_said,
-                issuer_aid=cred_info.issuer_aid,
+                issuer_aid=agent_cred.issuer_aid,
             )
             managed = True
             log.info(
-                f"Credential {cred_info.said[:16]}... registered to org {reg_org_id[:8]}..."
+                f"Credential {agent_cred.said[:16]}... registered to org {reg_org_id[:8]}..."
             )
-
-        # Publish anchoring IXN event to witnesses
-        publish_results: list[WitnessPublishResult] | None = None
-        if request.publish_to_witnesses and WITNESS_IURLS:
-            try:
-                ixn_bytes = await issuer.get_anchor_ixn_bytes(cred_info.said)
-                publisher = get_witness_publisher()
-                result = await publisher.publish_event(cred_info.issuer_aid, ixn_bytes)
-
-                publish_results = [
-                    WitnessPublishResult(
-                        url=wr.url,
-                        success=wr.success,
-                        error=wr.error,
-                    )
-                    for wr in result.witnesses
-                ]
-
-                if not result.threshold_met:
-                    log.warning(
-                        f"Witness threshold not met for credential {cred_info.said[:16]}...: "
-                        f"{result.success_count}/{result.total_count}"
-                    )
-            except Exception as e:
-                log.error(f"Failed to publish anchor ixn to witnesses: {e}")
-                # Don't fail credential issuance if witness publishing fails
 
         # Audit log the issuance
         audit_details = {
-            "registry_name": request.registry_name,
+            "registry_name": registry_name,
             "schema_said": request.schema_said,
             "recipient_aid": request.recipient_aid,
             "organization_id": reg_org_id or principal.organization_id,
@@ -332,25 +337,20 @@ async def issue_credential(
         audit.log_access(
             action="credential.issue",
             principal_id=principal.key_id,
-            resource=cred_info.said,
+            resource=agent_cred.said,
             details=audit_details,
             request=http_request,
         )
 
         return IssueCredentialResponse(
-            credential=CredentialResponse(
-                said=cred_info.said,
-                issuer_aid=cred_info.issuer_aid,
-                recipient_aid=cred_info.recipient_aid,
-                registry_key=cred_info.registry_key,
-                schema_said=cred_info.schema_said,
-                issuance_dt=cred_info.issuance_dt,
-                status=cred_info.status,
-                revocation_dt=cred_info.revocation_dt,
-            ),
-            publish_results=publish_results,
+            credential=_agent_to_issuer_credential(agent_cred),
+            publish_results=None,  # Agent handles publishing internally
         )
 
+    except KeriAgentUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -396,11 +396,11 @@ async def list_credentials(
         if not target_org:
             raise HTTPException(status_code=404, detail="Organization not found")
 
-    issuer = await get_credential_issuer()
-
     try:
-        # Get all credentials from KERI
-        all_credentials = await issuer.list_credentials(
+        client = get_keri_client()
+
+        # Get all credentials from KERI Agent
+        all_credentials = await client.list_credentials(
             registry_key=registry_key,
             status=status,
         )
@@ -481,15 +481,8 @@ async def list_credentials(
                 elif perspective_org_aid and c.recipient_aid == perspective_org_aid:
                     relationship = "subject"
 
-            result.append(CredentialResponse(
-                said=c.said,
-                issuer_aid=c.issuer_aid,
-                recipient_aid=c.recipient_aid,
-                registry_key=c.registry_key,
-                schema_said=c.schema_said,
-                issuance_dt=c.issuance_dt,
-                status=c.status,
-                revocation_dt=c.revocation_dt,
+            result.append(_agent_to_issuer_credential(
+                c,
                 relationship=relationship,
                 issuer_name=aid_to_name.get(c.issuer_aid),
                 recipient_name=aid_to_name.get(c.recipient_aid) if c.recipient_aid else None,
@@ -499,6 +492,8 @@ async def list_credentials(
             credentials=result,
             count=len(result),
         )
+    except KeriAgentUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:
@@ -521,34 +516,35 @@ async def get_credential(
     # Sprint 41: Check role access (system readonly+ OR org dossier_manager+)
     check_credential_access_role(principal)
 
-    issuer = await get_credential_issuer()
-
     try:
-        cred_info = await issuer.get_credential(said)
+        client = get_keri_client()
+        agent_cred = await client.get_credential(said)
 
-        if cred_info is None:
+        if agent_cred is None:
             raise HTTPException(status_code=404, detail=f"Credential not found: {said}")
 
         # Sprint 41: Check organization access (issued or subject)
-        if not can_access_credential(db, principal, said, recipient_aid=cred_info.recipient_aid):
+        if not can_access_credential(db, principal, said, recipient_aid=agent_cred.recipient_aid):
             raise HTTPException(
                 status_code=403,
                 detail="Access denied to this credential",
             )
 
         return CredentialDetailResponse(
-            said=cred_info.said,
-            issuer_aid=cred_info.issuer_aid,
-            recipient_aid=cred_info.recipient_aid,
-            registry_key=cred_info.registry_key,
-            schema_said=cred_info.schema_said,
-            issuance_dt=cred_info.issuance_dt,
-            status=cred_info.status,
-            revocation_dt=cred_info.revocation_dt,
-            attributes=cred_info.attributes,
-            edges=cred_info.edges,
-            rules=cred_info.rules,
+            said=agent_cred.said,
+            issuer_aid=agent_cred.issuer_aid,
+            recipient_aid=agent_cred.recipient_aid,
+            registry_key=agent_cred.registry_key,
+            schema_said=agent_cred.schema_said,
+            issuance_dt=agent_cred.issuance_dt,
+            status=agent_cred.status,
+            revocation_dt=agent_cred.revocation_dt,
+            attributes=agent_cred.attributes,
+            edges=agent_cred.edges,
+            rules=agent_cred.rules,
         )
+    except KeriAgentUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:
@@ -566,7 +562,7 @@ async def revoke_credential(
 ) -> RevokeCredentialResponse:
     """Revoke an issued credential.
 
-    Creates TEL revocation event and updates credential status.
+    The KERI Agent handles TEL revocation event creation and witness publishing.
 
     **Sprint 41:** Non-admin users can only revoke credentials owned by their organization.
 
@@ -575,7 +571,6 @@ async def revoke_credential(
     # Sprint 41: Check role access (system admin OR org administrator)
     check_credential_admin_role(principal)
 
-    issuer = await get_credential_issuer()
     audit = get_audit_logger()
 
     # Sprint 41: Check organization access
@@ -586,33 +581,8 @@ async def revoke_credential(
         )
 
     try:
-        cred_info = await issuer.revoke_credential(said)
-
-        # Publish anchoring IXN event to witnesses
-        publish_results: list[WitnessPublishResult] | None = None
-        if request.publish_to_witnesses and WITNESS_IURLS:
-            try:
-                ixn_bytes = await issuer.get_anchor_ixn_bytes(said)
-                publisher = get_witness_publisher()
-                result = await publisher.publish_event(cred_info.issuer_aid, ixn_bytes)
-
-                publish_results = [
-                    WitnessPublishResult(
-                        url=wr.url,
-                        success=wr.success,
-                        error=wr.error,
-                    )
-                    for wr in result.witnesses
-                ]
-
-                if not result.threshold_met:
-                    log.warning(
-                        f"Witness threshold not met for credential revocation {said[:16]}...: "
-                        f"{result.success_count}/{result.total_count}"
-                    )
-            except Exception as e:
-                log.error(f"Failed to publish revocation anchor ixn to witnesses: {e}")
-                # Don't fail revocation if witness publishing fails
+        client = get_keri_client()
+        agent_cred = await client.revoke_credential(said)
 
         # Audit log the revocation
         audit.log_access(
@@ -624,28 +594,16 @@ async def revoke_credential(
         )
 
         return RevokeCredentialResponse(
-            credential=CredentialResponse(
-                said=cred_info.said,
-                issuer_aid=cred_info.issuer_aid,
-                recipient_aid=cred_info.recipient_aid,
-                registry_key=cred_info.registry_key,
-                schema_said=cred_info.schema_said,
-                issuance_dt=cred_info.issuance_dt,
-                status=cred_info.status,
-                revocation_dt=cred_info.revocation_dt,
-            ),
-            publish_results=publish_results,
+            credential=_agent_to_issuer_credential(agent_cred),
+            publish_results=None,  # Agent handles publishing internally
         )
 
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except LikelyDuplicitousError:
-        # Credential was already revoked - keripy sees the second rev as duplicate
-        raise HTTPException(status_code=400, detail=f"Credential already revoked: {said}")
-    except ValidationError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except KeriAgentUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except HTTPException:
         raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         log.exception(f"Failed to revoke credential {said}: {e}")
         raise HTTPException(status_code=500, detail="Internal error revoking credential")
@@ -671,13 +629,14 @@ async def delete_credential(
     # Sprint 41: Check role access (system admin OR org administrator)
     check_credential_admin_role(principal)
 
-    issuer = await get_credential_issuer()
     audit = get_audit_logger()
 
     try:
+        client = get_keri_client()
+
         # Verify credential exists before deletion
-        cred_info = await issuer.get_credential(said)
-        if cred_info is None:
+        agent_cred = await client.get_credential(said)
+        if agent_cred is None:
             raise HTTPException(status_code=404, detail=f"Credential not found: {said}")
 
         # Sprint 41: Check organization access
@@ -687,8 +646,8 @@ async def delete_credential(
                 detail="Access denied to this credential",
             )
 
-        # Delete the credential
-        await issuer.delete_credential(said)
+        # Delete via KERI Agent
+        await client.delete_credential(said)
 
         # Audit log the deletion
         audit.log_access(
@@ -706,10 +665,12 @@ async def delete_credential(
             message="Credential removed from local storage. Note: The credential still exists in the KERI ecosystem.",
         )
 
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except KeriAgentUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except HTTPException:
         raise
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         log.exception(f"Failed to delete credential {said}: {e}")
         raise HTTPException(status_code=500, detail="Internal error deleting credential")

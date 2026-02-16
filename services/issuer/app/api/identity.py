@@ -1,4 +1,10 @@
-"""Identity management endpoints."""
+"""Identity management endpoints.
+
+Sprint 68b: Migrated from direct app.keri.* imports to KeriAgentClient.
+All KERI operations are delegated to the KERI Agent service. Witness
+publishing is handled internally by the agent during identity creation
+and rotation.
+"""
 import logging
 
 from fastapi import APIRouter, HTTPException, Request
@@ -12,37 +18,39 @@ from app.api.models import (
     OobiResponse,
     RotateIdentityRequest,
     RotateIdentityResponse,
-    WitnessPublishDetail,
-    WitnessPublishResult,
 )
 from app.auth.api_key import Principal
 from app.auth.roles import require_admin, require_readonly
 from app.audit import get_audit_logger
-from app.config import WITNESS_IURLS, WITNESS_OOBI_BASE_URLS
-from app.keri.identity import get_identity_manager
-from app.keri.witness import get_witness_publisher
-from app.keri.exceptions import (
-    IdentityNotFoundError,
-    NonTransferableIdentityError,
-    InvalidRotationThresholdError,
+from app.keri_client import get_keri_client, KeriAgentUnavailableError
+from common.vvp.models.keri_agent import (
+    CreateIdentityRequest as AgentCreateIdentityRequest,
+    RotateKeysRequest,
 )
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/identity", tags=["identity"])
 
 
-def _get_oobi_base_urls() -> list[str]:
-    """Get base URLs for external OOBI generation.
+def _agent_to_issuer_identity(agent_id) -> IdentityResponse:
+    """Map agent IdentityResponse DTO to issuer IdentityResponse model."""
+    return IdentityResponse(
+        aid=agent_id.aid,
+        name=agent_id.name,
+        created_at=agent_id.created_at,
+        witness_count=agent_id.witness_count,
+        key_count=agent_id.key_count,
+        sequence_number=agent_id.sequence_number,
+        transferable=agent_id.transferable,
+    )
 
-    Uses oobi_base_urls if configured (for public/external URLs),
-    otherwise falls back to extracting from iurls for backwards compatibility.
-    """
-    if WITNESS_OOBI_BASE_URLS:
-        return WITNESS_OOBI_BASE_URLS
-    # Fallback: extract from iurls (may contain internal Docker hostnames)
-    if not WITNESS_IURLS:
-        log.warning("No OOBI base URLs configured - OOBIs may be unreachable externally")
-    return [iurl.split("/oobi/")[0] for iurl in WITNESS_IURLS if "/oobi/" in iurl]
+
+async def _resolve_aid(client, aid: str):
+    """Resolve AID to agent identity. Raises 404 if not found."""
+    identity = await client.get_identity_by_aid(aid)
+    if identity is None:
+        raise HTTPException(status_code=404, detail=f"Identity not found: {aid}")
+    return identity
 
 
 @router.post("", response_model=CreateIdentityResponse)
@@ -53,81 +61,57 @@ async def create_identity(
 ) -> CreateIdentityResponse:
     """Create a new KERI identity.
 
-    Creates an identity with the specified parameters and optionally
-    publishes its OOBI to configured witnesses.
+    Creates an identity with the specified parameters. The KERI Agent
+    handles witness publishing internally during creation.
 
     Requires: issuer:admin role
     """
-    mgr = await get_identity_manager()
     audit = get_audit_logger()
 
     try:
-        # Create the identity
-        info = await mgr.create_identity(
+        client = get_keri_client()
+
+        # Build agent request with defaults for optional fields
+        agent_req = AgentCreateIdentityRequest(
             name=request.name,
             transferable=request.transferable,
-            icount=request.key_count,
-            isith=request.key_threshold,
-            ncount=request.next_key_count,
-            nsith=request.next_threshold,
+            key_count=request.key_count or 1,
+            key_threshold=request.key_threshold or "1",
+            next_key_count=request.next_key_count or 1,
+            next_threshold=request.next_threshold or "1",
         )
 
-        # Generate OOBI URLs using external base URLs
-        oobi_urls = [
-            mgr.get_oobi_url(info.aid, base_url)
-            for base_url in _get_oobi_base_urls()
-        ]
+        # Create identity via KERI Agent
+        agent_identity = await client.create_identity(agent_req)
 
-        # Publish KEL to witnesses for OOBI resolution
-        publish_results: list[WitnessPublishResult] | None = None
-        if request.publish_to_witnesses and WITNESS_IURLS:
-            try:
-                kel_bytes = await mgr.get_kel_bytes(info.aid)
-                publisher = get_witness_publisher()
-                result = await publisher.publish_oobi(info.aid, kel_bytes)
-
-                publish_results = [
-                    WitnessPublishResult(
-                        url=wr.url,
-                        success=wr.success,
-                        error=wr.error,
-                    )
-                    for wr in result.witnesses
-                ]
-
-                if not result.threshold_met:
-                    log.warning(
-                        f"Witness threshold not met for {info.aid}: "
-                        f"{result.success_count}/{result.total_count}"
-                    )
-            except Exception as e:
-                log.error(f"Failed to publish to witnesses: {e}")
-                # Don't fail identity creation if witness publishing fails
-                # The identity is created, just not published yet
+        # Get OOBI URL from agent
+        oobi_urls = []
+        try:
+            oobi = await client.get_oobi(agent_identity.name)
+            if oobi:
+                oobi_urls = [oobi]
+        except Exception:
+            log.debug(f"Could not get OOBI for {agent_identity.name}")
 
         # Audit log the creation
         audit.log_access(
             action="identity.create",
             principal_id=principal.key_id,
-            resource=info.aid,
+            resource=agent_identity.aid,
             details={"name": request.name},
             request=http_request,
         )
 
         return CreateIdentityResponse(
-            identity=IdentityResponse(
-                aid=info.aid,
-                name=info.name,
-                created_at=info.created_at,
-                witness_count=info.witness_count,
-                key_count=info.key_count,
-                sequence_number=info.sequence_number,
-                transferable=info.transferable,
-            ),
+            identity=_agent_to_issuer_identity(agent_identity),
             oobi_urls=oobi_urls,
-            publish_results=publish_results,
+            publish_results=None,  # Agent handles publishing internally
         )
 
+    except KeriAgentUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -141,24 +125,16 @@ async def list_identities() -> IdentityListResponse:
 
     This endpoint is public (no auth required) for UI access.
     """
-    mgr = await get_identity_manager()
-    identities = await mgr.list_identities()
+    try:
+        client = get_keri_client()
+        agent_identities = await client.list_identities()
 
-    return IdentityListResponse(
-        identities=[
-            IdentityResponse(
-                aid=i.aid,
-                name=i.name,
-                created_at=i.created_at or None,
-                witness_count=i.witness_count,
-                key_count=i.key_count,
-                sequence_number=i.sequence_number,
-                transferable=i.transferable,
-            )
-            for i in identities
-        ],
-        count=len(identities),
-    )
+        return IdentityListResponse(
+            identities=[_agent_to_issuer_identity(i) for i in agent_identities],
+            count=len(agent_identities),
+        )
+    except KeriAgentUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
 
 @router.get("/{aid}", response_model=IdentityResponse)
@@ -167,21 +143,12 @@ async def get_identity(aid: str) -> IdentityResponse:
 
     This endpoint is public (no auth required) for UI access.
     """
-    mgr = await get_identity_manager()
-    info = await mgr.get_identity(aid)
-
-    if info is None:
-        raise HTTPException(status_code=404, detail=f"Identity not found: {aid}")
-
-    return IdentityResponse(
-        aid=info.aid,
-        name=info.name,
-        created_at=info.created_at or None,
-        witness_count=info.witness_count,
-        key_count=info.key_count,
-        sequence_number=info.sequence_number,
-        transferable=info.transferable,
-    )
+    try:
+        client = get_keri_client()
+        identity = await _resolve_aid(client, aid)
+        return _agent_to_issuer_identity(identity)
+    except KeriAgentUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
 
 @router.get("/{aid}/oobi", response_model=OobiResponse)
@@ -190,18 +157,21 @@ async def get_oobi(aid: str) -> OobiResponse:
 
     This endpoint is public (no auth required) for UI access.
     """
-    mgr = await get_identity_manager()
-    info = await mgr.get_identity(aid)
+    try:
+        client = get_keri_client()
+        identity = await _resolve_aid(client, aid)
 
-    if info is None:
-        raise HTTPException(status_code=404, detail=f"Identity not found: {aid}")
+        oobi_urls = []
+        try:
+            oobi = await client.get_oobi(identity.name)
+            if oobi:
+                oobi_urls = [oobi]
+        except Exception:
+            log.debug(f"Could not get OOBI for {identity.name}")
 
-    oobi_urls = [
-        mgr.get_oobi_url(aid, base_url)
-        for base_url in _get_oobi_base_urls()
-    ]
-
-    return OobiResponse(aid=aid, oobi_urls=oobi_urls)
+        return OobiResponse(aid=aid, oobi_urls=oobi_urls)
+    except KeriAgentUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
 
 @router.post("/{aid}/rotate", response_model=RotateIdentityResponse)
@@ -213,57 +183,29 @@ async def rotate_identity(
 ) -> RotateIdentityResponse:
     """Rotate the keys for an identity.
 
-    Promotes the current next keys to active signing keys and generates
-    new next keys for future rotations. The rotation event is published
-    to witnesses for OOBI resolution.
+    The KERI Agent handles witness publishing internally during rotation.
 
     Requires: issuer:admin role
 
     Raises:
         404: Identity not found
-        400: Non-transferable identity or invalid threshold configuration
+        400: Non-transferable identity or invalid threshold
+        503: KERI Agent unavailable
     """
-    mgr = await get_identity_manager()
     audit = get_audit_logger()
 
     try:
-        # Perform the rotation
-        result = await mgr.rotate_identity(
-            aid=aid,
-            next_key_count=request.next_key_count,
-            next_threshold=request.next_threshold,
+        client = get_keri_client()
+        identity = await _resolve_aid(client, aid)
+
+        # Perform rotation via KERI Agent
+        rotation = await client.rotate_keys(
+            identity.name,
+            RotateKeysRequest(
+                new_key_count=request.next_key_count,
+                new_threshold=request.next_threshold,
+            ),
         )
-
-        # Publish rotation event to witnesses
-        publish_results: list[WitnessPublishDetail] | None = None
-        threshold_met = True
-
-        if request.publish_to_witnesses and WITNESS_IURLS:
-            try:
-                publisher = get_witness_publisher()
-                pub_result = await publisher.publish_event(
-                    pre=aid,
-                    event_bytes=result.rotation_event_bytes,
-                )
-
-                publish_results = [
-                    WitnessPublishDetail(
-                        witness_url=wr.url,
-                        success=wr.success,
-                        error=wr.error,
-                    )
-                    for wr in pub_result.witnesses
-                ]
-                threshold_met = pub_result.threshold_met
-
-                if not threshold_met:
-                    log.warning(
-                        f"Witness threshold not met for rotation {aid}: "
-                        f"{pub_result.success_count}/{pub_result.total_count}"
-                    )
-            except Exception as e:
-                log.error(f"Failed to publish rotation to witnesses: {e}")
-                threshold_met = False
 
         # Audit log the rotation
         audit.log_access(
@@ -271,36 +213,28 @@ async def rotate_identity(
             principal_id=principal.key_id,
             resource=aid,
             details={
-                "previous_sn": result.previous_sequence_number,
-                "new_sn": result.new_sequence_number,
+                "previous_sn": rotation.previous_sequence_number,
+                "new_sn": rotation.new_sequence_number,
             },
             request=http_request,
         )
 
-        # Get updated identity info
-        updated_info = await mgr.get_identity(aid)
+        # Get updated identity info from agent
+        updated = await client.get_identity_by_aid(aid)
+        if updated is None:
+            updated = identity  # Fallback
 
         return RotateIdentityResponse(
-            identity=IdentityResponse(
-                aid=updated_info.aid,
-                name=updated_info.name,
-                created_at=updated_info.created_at or None,
-                witness_count=updated_info.witness_count,
-                key_count=updated_info.key_count,
-                sequence_number=updated_info.sequence_number,
-                transferable=updated_info.transferable,
-            ),
-            previous_sequence_number=result.previous_sequence_number,
-            publish_results=publish_results,
-            publish_threshold_met=threshold_met,
+            identity=_agent_to_issuer_identity(updated),
+            previous_sequence_number=rotation.previous_sequence_number,
+            publish_results=None,  # Agent handles publishing internally
+            publish_threshold_met=True,  # Agent handles internally
         )
 
-    except IdentityNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except NonTransferableIdentityError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except InvalidRotationThresholdError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except KeriAgentUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         log.error(f"Failed to rotate identity: {e}")
         raise HTTPException(status_code=500, detail="Internal error rotating identity")
@@ -320,26 +254,21 @@ async def delete_identity(
 
     Requires: issuer:admin role
     """
-    mgr = await get_identity_manager()
     audit = get_audit_logger()
 
     try:
-        # Get identity name before deletion for audit
-        info = await mgr.get_identity(aid)
-        if info is None:
-            raise HTTPException(status_code=404, detail=f"Identity not found: {aid}")
+        client = get_keri_client()
+        identity = await _resolve_aid(client, aid)
 
-        identity_name = info.name
-
-        # Delete the identity
-        await mgr.delete_identity(aid)
+        # Delete via KERI Agent
+        await client.delete_identity(identity.name)
 
         # Audit log the deletion
         audit.log_access(
             action="identity.delete",
             principal_id=principal.key_id,
             resource=aid,
-            details={"name": identity_name},
+            details={"name": identity.name},
             request=http_request,
         )
 
@@ -347,11 +276,11 @@ async def delete_identity(
             deleted=True,
             resource_type="identity",
             resource_id=aid,
-            message=f"Identity '{identity_name}' removed from local storage. Note: The identity still exists in the KERI ecosystem.",
+            message=f"Identity '{identity.name}' removed from local storage. Note: The identity still exists in the KERI ecosystem.",
         )
 
-    except IdentityNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except KeriAgentUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:

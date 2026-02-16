@@ -2,17 +2,16 @@
 
 Assembles credentials into complete dossiers by walking edge references
 and collecting all dependent credentials in the chain.
+
+Sprint 68b: Migrated from direct app.keri.* imports to KeriAgentClient.
+All KERI operations are delegated to the KERI Agent service.
 """
 
 import logging
 from dataclasses import dataclass, field
 
-from keri.core import serdering
-from keri.db import dbing
-
 from app.dossier.exceptions import DossierBuildError
-from app.keri.issuer import CredentialInfo, get_credential_issuer
-from app.keri.registry import get_registry_manager
+from app.keri_client import get_keri_client
 
 log = logging.getLogger(__name__)
 
@@ -61,10 +60,10 @@ class DossierBuilder:
         Raises:
             DossierBuildError: If root not found, cycle detected, or other error
         """
-        issuer = await get_credential_issuer()
+        client = get_keri_client()
 
         # Verify root exists
-        root_cred = await issuer.get_credential(root_said)
+        root_cred = await client.get_credential(root_said)
         if root_cred is None:
             raise DossierBuildError(f"Root credential not found", credential_said=root_said)
 
@@ -82,16 +81,19 @@ class DossierBuilder:
 
         # Collect CESR bytes and JSON for each credential
         for said in credential_saids:
-            cesr_bytes = await issuer.get_credential_bytes(said)
-            if cesr_bytes is None:
+            try:
+                cesr_bytes = await client.get_credential_cesr(said)
+                if cesr_bytes:
+                    content.credentials[said] = cesr_bytes
+                else:
+                    content.warnings.append(f"Could not get CESR for credential {said}")
+            except Exception:
                 content.warnings.append(f"Could not get CESR for credential {said}")
-                continue
-            content.credentials[said] = cesr_bytes
 
-            # Also get the JSON representation for JSON format output
-            cred_info = await issuer.get_credential(said)
+            # Build JSON representation from credential attributes
+            cred_info = await client.get_credential(said)
             if cred_info:
-                content.credentials_json[said] = await self._credential_to_json(said)
+                content.credentials_json[said] = self._credential_to_json(cred_info)
 
         # Collect TEL events if requested
         if include_tel:
@@ -128,11 +130,11 @@ class DossierBuilder:
         if not root_saids:
             raise DossierBuildError("No root credentials provided")
 
-        issuer = await get_credential_issuer()
+        client = get_keri_client()
 
         # Verify all roots exist
         for said in root_saids:
-            root_cred = await issuer.get_credential(said)
+            root_cred = await client.get_credential(said)
             if root_cred is None:
                 raise DossierBuildError(f"Root credential not found", credential_said=said)
 
@@ -161,15 +163,18 @@ class DossierBuilder:
 
         # Collect CESR bytes and JSON
         for said in all_saids:
-            cesr_bytes = await issuer.get_credential_bytes(said)
-            if cesr_bytes is None:
+            try:
+                cesr_bytes = await client.get_credential_cesr(said)
+                if cesr_bytes:
+                    content.credentials[said] = cesr_bytes
+                else:
+                    content.warnings.append(f"Could not get CESR for credential {said}")
+            except Exception:
                 content.warnings.append(f"Could not get CESR for credential {said}")
-                continue
-            content.credentials[said] = cesr_bytes
 
-            cred_info = await issuer.get_credential(said)
+            cred_info = await client.get_credential(said)
             if cred_info:
-                content.credentials_json[said] = await self._credential_to_json(said)
+                content.credentials_json[said] = self._credential_to_json(cred_info)
 
         # Collect TEL events
         if include_tel:
@@ -201,7 +206,7 @@ class DossierBuilder:
         Raises:
             DossierBuildError: If cycle detected or max depth exceeded
         """
-        issuer = await get_credential_issuer()
+        client = get_keri_client()
         visited: set[str] = set()
         in_stack: set[str] = set()  # For cycle detection
         result: list[str] = []
@@ -226,7 +231,7 @@ class DossierBuilder:
             in_stack.add(said)
 
             # Get credential info
-            cred_info = await issuer.get_credential(said)
+            cred_info = await client.get_credential(said)
             if cred_info is None:
                 warnings.append(f"Edge target not found: {said}")
                 in_stack.discard(said)
@@ -275,44 +280,40 @@ class DossierBuilder:
     async def _get_tel_event(self, credential_said: str) -> bytes | None:
         """Get TEL issuance event for a credential.
 
-        Args:
-            credential_said: SAID of the credential
-
-        Returns:
-            CESR-encoded TEL iss event, or None if not found
-        """
-        try:
-            registry_mgr = await get_registry_manager()
-            reger = registry_mgr.regery.reger
-
-            # Clone TEL event at sn=0 (issuance)
-            tel_bytes = reger.cloneTvtAt(credential_said, sn=0)
-            return bytes(tel_bytes) if tel_bytes else None
-        except Exception as e:
-            log.warning(f"Could not get TEL for {credential_said}: {e}")
-            return None
-
-    async def _credential_to_json(self, credential_said: str) -> dict:
-        """Get credential as JSON dict for JSON format output.
+        Sprint 68b: Per-credential TEL retrieval is not yet available via the
+        KERI Agent. Returns None until the agent exposes this endpoint.
 
         Args:
             credential_said: SAID of the credential
 
         Returns:
-            Credential as dictionary
+            CESR-encoded TEL iss event, or None if not available
         """
-        try:
-            registry_mgr = await get_registry_manager()
-            reger = registry_mgr.regery.reger
+        # TODO: Sprint 68b — add per-credential TEL endpoint to KERI Agent
+        return None
 
-            creder = reger.creds.get(keys=(credential_said,))
-            if creder is None:
-                return {}
+    def _credential_to_json(self, cred_info) -> dict:
+        """Build credential JSON dict from a CredentialResponse.
 
-            return dict(creder.sad)
-        except Exception as e:
-            log.warning(f"Could not get JSON for {credential_said}: {e}")
-            return {}
+        Reconstructs the ACDC-like JSON structure from the agent DTO fields.
+
+        Args:
+            cred_info: CredentialResponse from the KERI Agent
+
+        Returns:
+            Credential as dictionary with 'd', 'i', 's', 'a' and optional 'e', 'r' keys
+        """
+        result = {
+            "d": cred_info.said,
+            "i": cred_info.issuer_aid,
+            "s": cred_info.schema_said,
+            "a": cred_info.attributes,
+        }
+        if cred_info.edges:
+            result["e"] = cred_info.edges
+        if cred_info.rules:
+            result["r"] = cred_info.rules
+        return result
 
 
 # Module-level singleton

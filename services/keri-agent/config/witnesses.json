@@ -1,0 +1,29 @@
+{
+  "dt": "2026-01-31T00:00:00.000000+00:00",
+  "comment": "Local development witness configuration for VVP KERI Agent (Sprint 68)",
+  "iurls": [
+    "http://witnesses:5642/oobi/BBilc4-L3tFUnfM_wJr4S4OJanAv_VmF_dJNN6vkf2Ha/controller",
+    "http://witnesses:5643/oobi/BLskRTInXnMxWaGqcpSyMgo0nYbalW99cGZESrz3zapM/controller",
+    "http://witnesses:5644/oobi/BIKKuvBwpmDVA4Ds-EpL5bt9OqPzWPja2LigFYZN2YfX/controller"
+  ],
+  "oobi_base_urls": [
+    "http://localhost:5642",
+    "http://localhost:5643",
+    "http://localhost:5644"
+  ],
+  "witness_aids": {
+    "wan": "BBilc4-L3tFUnfM_wJr4S4OJanAv_VmF_dJNN6vkf2Ha",
+    "wil": "BLskRTInXnMxWaGqcpSyMgo0nYbalW99cGZESrz3zapM",
+    "wes": "BIKKuvBwpmDVA4Ds-EpL5bt9OqPzWPja2LigFYZN2YfX"
+  },
+  "ports": {
+    "wan": {"tcp": 5632, "http": 5642},
+    "wil": {"tcp": 5633, "http": 5643},
+    "wes": {"tcp": 5634, "http": 5644}
+  },
+  "notes": {
+    "docker_urls": "Use 'witnesses' hostname when running in Docker network",
+    "local_urls": "Use '127.0.0.1' when running witnesses locally",
+    "deterministic": "AIDs are deterministic from kli witness demo salts"
+  }
+}

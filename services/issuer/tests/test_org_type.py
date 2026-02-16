@@ -165,33 +165,26 @@ async def test_list_orgs_includes_org_type(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_create_org_defaults_to_regular(client: AsyncClient):
-    """POST /organizations creates org with regular type by default."""
-    from unittest.mock import patch, AsyncMock
+    """POST /organizations creates org with regular type by default.
+
+    Sprint 68b: Uses MockKeriAgentClient (installed by client fixture) for
+    identity/registry creation. Only mock_vlei and trust_anchor_manager
+    need explicit patching since they're not behind the keri_client.
+    """
+    from unittest.mock import patch, AsyncMock, MagicMock
 
     name = unique_name("api-create")
 
-    # Mock KERI infrastructure
-    mock_identity = AsyncMock()
-    mock_identity.aid = f"E{uuid.uuid4().hex[:43]}"
-    mock_identity.name = "test-identity"
+    # mock_vlei is still accessed directly (not via keri_client)
+    # trust_anchor_manager.get_mock_vlei_state() provides qvi_aid for LE credential recording
+    mock_tam_state = MagicMock()
+    mock_tam_state.qvi_aid = f"E{uuid.uuid4().hex[:43]}"
 
-    mock_registry = AsyncMock()
-    mock_registry.registry_key = f"E{uuid.uuid4().hex[:43]}"
+    with patch("app.api.organization.get_mock_vlei_manager") as mock_vlei, \
+         patch("app.org.trust_anchors.get_trust_anchor_manager") as mock_tam:
 
-    # KERI identity/registry/witness are imported inside the function body,
-    # so patch at source. get_mock_vlei_manager is imported at module level
-    # in organization.py, so patch at the consumer module.
-    with patch("app.keri.identity.get_identity_manager", new_callable=AsyncMock) as mock_id_mgr, \
-         patch("app.keri.registry.get_registry_manager", new_callable=AsyncMock) as mock_reg_mgr, \
-         patch("app.keri.witness.get_witness_publisher") as mock_pub, \
-         patch("app.api.organization.get_mock_vlei_manager") as mock_vlei:
-
-        mock_id_mgr.return_value.create_identity = AsyncMock(return_value=mock_identity)
-        mock_id_mgr.return_value.get_kel_bytes = AsyncMock(return_value=b"kel")
-        mock_reg_mgr.return_value.create_registry = AsyncMock(return_value=mock_registry)
-        mock_pub.return_value.publish_oobi = AsyncMock()
         mock_vlei.return_value.issue_le_credential = AsyncMock(return_value=f"E{uuid.uuid4().hex[:43]}")
-        mock_vlei.return_value.state = type("S", (), {"qvi_aid": f"E{uuid.uuid4().hex[:43]}"})()
+        mock_tam.return_value.get_mock_vlei_state.return_value = mock_tam_state
 
         response = await client.post("/organizations", json={"name": name})
 
@@ -346,8 +339,10 @@ def test_name_collision_safety():
     )
 
     # Patch MOCK_GLEIF_NAME to match the collision name
+    # Sprint 68b: promotion delegates to trust_anchors.py, so patch there too
     from unittest.mock import patch
-    with patch("app.org.mock_vlei.MOCK_GLEIF_NAME", collision_name):
+    with patch("app.org.mock_vlei.MOCK_GLEIF_NAME", collision_name), \
+         patch("app.org.trust_anchors.MOCK_GLEIF_NAME", collision_name):
         mgr._promote_trust_anchors()
 
     # The regular org should be untouched

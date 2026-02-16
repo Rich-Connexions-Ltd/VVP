@@ -451,12 +451,15 @@ async def test_revoke_credential(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_revoke_credential_not_found(client: AsyncClient):
-    """Test 400 when credential doesn't exist."""
+    """Test 404 when credential doesn't exist.
+
+    Sprint 68b: Changed from 400 to 404 — agent returns proper 404 for unknown credentials.
+    """
     response = await client.post(
         "/credential/Enonexistent12345678901234567890123456789012/revoke",
         json={"publish_to_witnesses": False},
     )
-    assert response.status_code == 400
+    assert response.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -595,6 +598,7 @@ async def test_list_credentials_readonly_allowed(
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Sprint 68b: get_anchor_ixn_bytes moved to KERI Agent service")
 async def test_get_anchor_ixn_bytes_for_issued_credential(client: AsyncClient):
     """Test that get_anchor_ixn_bytes returns a valid KEL event for issued credential."""
     from app.keri.issuer import get_credential_issuer
@@ -632,6 +636,7 @@ async def test_get_anchor_ixn_bytes_for_issued_credential(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Sprint 68b: get_anchor_ixn_bytes moved to KERI Agent service")
 async def test_get_anchor_ixn_bytes_for_revoked_credential(client: AsyncClient):
     """Test that get_anchor_ixn_bytes returns revocation anchor after revoke."""
     from app.keri.issuer import get_credential_issuer

@@ -21,9 +21,10 @@ from app.config import (
     MOCK_VLEI_ENABLED,
     get_auth_exempt_paths,
 )
-from app.keri.identity import get_identity_manager, close_identity_manager
-from app.keri.issuer import get_credential_issuer, close_credential_issuer
-from app.keri.registry import get_registry_manager, close_registry_manager
+from app.keri.identity import close_identity_manager
+from app.keri.issuer import close_credential_issuer
+from app.keri.registry import close_registry_manager
+from app.keri_client import get_keri_client, close_keri_client
 
 # Web directory for static files
 WEB_DIR = Path(__file__).parent.parent / "web"
@@ -45,12 +46,42 @@ async def _session_cleanup_task():
             log.error(f"Session cleanup error: {e}")
 
 
+async def _bootstrap_probe():
+    """Background task: poll KERI Agent until healthy, then sync trust anchors.
+
+    Sprint 68b: One-shot probe. Polls agent GET /bootstrap/status every 5s
+    (10s on error). Stops after first successful sync. The issuer starts
+    immediately; this probe runs in the background so non-KERI routes work
+    while the agent is still starting up.
+    """
+    client = get_keri_client()
+    while True:
+        try:
+            if await client.is_healthy():
+                status = await client.get_bootstrap_status()
+                if status.initialized:
+                    from app.org.trust_anchors import get_trust_anchor_manager
+                    tam = get_trust_anchor_manager()
+                    tam.sync_from_agent(status)
+                    log.info("Trust anchors synced from KERI Agent")
+                    return  # One-shot: done
+                else:
+                    log.debug("KERI Agent not yet initialized, retrying...")
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.warning(f"Bootstrap probe failed: {e}")
+            await asyncio.sleep(10)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler for startup/shutdown."""
-    # Startup: Initialize managers
+    # Startup
     log.info("Starting VVP Issuer service...")
     cleanup_task = None
+    bootstrap_task = None
 
     try:
         # Initialize database (Sprint 41: Multi-tenancy)
@@ -68,41 +99,48 @@ async def lifespan(app: FastAPI):
         else:
             log.warning("Auth disabled: VVP_AUTH_ENABLED=false")
 
-        await get_identity_manager()
-        await get_registry_manager()
-        await get_credential_issuer()
+        # Sprint 68b: Initialize KERI Agent client
+        get_keri_client()
+        log.info("KERI Agent client initialized")
 
-        # Initialize mock vLEI infrastructure if enabled (Sprint 41)
+        # Sprint 68b: Start background bootstrap probe to sync trust anchors
         if MOCK_VLEI_ENABLED:
-            from app.org.mock_vlei import get_mock_vlei_manager
-            mock_vlei = get_mock_vlei_manager()
-            await mock_vlei.initialize()
-            log.info("Mock vLEI infrastructure initialized")
+            bootstrap_task = asyncio.create_task(_bootstrap_probe())
+            log.info("Bootstrap probe started (polling KERI Agent)")
         else:
             log.info("Mock vLEI disabled (VVP_MOCK_VLEI_ENABLED=false)")
 
         log.info("VVP Issuer service started")
     except Exception as e:
-        log.error(f"Failed to initialize managers: {e}")
+        log.error(f"Failed to initialize: {e}")
         raise
 
     yield
 
-    # Shutdown: Close managers
+    # Shutdown
     log.info("Shutting down VVP Issuer service...")
 
-    # Cancel session cleanup task
-    if cleanup_task:
-        cleanup_task.cancel()
-        try:
-            await cleanup_task
-        except asyncio.CancelledError:
-            pass
-        log.info("Session cleanup task stopped")
+    # Cancel background tasks
+    for task, name in [
+        (cleanup_task, "Session cleanup"),
+        (bootstrap_task, "Bootstrap probe"),
+    ]:
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            log.info(f"{name} task stopped")
 
+    # Close KERI Agent client (Sprint 68b)
+    await close_keri_client()
+
+    # Close legacy KERI managers (still used by routers until migrated)
     await close_credential_issuer()
     await close_registry_manager()
     await close_identity_manager()
+
     log.info("VVP Issuer service stopped")
 
 

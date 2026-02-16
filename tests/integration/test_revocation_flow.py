@@ -16,6 +16,7 @@ class TestRevocationFlow:
     """Test credential revocation detection."""
 
     @pytest.mark.asyncio
+    @pytest.mark.issuer
     async def test_revoke_credential_updates_status(
         self,
         issuer_client: IssuerClient,
@@ -49,6 +50,7 @@ class TestRevocationFlow:
         assert revoke_result["credential"]["revocation_dt"] is not None
 
     @pytest.mark.asyncio
+    @pytest.mark.issuer
     async def test_revoked_credential_in_dossier(
         self,
         issuer_client: IssuerClient,
@@ -87,6 +89,7 @@ class TestRevocationFlow:
         assert len(dossier) >= 1, "Dossier should contain credential"
 
     @pytest.mark.asyncio
+    @pytest.mark.e2e
     async def test_revoked_credential_rejected_by_verifier(
         self,
         issuer_client: IssuerClient,
@@ -177,6 +180,7 @@ class TestRevocationFlow:
         assert result.overall_status in ("VALID", "INVALID", "INDETERMINATE")
 
     @pytest.mark.asyncio
+    @pytest.mark.issuer
     async def test_cannot_revoke_already_revoked(
         self,
         issuer_client: IssuerClient,
@@ -216,6 +220,7 @@ class TestRevocationFlow:
         assert exc_info.value.response.status_code == 400
 
     @pytest.mark.asyncio
+    @pytest.mark.issuer
     async def test_get_revoked_credential_shows_status(
         self,
         issuer_client: IssuerClient,

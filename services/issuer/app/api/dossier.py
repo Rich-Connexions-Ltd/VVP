@@ -22,7 +22,6 @@ from app.api.models import (
     DossierReadinessResponse,
     DossierSlotStatus,
     ErrorResponse,
-    WitnessPublishResult,
 )
 from app.auth.api_key import Principal
 from app.auth.roles import (
@@ -32,12 +31,11 @@ from app.auth.roles import (
 )
 from app.auth.scoping import can_access_credential, validate_dossier_chain_access
 from app.audit import get_audit_logger
-from app.config import WITNESS_IURLS, VVP_ISSUER_BASE_URL
+from app.config import VVP_ISSUER_BASE_URL
 from app.db.models import DossierOspAssociation, ManagedCredential, Organization
 from app.db.session import get_db
 from app.dossier import DossierBuildError, DossierFormat, get_dossier_builder, serialize_dossier
-from app.keri.issuer import get_credential_issuer
-from app.keri.witness import get_witness_publisher
+from app.keri_client import get_keri_client, KeriAgentUnavailableError
 
 log = logging.getLogger(__name__)
 
@@ -143,15 +141,15 @@ async def _validate_dossier_edges(
                 detail=f"Unknown edge '{edge_name}'",
             )
 
-    # Initialize KERI issuer only after all fast validation passes
-    issuer = await get_credential_issuer()
+    # Initialize KERI Agent client after all fast validation passes
+    client = get_keri_client()
 
     # Validate each provided edge credential
     for edge_name, cred_said in edge_selections.items():
         edge_def = DOSSIER_EDGE_DEFS[edge_name]  # safe — unknown names rejected above
 
         # Get credential info
-        cred_info = await issuer.get_credential(cred_said)
+        cred_info = await client.get_credential(cred_said)
         if cred_info is None:
             raise HTTPException(
                 status_code=404,
@@ -283,9 +281,14 @@ async def create_dossier(
             )
 
     # Step 3: Validate edges
-    edges, delsig_issuee_aid = await _validate_dossier_edges(
-        db, principal, owner_org, body.edges
-    )
+    try:
+        edges, delsig_issuee_aid = await _validate_dossier_edges(
+            db, principal, owner_org, body.edges
+        )
+    except KeriAgentUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except HTTPException:
+        raise
 
     # Sprint 62: Dossier-creation-time vetter constraint validation
     from app.vetter.constraints import validate_dossier_constraints
@@ -334,29 +337,46 @@ async def create_dossier(
     if body.name:
         attributes["name"] = body.name
 
-    # Step 6: Resolve registry name from stored key
-    from app.keri.registry import get_registry_manager
-    registry_mgr = await get_registry_manager()
-    registry_info = await registry_mgr.get_registry(owner_org.registry_key)
-    if not registry_info:
-        log.error(f"Could not resolve registry for key {owner_org.registry_key[:16]}...")
-        raise HTTPException(
-            status_code=500,
-            detail="Could not resolve credential registry for organization",
-        )
-    registry_name = registry_info.name
+    # Step 6: Resolve registry and identity names from stored keys
+    try:
+        client = get_keri_client()
+        registry_info = await client.get_registry_by_key(owner_org.registry_key)
+        if not registry_info:
+            log.error(f"Could not resolve registry for key {owner_org.registry_key[:16]}...")
+            raise HTTPException(
+                status_code=500,
+                detail="Could not resolve credential registry for organization",
+            )
+        registry_name = registry_info.name
+
+        # Resolve identity name from org AID (agent uses names, not AIDs)
+        identity_info = await client.get_identity_by_aid(owner_org.aid)
+        if not identity_info:
+            log.error(f"Could not resolve identity for AID {owner_org.aid[:16]}...")
+            raise HTTPException(
+                status_code=500,
+                detail="Could not resolve KERI identity for organization",
+            )
+    except KeriAgentUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except HTTPException:
+        raise
 
     # Step 7: Issue the dossier ACDC (after all validation — no orphaned credentials)
-    issuer = await get_credential_issuer()
+    from common.vvp.models.keri_agent import IssueCredentialRequest
     try:
-        cred_info, acdc_bytes = await issuer.issue_credential(
+        cred_info = await client.issue_credential(IssueCredentialRequest(
+            identity_name=identity_info.name,
             registry_name=registry_name,
             schema_said=DOSSIER_SCHEMA_SAID,
             attributes=attributes,
             recipient_aid=None,  # CVD, no issuee
             edges=edges,
-            private=False,
-        )
+        ))
+    except KeriAgentUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         log.exception(f"Failed to issue dossier ACDC: {e}")
         raise HTTPException(status_code=500, detail="Failed to issue dossier credential")
@@ -380,24 +400,7 @@ async def create_dossier(
         )
         db.add(assoc)
 
-    # Step 9: Witness publish (best-effort, non-fatal)
-    publish_results: list[WitnessPublishResult] | None = None
-    if WITNESS_IURLS:
-        try:
-            ixn_bytes = await issuer.get_anchor_ixn_bytes(dossier_said)
-            publisher = get_witness_publisher()
-            result = await publisher.publish_event(cred_info.issuer_aid, ixn_bytes)
-            publish_results = [
-                WitnessPublishResult(url=wr.url, success=wr.success, error=wr.error)
-                for wr in result.witnesses
-            ]
-            if not result.threshold_met:
-                log.warning(
-                    f"Witness threshold not met for dossier {dossier_said[:16]}...: "
-                    f"{result.success_count}/{result.total_count}"
-                )
-        except Exception as e:
-            log.error(f"Failed to publish dossier anchor ixn to witnesses: {e}")
+    # Step 9: Witness publishing handled by KERI Agent internally
 
     # Step 10: Commit SQL (atomic: ManagedCredential + optional DossierOspAssociation)
     try:
@@ -446,7 +449,7 @@ async def create_dossier(
         name=body.name,
         osp_org_id=osp_org_id_result,
         dossier_url=dossier_url,
-        publish_results=publish_results,
+        publish_results=None,  # Agent handles witness publishing internally
     )
 
 
@@ -568,8 +571,11 @@ async def dossier_readiness(
         raise HTTPException(status_code=400, detail="Organization has no credential registry")
 
     # Get all credentials visible to this org from KERI
-    issuer = await get_credential_issuer()
-    all_credentials = await issuer.list_credentials()
+    try:
+        client = get_keri_client()
+        all_credentials = await client.list_credentials()
+    except KeriAgentUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
     # Build org credential universe: issued by org OR targeted to org
     managed = db.query(ManagedCredential).filter(
@@ -784,6 +790,10 @@ async def build_dossier(
         log.warning(f"Dossier build failed: {e}")
         status_code = 404 if "not found" in str(e).lower() else 400
         raise HTTPException(status_code=status_code, detail=str(e))
+    except KeriAgentUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         log.exception(f"Unexpected error building dossier: {e}")
         raise HTTPException(status_code=500, detail=f"Internal error: {e}")
@@ -886,6 +896,10 @@ async def build_dossier_info(
         log.warning(f"Dossier build failed: {e}")
         status_code = 404 if "not found" in str(e).lower() else 400
         raise HTTPException(status_code=status_code, detail=str(e))
+    except KeriAgentUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         log.exception(f"Unexpected error building dossier: {e}")
         raise HTTPException(status_code=500, detail=f"Internal error: {e}")
@@ -988,6 +1002,10 @@ async def get_dossier(
         log.warning(f"Dossier get failed: {e}")
         status_code = 404 if "not found" in str(e).lower() else 400
         raise HTTPException(status_code=status_code, detail=str(e))
+    except KeriAgentUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         log.exception(f"Unexpected error getting dossier: {e}")
         raise HTTPException(status_code=500, detail=f"Internal error: {e}")

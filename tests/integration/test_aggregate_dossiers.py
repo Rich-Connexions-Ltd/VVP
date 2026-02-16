@@ -12,6 +12,7 @@ from .helpers import IssuerClient
 
 
 @pytest.mark.integration
+@pytest.mark.issuer
 class TestAggregateDossiers:
     """Test aggregate dossiers with multiple root credentials."""
 

@@ -752,6 +752,126 @@ Factory functions for SIP responses (all copy transaction headers per RFC 3261):
 - `store.py`: Schema storage and retrieval
 - `validator.py`: JSON Schema validation of ACDC attributes
 
+### vvp/models/keri_agent.py - KERI Agent Client DTOs (Sprint 68b)
+Shared request/response models defining the API contract between the KERI Agent service and the Issuer API. Data transfer objects only — no KERI/LMDB logic.
+
+```python
+# Identity DTOs
+class CreateIdentityRequest(BaseModel):
+    name: str                      # Human-readable identity alias
+    key_count: int = 1             # Number of signing keys
+    key_threshold: str = "1"       # Signing threshold expression
+    next_key_count: int = 1        # Number of pre-rotated next keys
+    next_threshold: str = "1"      # Next key threshold expression
+    transferable: bool = True      # Whether keys can be rotated
+
+class IdentityResponse(BaseModel):
+    aid: str                       # Autonomic Identifier
+    name: str                      # Human-readable alias
+    created_at: str                # ISO8601 creation timestamp
+    witness_count: int
+    key_count: int
+    sequence_number: int
+    transferable: bool
+
+class RotateKeysRequest(BaseModel):
+    new_key_count: int | None      # None = keep current
+    new_threshold: str | None      # None = keep current
+
+class RotationResponse(BaseModel):
+    aid: str
+    name: str
+    previous_sequence_number: int
+    new_sequence_number: int
+    new_key_count: int
+
+# Registry DTOs
+class CreateRegistryRequest(BaseModel):
+    name: str
+    identity_name: str
+    no_backers: bool = True
+
+class RegistryResponse(BaseModel):
+    registry_key: str              # TEL registry prefix
+    name: str
+    identity_aid: str
+    identity_name: str
+    credential_count: int = 0
+    no_backers: bool = True
+
+# Credential DTOs
+class IssueCredentialRequest(BaseModel):
+    identity_name: str
+    registry_name: str
+    schema_said: str
+    recipient_aid: str | None
+    attributes: dict               # The 'a' block
+    edges: dict | None
+    rules: dict | None
+    publish: bool = True
+
+class CredentialResponse(BaseModel):
+    said: str
+    issuer_aid: str
+    recipient_aid: str | None
+    registry_key: str
+    schema_said: str
+    issuance_dt: str
+    status: str                    # "issued" | "revoked"
+    revocation_dt: str | None
+    attributes: dict
+    edges: dict | None
+    rules: dict | None
+
+class RevokeCredentialRequest(BaseModel):
+    publish: bool = True
+
+# Dossier DTOs
+class BuildDossierRequest(BaseModel):
+    root_said: str
+    root_saids: list[str] | None
+    include_tel: bool = True
+
+class DossierResponse(BaseModel):
+    root_said: str
+    root_saids: list[str]
+    credential_saids: list[str]    # Topological order
+    is_aggregate: bool = False
+    warnings: list[str]
+
+# Bootstrap DTOs
+class BootstrapStatusResponse(BaseModel):
+    initialized: bool
+    gleif_aid: str | None
+    gleif_registry_key: str | None
+    qvi_aid: str | None
+    qvi_registry_key: str | None
+    gsma_aid: str | None
+    gsma_registry_key: str | None
+    gleif_name: str | None
+    qvi_name: str | None
+    gsma_name: str | None
+    qvi_credential_said: str | None    # For LE edge construction
+    gsma_governance_said: str | None   # For vetter cert edges
+
+# Operational DTOs
+class AgentHealthResponse(BaseModel):
+    status: str                    # "ok" | "unhealthy"
+    identity_count: int = 0
+    registry_count: int = 0
+    credential_count: int = 0
+    lmdb_accessible: bool = True
+
+class AgentStatsResponse(BaseModel):
+    identity_count: int = 0
+    registry_count: int = 0
+    credential_count: int = 0
+
+class AgentErrorResponse(BaseModel):
+    detail: str
+    error_code: str | None
+```
+
 ---
 
 ## Error Code Registry

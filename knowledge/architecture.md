@@ -59,20 +59,25 @@ The system consists of three services plus shared infrastructure:
 
 **Stack**: Python 3.12+, FastAPI, SQLAlchemy (SQLite), KERI (keripy)
 
+**Architecture (Sprint 68b)**: All API routers and the DossierBuilder delegate KERI operations to `KeriAgentClient` (`app/keri_client.py`), which proxies to the standalone KERI Agent service. The `app/keri/` modules are retained only for mock vLEI infrastructure and vetter validation that need direct reger access.
+
 **Key Directories**:
 | Directory | Purpose |
 |-----------|---------|
 | `app/main.py` | FastAPI app with all routers |
-| `app/api/` | API routers (health, identity, registry, credential, dossier, auth, organization, tn_mapping, schema, admin, vvp, vetter_certification, session) |
+| `app/api/` | API routers (15 files — all use `get_keri_client()` since Sprint 68b) |
+| `app/keri_client.py` | HTTP client for KERI Agent (circuit breaker, retry, error mapping) |
 | `app/vetter/` | Vetter certification business logic and constants (Sprint 61) |
-| `app/keri/` | KERI integration (identity management, witness interaction) |
+| `app/keri/` | Legacy KERI integration (used by mock_vlei and vetter only) |
+| `app/dossier/` | Dossier assembly (builder uses KeriAgentClient since Sprint 68b) |
 | `app/auth/` | Authentication (API keys, sessions, OAuth M365, RBAC) |
 | `app/db/` | Database models and session management |
+| `app/org/` | Organization management (mock_vlei, trust_anchors) |
 | `app/audit/` | Audit logging |
 | `app/config.py` | Configuration |
 | `web/` | Multi-page web UI (20 pages: identity, registry, schemas, credentials, dossier, vvp, dashboard, admin, vetter, tn-mappings, benchmarks, help, walkthrough, organizations, organization-detail, users, profile, login, 404) |
 | `config/witnesses.json` | Witness pool configuration |
-| `tests/` | Test suite |
+| `tests/` | Test suite (MockKeriAgentClient in conftest.py) |
 
 **Deployed at**: `https://vvp-issuer.rcnx.io`
 
