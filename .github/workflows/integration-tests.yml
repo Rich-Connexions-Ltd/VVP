@@ -87,12 +87,32 @@ jobs:
             sleep 5
           done
 
+      - name: Bootstrap issuer (create org + credentials)
+        id: bootstrap
+        run: |
+          # Sprint 67: credential issuance requires org context.
+          # Bootstrap creates the org, identity, registry, and credentials
+          # needed by the integration tests.
+          python scripts/bootstrap-issuer.py \
+            --url http://localhost:8001 \
+            --admin-key test-admin-key-12345 2>&1 | tee bootstrap.log
+
+          # Extract org_id from bootstrap output (format: "Org ID:  <uuid>")
+          ORG_ID=$(grep -oP 'Org ID:\s+\K[a-f0-9-]+' bootstrap.log || echo "")
+          if [ -z "$ORG_ID" ]; then
+            echo "::warning::Bootstrap did not return org_id — credential tests may fail"
+          else
+            echo "Bootstrap org_id: $ORG_ID"
+            echo "org_id=$ORG_ID" >> $GITHUB_OUTPUT
+          fi
+
       - name: Run integration tests
         env:
           VVP_TEST_MODE: local
           VVP_ISSUER_URL: http://localhost:8001
           VVP_VERIFIER_URL: http://localhost:8000
           VVP_TEST_API_KEY: test-admin-key-12345
+          VVP_TEST_ORG_ID: ${{ steps.bootstrap.outputs.org_id }}
           VVP_BENCHMARK_OUTPUT_DIR: ${{ github.workspace }}/benchmark-output
         run: |
           mkdir -p "$VVP_BENCHMARK_OUTPUT_DIR"
@@ -191,6 +211,7 @@ jobs:
           VVP_ISSUER_URL: https://vvp-issuer.rcnx.io
           VVP_VERIFIER_URL: https://vvp-verifier.rcnx.io
           VVP_TEST_API_KEY: ${{ secrets.VVP_ADMIN_API_KEY }}
+          VVP_TEST_ORG_ID: ${{ secrets.VVP_TEST_ORG_ID }}
           VVP_AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
           VVP_BENCHMARK_OUTPUT_DIR: ${{ github.workspace }}/benchmark-output
         run: |
