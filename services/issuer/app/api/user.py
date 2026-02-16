@@ -344,7 +344,22 @@ async def get_current_user(
     user = store.get_user_by_email(db, email)
 
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        # User not in DB (file-based or OAuth user without DB record) —
+        # fall back to Principal info so the profile page still works.
+        system_roles = [r for r in principal.roles if r.startswith("issuer:")]
+        org_roles = [r for r in principal.roles if r.startswith("org:")]
+        return CurrentUserResponse(
+            id=principal.key_id,
+            email=email,
+            name=principal.name,
+            system_roles=system_roles,
+            org_roles=org_roles,
+            organization_id=principal.organization_id,
+            organization_name=_get_org_name(db, principal.organization_id),
+            enabled=True,
+            is_oauth_user=False,
+            created_at="",
+        )
 
     org_name = _get_org_name(db, user.organization_id)
     return CurrentUserResponse(**_user_to_response(user, org_name).model_dump())
