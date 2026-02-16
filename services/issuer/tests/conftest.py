@@ -17,18 +17,6 @@ from app.auth.api_key import reset_api_key_store
 from app.auth.session import reset_session_store, reset_rate_limiter
 from app.auth.users import reset_user_store
 from app.audit.logger import reset_audit_logger
-from app.keri.identity import (
-    reset_identity_manager,
-    close_identity_manager,
-    IssuerIdentityManager,
-)
-from app.keri.issuer import reset_credential_issuer, close_credential_issuer
-from app.keri.persistence import reset_persistence_manager, PersistenceManager
-from app.keri.registry import (
-    reset_registry_manager,
-    close_registry_manager,
-)
-from app.keri.witness import reset_witness_publisher
 from app.dossier.builder import reset_dossier_builder
 import app.keri_client as keri_client_module
 from app.keri_client import reset_keri_client
@@ -433,31 +421,6 @@ def temp_dir():
 
 
 @pytest.fixture
-async def temp_persistence(temp_dir: Path) -> PersistenceManager:
-    """Create persistence manager with temporary directory."""
-    reset_persistence_manager()
-    manager = PersistenceManager(base_dir=temp_dir)
-    manager.initialize()
-    yield manager
-    reset_persistence_manager()
-
-
-@pytest.fixture
-async def temp_identity_manager(temp_dir: Path) -> AsyncGenerator[IssuerIdentityManager, None]:
-    """Create identity manager with temporary storage."""
-    reset_identity_manager()
-    manager = IssuerIdentityManager(
-        name="test-issuer",
-        base_dir=temp_dir,
-        temp=True,  # Use temp mode for faster cleanup
-    )
-    await manager.initialize()
-    yield manager
-    await manager.close()
-    reset_identity_manager()
-
-
-@pytest.fixture
 async def identity_with_registry(
     client: AsyncClient,
 ) -> AsyncGenerator[dict, None]:
@@ -506,11 +469,6 @@ async def client(temp_dir: Path) -> AsyncGenerator[AsyncClient, None]:
     os.environ["VVP_AUTH_ENABLED"] = "false"  # Disable auth for backward compatibility
 
     # Reset singletons to pick up new config
-    reset_identity_manager()
-    reset_registry_manager()
-    reset_credential_issuer()
-    reset_persistence_manager()
-    reset_witness_publisher()
     reset_api_key_store()
     reset_user_store()
     reset_session_store()
@@ -537,17 +495,7 @@ async def client(temp_dir: Path) -> AsyncGenerator[AsyncClient, None]:
     ) as async_client:
         yield async_client
 
-    # Close managers that may have been lazy-initialized (transition period)
-    await close_credential_issuer()
-    await close_registry_manager()
-    await close_identity_manager()
-
     # Cleanup after test
-    reset_identity_manager()
-    reset_registry_manager()
-    reset_credential_issuer()
-    reset_persistence_manager()
-    reset_witness_publisher()
     reset_api_key_store()
     reset_user_store()
     reset_session_store()
@@ -589,11 +537,6 @@ async def client_with_auth(temp_dir: Path) -> AsyncGenerator[AsyncClient, None]:
     os.environ["VVP_API_KEYS"] = json.dumps(get_test_api_keys_config())
 
     # Reset singletons
-    reset_identity_manager()
-    reset_registry_manager()
-    reset_credential_issuer()
-    reset_persistence_manager()
-    reset_witness_publisher()
     reset_api_key_store()
     reset_user_store()
     reset_session_store()
@@ -620,15 +563,6 @@ async def client_with_auth(temp_dir: Path) -> AsyncGenerator[AsyncClient, None]:
         yield async_client
 
     # Cleanup
-    await close_credential_issuer()
-    await close_registry_manager()
-    await close_identity_manager()
-
-    reset_identity_manager()
-    reset_registry_manager()
-    reset_credential_issuer()
-    reset_persistence_manager()
-    reset_witness_publisher()
     reset_api_key_store()
     reset_user_store()
     reset_session_store()

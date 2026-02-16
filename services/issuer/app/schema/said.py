@@ -1,19 +1,32 @@
 """SAID computation for JSON Schema documents.
 
 This module provides SAID (Self-Addressing Identifier) computation
-for JSON Schemas using keripy's Saider class. This ensures correct
-KERI-compliant canonicalization and Blake3-256 hashing.
+for JSON Schemas using insertion-order JSON canonicalization and Blake3-256
+hashing with CESR encoding.
 
 SAID is used as the schema's $id field, providing cryptographic
 verification that the schema content has not been modified.
+
+Sprint 68c: Replaced keripy Saider with pure-Python implementation.
+Uses insertion-order JSON serialization (no sort_keys) to match keripy's
+Saider.saidify() behavior — schema SAIDs depend on key order in the
+source JSON file, not alphabetical order.
 """
 
+import base64
+import json
 import logging
 from typing import Any
 
-from keri.core.coring import MtrDex, Saider
-
 log = logging.getLogger(__name__)
+
+
+import blake3 as _blake3_mod
+
+
+def _blake3_hash(data: bytes) -> bytes:
+    """Compute Blake3-256 hash. Blake3 is required — no fallback."""
+    return _blake3_mod.blake3(data).digest()
 
 
 class SAIDComputationError(Exception):
@@ -28,14 +41,41 @@ class SAIDVerificationError(Exception):
     pass
 
 
+def _cesr_encode(raw: bytes, code: str = "E") -> str:
+    """Encode raw bytes in CESR format with derivation code.
+
+    For fixed-size codes like 'E' (Blake3-256, 32 bytes):
+    1. Compute pad size: ps = (3 - (len(raw) % 3)) % 3
+    2. Prepad raw with ps zero bytes
+    3. Base64url encode the prepadded bytes
+    4. Skip the first ps characters (which encode the zero padding)
+    5. Prepend the derivation code
+
+    Args:
+        raw: Raw bytes to encode (e.g., 32-byte digest).
+        code: Derivation code character (e.g., "E" for Blake3-256).
+
+    Returns:
+        CESR-encoded string (e.g., "ENPXp1vQ...").
+    """
+    ps = (3 - (len(raw) % 3)) % 3
+    prepadded = bytes(ps) + raw
+    b64 = base64.urlsafe_b64encode(prepadded).decode("ascii")
+    trimmed = b64[ps:].rstrip("=")
+    return code + trimmed
+
+
 def compute_schema_said(schema: dict[str, Any]) -> str:
     """Compute SAID for a JSON Schema.
 
-    Uses keripy's Saider.saidify() which handles:
-    - Placeholder injection (44 '#' chars)
-    - KERI canonical JSON serialization
-    - Blake3-256 hashing
-    - CESR encoding
+    Algorithm (matches keripy Saider.saidify):
+    1. Replace $id field with '#' * 44 placeholder
+    2. Serialize to JSON: insertion order, compact separators, UTF-8
+    3. Compute Blake3-256 hash of serialized bytes
+    4. CESR-encode hash with 'E' prefix (44 chars total)
+
+    Key order is preserved (not sorted) to match keripy's behavior.
+    Schema SAIDs depend on the key order in the source JSON file.
 
     Args:
         schema: JSON Schema dict. Must have $id field (can be empty/placeholder).
@@ -46,13 +86,26 @@ def compute_schema_said(schema: dict[str, Any]) -> str:
     Raises:
         SAIDComputationError: If SAID computation fails.
     """
-    # Ensure schema has $id field (required for saidify)
     if "$id" not in schema:
         raise SAIDComputationError("Schema missing required $id field")
 
     try:
-        saider, _ = Saider.saidify(sad=schema, label="$id", code=MtrDex.Blake3_256)
-        return saider.qb64
+        data_copy = dict(schema)
+
+        # Placeholder: '#' * 44 — matches keripy Saider.Dummy * Matter.Sizes[code].fs
+        data_copy["$id"] = "#" * 44
+
+        # JSON serialization: insertion order, compact, UTF-8
+        # Matches keripy dumps(): json.dumps(ked, separators=(",",":"), ensure_ascii=False)
+        canonical = json.dumps(data_copy, separators=(",", ":"), ensure_ascii=False)
+        canonical_bytes = canonical.encode("utf-8")
+
+        # Blake3-256 hash → CESR encode with 'E' (Blake3-256) prefix
+        digest = _blake3_hash(canonical_bytes)
+        return _cesr_encode(digest, code="E")
+
+    except SAIDComputationError:
+        raise
     except Exception as e:
         raise SAIDComputationError(f"SAID computation failed: {e}") from e
 
@@ -72,13 +125,16 @@ def inject_said(schema: dict[str, Any]) -> dict[str, Any]:
     Raises:
         SAIDComputationError: If SAID computation fails.
     """
-    # Ensure schema has $id field (required for saidify)
     if "$id" not in schema:
         raise SAIDComputationError("Schema missing required $id field")
 
     try:
-        _, saidified = Saider.saidify(sad=schema, label="$id", code=MtrDex.Blake3_256)
-        return saidified
+        said = compute_schema_said(schema)
+        result = dict(schema)
+        result["$id"] = said
+        return result
+    except SAIDComputationError:
+        raise
     except Exception as e:
         raise SAIDComputationError(f"SAID injection failed: {e}") from e
 

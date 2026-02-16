@@ -2,6 +2,8 @@
 
 Creates VVP-Identity headers and signed PASSporT JWTs for telephone calls.
 This is the issuer-side implementation per VVP spec §4.1A, §5.0-§5.4, §6.3.1.
+
+Sprint 68c: PASSporT signing delegated to KERI Agent via create_vvp_attestation().
 """
 
 import logging
@@ -13,6 +15,7 @@ from app.auth.api_key import Principal
 from app.auth.roles import check_credential_write_role, require_auth
 from app.keri_client import get_keri_client, KeriAgentUnavailableError
 from common.vvp.dossier.trust import TrustDecision
+from common.vvp.models.keri_agent import CreateVVPAttestationRequest
 
 from app.vvp.card import build_card_claim
 from app.vvp.dossier_service import check_dossier_revocation
@@ -21,13 +24,14 @@ from app.vvp.exceptions import (
     InvalidPhoneNumberError,
     VVPCreationError,
 )
-from app.vvp.header import create_vvp_identity_header, MAX_VALIDITY_SECONDS
-from app.vvp.identity import build_identity_header
 from app.vvp.oobi import build_dossier_url, build_issuer_oobi
-from app.vvp.passport import create_passport
+from app.vvp.passport import validate_e164
 from app.config import WITNESS_OOBI_BASE_URLS, VVP_ISSUER_BASE_URL
 
 log = logging.getLogger(__name__)
+
+# §5.2B: PASSporT validity capped at 300 seconds
+MAX_VALIDITY_SECONDS = 300
 
 router = APIRouter(prefix="/vvp", tags=["vvp"])
 
@@ -90,6 +94,14 @@ async def create_vvp_attestation(
     check_credential_write_role(principal)
 
     try:
+        # Validate phone numbers before sending to agent
+        validate_e164(body.orig_tn, "orig_tn")
+        for i, tn in enumerate(body.dest_tn):
+            validate_e164(tn, f"dest_tn[{i}]")
+
+        if not body.dest_tn:
+            raise InvalidPhoneNumberError("dest_tn must have at least one phone number")
+
         # Get identity info via KERI Agent
         client = get_keri_client()
         identity = await client.get_identity(body.identity_name)
@@ -173,29 +185,21 @@ async def create_vvp_attestation(
         # Sprint 60: Card claim built ONLY from credential chain (above).
         # No TN mapping fallback — brand must come from dossier evidence.
 
-        # Create VVP-Identity header (this sets iat/exp)
-        vvp_header = create_vvp_identity_header(
-            issuer_oobi=issuer_oobi,
-            dossier_url=dossier_url,
-            exp_seconds=exp_seconds,
+        # Delegate PASSporT signing + header creation to KERI Agent
+        attestation = await client.create_vvp_attestation(
+            CreateVVPAttestationRequest(
+                identity_name=body.identity_name,
+                dossier_said=body.dossier_said,
+                orig_tn=body.orig_tn,
+                dest_tn=body.dest_tn,
+                exp_seconds=exp_seconds,
+                call_id=body.call_id,
+                cseq=str(body.cseq) if body.cseq is not None else None,
+                card=card,
+                dossier_url=dossier_url,
+                kid_oobi=issuer_oobi,
+            )
         )
-
-        # Create PASSporT with SAME iat/exp for binding (§5.2A)
-        passport = await create_passport(
-            identity_name=body.identity_name,
-            issuer_oobi=issuer_oobi,
-            orig_tn=body.orig_tn,
-            dest_tn=body.dest_tn,
-            dossier_url=dossier_url,
-            iat=vvp_header.iat,
-            exp=vvp_header.exp,
-            card=card,
-            call_id=body.call_id,
-            cseq=body.cseq,
-        )
-
-        # Build RFC 8224 Identity header (Sprint 57)
-        identity_hdr = build_identity_header(passport.jwt, issuer_oobi)
 
         log.info(
             f"Created VVP attestation: identity={body.identity_name}, "
@@ -203,13 +207,13 @@ async def create_vvp_attestation(
         )
 
         return CreateVVPResponse(
-            vvp_identity_header=vvp_header.encoded,
-            passport_jwt=passport.jwt,
-            identity_header=identity_hdr,
-            dossier_url=dossier_url,
-            kid_oobi=issuer_oobi,
-            iat=vvp_header.iat,
-            exp=vvp_header.exp,
+            vvp_identity_header=attestation.vvp_identity_header,
+            passport_jwt=attestation.passport_jwt,
+            identity_header=attestation.identity_header,
+            dossier_url=attestation.dossier_url,
+            kid_oobi=attestation.kid_oobi,
+            iat=attestation.iat,
+            exp=attestation.exp,
             revocation_status=trust.value,
         )
 

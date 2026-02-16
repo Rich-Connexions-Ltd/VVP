@@ -21,9 +21,6 @@ from app.config import (
     MOCK_VLEI_ENABLED,
     get_auth_exempt_paths,
 )
-from app.keri.identity import close_identity_manager
-from app.keri.issuer import close_credential_issuer
-from app.keri.registry import close_registry_manager
 from app.keri_client import get_keri_client, close_keri_client
 
 # Web directory for static files
@@ -133,13 +130,8 @@ async def lifespan(app: FastAPI):
                 pass
             log.info(f"{name} task stopped")
 
-    # Close KERI Agent client (Sprint 68b)
+    # Close KERI Agent client
     await close_keri_client()
-
-    # Close legacy KERI managers (still used by routers until migrated)
-    await close_credential_issuer()
-    await close_registry_manager()
-    await close_identity_manager()
 
     log.info("VVP Issuer service stopped")
 

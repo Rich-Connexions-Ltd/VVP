@@ -332,8 +332,8 @@ async def create_dossier(
         osp_org_id_result = body.osp_org_id
 
     # Step 5: Build attributes
-    from keri.help import nowIso8601
-    attributes = {"d": "", "dt": nowIso8601()}
+    from datetime import datetime, timezone
+    attributes = {"d": "", "dt": datetime.now(timezone.utc).isoformat()}
     if body.name:
         attributes["name"] = body.name
 

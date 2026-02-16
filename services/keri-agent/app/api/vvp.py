@@ -99,7 +99,7 @@ async def create_vvp_attestation(request: CreateVVPAttestationRequest):
             identity_name=request.identity_name,
             issuer_oobi=issuer_oobi,
             orig_tn=request.orig_tn,
-            dest_tn=[request.dest_tn],
+            dest_tn=request.dest_tn,
             dossier_url=dossier_url,
             iat=iat,
             exp=exp,

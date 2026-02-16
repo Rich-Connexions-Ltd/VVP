@@ -8,6 +8,8 @@ The issuer is simpler than the verifier:
 - It doesn't need to *fetch* dossiers over HTTP (it created them)
 - On cache miss it uses its own DossierBuilder to resolve the chain
 - Background revocation checks use the common TELClient
+
+Sprint 68c: Migrated from direct app.keri.* access to KeriAgentClient.
 """
 
 import logging
@@ -120,10 +122,10 @@ async def _build_cache_entry(
         Tuple of (CachedDossier, ChainExtractionResult).
     """
     from app.dossier.builder import get_dossier_builder
-    from app.keri.issuer import get_credential_issuer
+    from app.keri_client import get_keri_client
 
     builder = await get_dossier_builder()
-    issuer = await get_credential_issuer()
+    client = get_keri_client()
 
     # Build dossier content (resolves edge chain via DFS)
     content = await builder.build(dossier_said, include_tel=False)
@@ -134,7 +136,7 @@ async def _build_cache_entry(
         root_saids=[dossier_said],
     )
     for said in content.credential_saids:
-        cred_info = await issuer.get_credential(said)
+        cred_info = await client.get_credential(said)
         if cred_info:
             dag.nodes[said] = ACDCNode(
                 said=said,
@@ -148,7 +150,7 @@ async def _build_cache_entry(
     # Build ChainExtractionResult (maps SAIDs to registry SAIDs)
     registry_saids = {}
     for said in content.credential_saids:
-        cred_info = await issuer.get_credential(said)
+        cred_info = await client.get_credential(said)
         if cred_info:
             registry_saids[said] = cred_info.registry_key
 

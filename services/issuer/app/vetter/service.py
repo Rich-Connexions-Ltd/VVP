@@ -2,6 +2,8 @@
 
 Sprint 61: Issue, revoke, and query VetterCertification credentials.
 Central resolve_active_vetter_cert() helper prevents semantic drift.
+
+Sprint 68c: Migrated from direct app.keri.* access to KeriAgentClient.
 """
 
 import logging
@@ -12,6 +14,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.models import ManagedCredential, Organization
+from app.keri_client import get_keri_client
 from app.vetter.constants import VETTER_CERT_SCHEMA_SAID
 
 log = logging.getLogger(__name__)
@@ -34,7 +37,7 @@ async def resolve_active_vetter_cert(
 
     Performs full validation:
     1. org.vetter_certification_said is not None
-    2. Credential exists in KERI store
+    2. Credential exists in KERI store (via agent)
     3. Credential schema matches VETTER_CERT_SCHEMA_SAID
     4. Credential status is "issued" (not revoked)
     5. Credential issuer is mock GSMA
@@ -47,48 +50,29 @@ async def resolve_active_vetter_cert(
     if not org.vetter_certification_said:
         return None
 
-    from app.keri.registry import get_registry_manager
-
-    registry_mgr = await get_registry_manager()
-    reger = registry_mgr.regery.reger
-
-    # Look up credential in KERI store
+    client = get_keri_client()
     said = org.vetter_certification_said
-    try:
-        creder = reger.creds.get(keys=said)
-        if creder is None:
-            log.warning(f"Stale pointer: credential {said[:16]}... not found in KERI store")
-            return None
-    except Exception:
-        log.warning(f"Stale pointer: error looking up credential {said[:16]}...")
+
+    # Look up credential via KERI Agent
+    cred = await client.get_credential(said)
+    if cred is None:
+        log.warning(f"Stale pointer: credential {said[:16]}... not found in KERI store")
         return None
 
     # Check schema
-    cred_schema = creder.schema if hasattr(creder, "schema") else None
-    if cred_schema != VETTER_CERT_SCHEMA_SAID:
+    if cred.schema_said != VETTER_CERT_SCHEMA_SAID:
         log.warning(
             f"Stale pointer: credential {said[:16]}... has wrong schema "
-            f"({cred_schema}, expected {VETTER_CERT_SCHEMA_SAID})"
+            f"({cred.schema_said}, expected {VETTER_CERT_SCHEMA_SAID})"
         )
         return None
 
     # Check status (not revoked)
-    status = "issued"
-    try:
-        from keri.vdr import eventing
-        state = reger.states.get(keys=said)
-        if state is not None:
-            if hasattr(state, "et") and state.et in ("rev", "brv"):
-                status = "revoked"
-    except Exception:
-        pass  # If we can't check status, assume issued
-
-    if status == "revoked":
+    if cred.status == "revoked":
         log.warning(f"Stale pointer: credential {said[:16]}... is revoked")
         return None
 
     # Check issuer (should be mock GSMA) — fail-closed
-    issuer_aid = creder.issuer if hasattr(creder, "issuer") else ""
     from app.org.mock_vlei import get_mock_vlei_manager
     mock_vlei = get_mock_vlei_manager()
     if not mock_vlei.state or not mock_vlei.state.gsma_aid:
@@ -97,15 +81,15 @@ async def resolve_active_vetter_cert(
             f"Mock GSMA state unavailable — treating cert as inactive"
         )
         return None
-    if issuer_aid != mock_vlei.state.gsma_aid:
+    if cred.issuer_aid != mock_vlei.state.gsma_aid:
         log.warning(
-            f"Stale pointer: credential {said[:16]}... issued by {issuer_aid[:16]}... "
+            f"Stale pointer: credential {said[:16]}... issued by {cred.issuer_aid[:16]}... "
             f"not mock GSMA {mock_vlei.state.gsma_aid[:16]}..."
         )
         return None
 
     # Check issuee binding
-    attrib = creder.attrib if hasattr(creder, "attrib") else {}
+    attrib = cred.attributes
     if attrib.get("i") != org.aid:
         log.warning(
             f"Stale pointer: credential {said[:16]}... issuee {attrib.get('i', 'none')[:16]}... "
@@ -129,45 +113,42 @@ async def resolve_active_vetter_cert(
     return CredentialInfo(
         said=said,
         attributes=attrib,
-        issuer_aid=issuer_aid,
-        status=status,
+        issuer_aid=cred.issuer_aid,
+        status=cred.status,
     )
 
 
 async def _resolve_cert_attributes(said: str) -> dict:
-    """Read credential attributes and status from KERI store.
+    """Read credential attributes and status from KERI Agent.
 
     Returns dict with ecc_targets, jurisdiction_targets, name,
-    certification_expiry, and status. Falls back to empty/default
-    values if credential cannot be loaded.
+    certification_expiry, and status. Defaults status to "unknown"
+    if credential cannot be loaded (fail-closed, not "issued").
+
+    Raises KeriAgentUnavailableError if the KERI Agent is unreachable,
+    so callers can propagate 503 to the client.
     """
+    from app.keri_client import KeriAgentUnavailableError
+
     result = {
         "ecc_targets": [],
         "jurisdiction_targets": [],
         "name": "",
         "certification_expiry": None,
-        "status": "issued",
+        "status": "unknown",
     }
     try:
-        from app.keri.registry import get_registry_manager
-        registry_mgr = await get_registry_manager()
-        reger = registry_mgr.regery.reger
-
-        creder = reger.creds.get(keys=said)
-        if creder is not None:
-            attrib = creder.attrib if hasattr(creder, "attrib") else {}
+        client = get_keri_client()
+        cred = await client.get_credential(said)
+        if cred is not None:
+            attrib = cred.attributes
             result["ecc_targets"] = attrib.get("ecc_targets", [])
             result["jurisdiction_targets"] = attrib.get("jurisdiction_targets", [])
             result["name"] = attrib.get("name", "")
             result["certification_expiry"] = attrib.get("certificationExpiry")
-
-            # Check revocation status
-            try:
-                state = reger.states.get(keys=said)
-                if state is not None and hasattr(state, "et") and state.et in ("rev", "brv"):
-                    result["status"] = "revoked"
-            except Exception:
-                pass
+            result["status"] = cred.status
+    except KeriAgentUnavailableError:
+        raise  # Propagate agent outage as-is
     except Exception as e:
         log.warning(f"Could not resolve attributes for credential {said[:16]}...: {e}")
 
@@ -188,8 +169,6 @@ async def issue_vetter_certification(
         Dict with credential info for building the response.
     """
     from app.org.mock_vlei import get_mock_vlei_manager
-    from app.keri.witness import get_witness_publisher
-    from app.keri.identity import get_identity_manager
 
     # 1. Validate org exists, has AID and registry
     org = (
@@ -279,15 +258,7 @@ async def issue_vetter_certification(
     db.refresh(org)
     db.refresh(managed)
 
-    # 9. Publish to witnesses (best-effort)
-    try:
-        identity_mgr = await get_identity_manager()
-        kel_bytes = await identity_mgr.get_kel_bytes(mock_vlei.state.gsma_aid)
-        publisher = get_witness_publisher()
-        pub = await publisher.publish_oobi(mock_vlei.state.gsma_aid, kel_bytes)
-        log.info(f"Published vetter cert to witnesses: {pub.success_count}/{pub.total_count}")
-    except Exception as e:
-        log.warning(f"Failed to publish vetter cert to witnesses: {e}")
+    # 9. Publish to witnesses (agent handles this internally on issue)
 
     return {
         "said": cred_said,
@@ -309,7 +280,7 @@ async def revoke_vetter_certification(
     said: str,
 ) -> dict:
     """Revoke a VetterCertification and conditionally clear org link."""
-    from app.keri.issuer import get_credential_issuer
+    client = get_keri_client()
 
     # Find the managed credential
     managed = (
@@ -327,9 +298,8 @@ async def revoke_vetter_certification(
         Organization.id == managed.organization_id
     ).first()
 
-    # Revoke in KERI
-    issuer = await get_credential_issuer()
-    await issuer.revoke_credential(said)
+    # Revoke via KERI Agent (agent handles witness publishing internally)
+    await client.revoke_credential(said)
 
     # Clear org pointer only if it points to this cert
     if org and org.vetter_certification_said == said:
@@ -337,21 +307,7 @@ async def revoke_vetter_certification(
 
     db.commit()
 
-    # Publish revocation to witnesses (best-effort)
-    try:
-        from app.keri.witness import get_witness_publisher
-        from app.keri.identity import get_identity_manager
-        from app.org.mock_vlei import get_mock_vlei_manager
-        mock_vlei = get_mock_vlei_manager()
-        if mock_vlei.state:
-            identity_mgr = await get_identity_manager()
-            kel_bytes = await identity_mgr.get_kel_bytes(mock_vlei.state.gsma_aid)
-            publisher = get_witness_publisher()
-            await publisher.publish_oobi(mock_vlei.state.gsma_aid, kel_bytes)
-    except Exception as e:
-        log.warning(f"Failed to publish vetter cert revocation to witnesses: {e}")
-
-    # Resolve credential attributes from KERI store (status will be "revoked")
+    # Resolve credential attributes from KERI Agent (status will be "revoked")
     attrs = await _resolve_cert_attributes(said)
 
     return {

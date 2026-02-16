@@ -4,7 +4,7 @@ import base64
 
 import pytest
 
-from app.vvp.passport import encode_pss_signature, _validate_e164
+from app.vvp.passport import encode_pss_signature, validate_e164
 from app.vvp.exceptions import InvalidPhoneNumberError
 
 
@@ -110,56 +110,56 @@ class TestValidateE164:
     def test_valid_us_number(self):
         """Test valid US phone number."""
         # Should not raise
-        _validate_e164("+14155551234", "orig_tn")
+        validate_e164("+14155551234", "orig_tn")
 
     def test_valid_uk_number(self):
         """Test valid UK phone number."""
-        _validate_e164("+442071234567", "dest_tn")
+        validate_e164("+442071234567", "dest_tn")
 
     def test_valid_short_number(self):
         """Test valid short number (min 2 digits after +)."""
-        _validate_e164("+12", "test")
+        validate_e164("+12", "test")
 
     def test_valid_long_number(self):
         """Test valid long number (max 15 digits after +)."""
-        _validate_e164("+123456789012345", "test")
+        validate_e164("+123456789012345", "test")
 
     def test_missing_plus_raises(self):
         """Test number without + raises error."""
         with pytest.raises(InvalidPhoneNumberError):
-            _validate_e164("14155551234", "test")
+            validate_e164("14155551234", "test")
 
     def test_leading_zero_raises(self):
         """Test number with leading zero after + raises error."""
         with pytest.raises(InvalidPhoneNumberError):
-            _validate_e164("+04155551234", "test")
+            validate_e164("+04155551234", "test")
 
     def test_too_long_raises(self):
         """Test number longer than 15 digits raises error."""
         with pytest.raises(InvalidPhoneNumberError):
-            _validate_e164("+1234567890123456", "test")  # 16 digits
+            validate_e164("+1234567890123456", "test")  # 16 digits
 
     def test_too_short_raises(self):
         """Test number shorter than 2 digits raises error."""
         with pytest.raises(InvalidPhoneNumberError):
-            _validate_e164("+1", "test")  # Only 1 digit
+            validate_e164("+1", "test")  # Only 1 digit
 
     def test_non_numeric_raises(self):
         """Test number with non-numeric characters raises error."""
         with pytest.raises(InvalidPhoneNumberError):
-            _validate_e164("+1415555ABCD", "test")
+            validate_e164("+1415555ABCD", "test")
 
     def test_spaces_not_allowed(self):
         """Test number with spaces raises error."""
         with pytest.raises(InvalidPhoneNumberError):
-            _validate_e164("+1 415 555 1234", "test")
+            validate_e164("+1 415 555 1234", "test")
 
     def test_dashes_not_allowed(self):
         """Test number with dashes raises error."""
         with pytest.raises(InvalidPhoneNumberError):
-            _validate_e164("+1-415-555-1234", "test")
+            validate_e164("+1-415-555-1234", "test")
 
     def test_parentheses_not_allowed(self):
         """Test number with parentheses raises error."""
         with pytest.raises(InvalidPhoneNumberError):
-            _validate_e164("+1(415)5551234", "test")
+            validate_e164("+1(415)5551234", "test")

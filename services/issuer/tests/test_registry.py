@@ -240,56 +240,6 @@ async def test_duplicate_registry_name_rejected(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_get_tel_bytes(temp_dir):
-    """Test that TEL bytes can be retrieved for publishing."""
-    from app.keri.identity import IssuerIdentityManager
-    from app.keri.registry import CredentialRegistryManager
-
-    # Create identity manager
-    identity_mgr = IssuerIdentityManager(
-        name="test-tel",
-        base_dir=temp_dir,
-        temp=True,
-    )
-    await identity_mgr.initialize()
-
-    # Create identity
-    identity = await identity_mgr.create_identity(name=unique_name("tel-issuer"))
-
-    # Create registry manager (shares the Habery)
-    # Need to set the singleton for registry manager to use
-    import app.keri.identity as identity_module
-    original_mgr = identity_module._identity_manager
-    identity_module._identity_manager = identity_mgr
-
-    try:
-        registry_mgr = CredentialRegistryManager(temp=True)
-        await registry_mgr.initialize()
-
-        # Create registry
-        registry_name = unique_name("tel-registry")
-        registry_info = await registry_mgr.create_registry(
-            name=registry_name,
-            issuer_aid=identity.aid,
-        )
-
-        # Get TEL bytes
-        tel_bytes = await registry_mgr.get_tel_bytes(registry_info.registry_key)
-
-        # Verify we got something
-        assert tel_bytes is not None
-        assert len(tel_bytes) > 0
-        # TEL should contain the registry key
-        assert registry_info.registry_key.encode() in tel_bytes
-
-        await registry_mgr.close()
-    finally:
-        # Restore original singleton
-        identity_module._identity_manager = original_mgr
-        await identity_mgr.close()
-
-
-@pytest.mark.asyncio
 async def test_registry_with_backers(client: AsyncClient):
     """Test registry creation with no_backers=False."""
     identity = await create_test_identity(client)

@@ -39,7 +39,7 @@ from app.tn.lookup import (
 # Patch targets for auth functions (they are imported inside lookup_tn_with_validation)
 GET_API_KEY_STORE_PATCH = "app.auth.api_key.get_api_key_store"
 VERIFY_ORG_API_KEY_PATCH = "app.auth.api_key.verify_org_api_key"
-GET_CREDENTIAL_ISSUER_PATCH = "app.keri.issuer.get_credential_issuer"
+GET_KERI_CLIENT_PATCH = "app.keri_client.get_keri_client"
 
 
 # =============================================================================
@@ -364,10 +364,10 @@ class TestValidateTNOwnership:
             "numbers": ["+15551234567"],
         }
 
-        with patch(GET_CREDENTIAL_ISSUER_PATCH) as mock_get_issuer:
-            mock_issuer = AsyncMock()
-            mock_issuer.get_credential = AsyncMock(return_value=mock_cred_info)
-            mock_get_issuer.return_value = mock_issuer
+        with patch(GET_KERI_CLIENT_PATCH) as mock_get_client:
+            mock_client = MagicMock()
+            mock_client.get_credential = AsyncMock(return_value=mock_cred_info)
+            mock_get_client.return_value = mock_client
 
             result = await validate_tn_ownership(in_memory_db, test_org.id, "+15551234567")
             assert result is True
@@ -390,10 +390,10 @@ class TestValidateTNOwnership:
             "numbers": ["+15559999999"],  # Different TN
         }
 
-        with patch(GET_CREDENTIAL_ISSUER_PATCH) as mock_get_issuer:
-            mock_issuer = AsyncMock()
-            mock_issuer.get_credential = AsyncMock(return_value=mock_cred_info)
-            mock_get_issuer.return_value = mock_issuer
+        with patch(GET_KERI_CLIENT_PATCH) as mock_get_client:
+            mock_client = MagicMock()
+            mock_client.get_credential = AsyncMock(return_value=mock_cred_info)
+            mock_get_client.return_value = mock_client
 
             result = await validate_tn_ownership(in_memory_db, test_org.id, "+15551234567")
             assert result is False
@@ -720,10 +720,10 @@ class TestOSPDelegationLookup:
         mock_cred_info.attributes = {"numbers": ["+15557770001"]}
 
         with patch(GET_API_KEY_STORE_PATCH, return_value=mock_store):
-            with patch(GET_CREDENTIAL_ISSUER_PATCH) as mock_get_issuer:
-                mock_issuer = AsyncMock()
-                mock_issuer.get_credential = AsyncMock(return_value=mock_cred_info)
-                mock_get_issuer.return_value = mock_issuer
+            with patch(GET_KERI_CLIENT_PATCH) as mock_get_client:
+                mock_client = MagicMock()
+                mock_client.get_credential = AsyncMock(return_value=mock_cred_info)
+                mock_get_client.return_value = mock_client
 
                 result = await lookup_tn_with_validation(
                     db=in_memory_db,

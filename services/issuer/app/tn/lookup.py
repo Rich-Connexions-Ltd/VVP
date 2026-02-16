@@ -84,7 +84,7 @@ async def validate_tn_ownership(db: Session, org_id: str, tn: str) -> bool:
         True if TN is covered by at least one TN Allocation credential
     """
     from app.db.models import ManagedCredential
-    from app.keri.issuer import get_credential_issuer
+    from app.keri_client import get_keri_client
 
     # Get org's TN allocation credentials
     tn_creds = (
@@ -101,10 +101,10 @@ async def validate_tn_ownership(db: Session, org_id: str, tn: str) -> bool:
         return False
 
     # Check if TN falls within any allocation
-    issuer = await get_credential_issuer()
+    client = get_keri_client()
     for cred in tn_creds:
         try:
-            cred_info = await issuer.get_credential(cred.said)
+            cred_info = await client.get_credential(cred.said)
             if not cred_info:
                 continue
 

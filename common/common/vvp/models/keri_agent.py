@@ -9,7 +9,7 @@ Sprint 68: KERI Agent Service Extraction.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # =============================================================================
@@ -155,10 +155,22 @@ class CreateVVPAttestationRequest(BaseModel):
     identity_name: str = Field(..., description="Signing identity name")
     dossier_said: str = Field(..., description="Dossier SAID for evidence URL")
     orig_tn: str = Field(..., description="Originating telephone number (E.164)")
-    dest_tn: str = Field(..., description="Destination telephone number (E.164)")
+    dest_tn: list[str] = Field(..., description="Destination telephone numbers (E.164)")
     exp_seconds: int = Field(300, description="PASSporT validity in seconds (max 300)")
     call_id: str | None = Field(None, description="SIP Call-ID")
     cseq: str | None = Field(None, description="SIP CSeq")
+
+    @field_validator("dest_tn", mode="before")
+    @classmethod
+    def normalize_dest_tn(cls, v):
+        """Accept both scalar string and list for backward compatibility."""
+        if isinstance(v, str):
+            return [v]
+        return v
+    # Sprint 68c: Additional fields passed by issuer for attestation construction
+    card: list[str] | None = Field(None, description="vCard card claim lines for brand identity")
+    dossier_url: str | None = Field(None, description="Pre-computed dossier evidence URL")
+    kid_oobi: str | None = Field(None, description="Pre-computed key OOBI URL")
 
 
 class VVPAttestationResponse(BaseModel):

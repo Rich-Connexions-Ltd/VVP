@@ -155,8 +155,12 @@ class TestMockVLEIStateRegression:
         Sprint 68b regression: mock_vlei.initialize() was removed from startup.
         issue_le_credential must read state via get_mock_vlei_state()
         (TrustAnchorManager, DB-backed) instead of self._state.
+
+        Sprint 68c: Updated mock target from app.keri.issuer.get_credential_issuer
+        to app.keri_client (mock_vlei now delegates to KeriAgentClient).
         """
         from app.org.mock_vlei import MockVLEIManager, MockVLEIState
+        from common.vvp.models.keri_agent import CredentialResponse
 
         mgr = MockVLEIManager()
         assert mgr._state is None  # Not initialized
@@ -169,20 +173,26 @@ class TestMockVLEIStateRegression:
             qvi_registry_key=f"E{uuid.uuid4().hex[:43]}",
         )
 
-        # Mock get_mock_vlei_state to return state from TrustAnchorManager
-        # and mock get_credential_issuer to avoid needing keripy LMDB
-        mock_issuer = MagicMock()
-        mock_cred_info = MagicMock()
-        mock_cred_info.said = f"E{uuid.uuid4().hex[:43]}"
-        mock_issuer.issue_credential = AsyncMock(
-            return_value=(mock_cred_info, None)
+        # Mock the KeriAgentClient that mock_vlei now uses
+        cred_said = f"E{uuid.uuid4().hex[:43]}"
+        mock_client = MagicMock()
+        mock_client.issue_credential = AsyncMock(
+            return_value=CredentialResponse(
+                said=cred_said,
+                issuer_aid=mock_state.qvi_aid,
+                recipient_aid="Etest",
+                registry_key=mock_state.qvi_registry_key,
+                schema_said="ENPXp1vQzRF6JwIuS-mp2U8Uf1MoADoP_GqQ62VsDZWY",
+                issuance_dt="2025-01-01T00:00:00Z",
+                status="issued",
+                attributes={},
+            )
         )
 
         with patch.object(mgr, "get_mock_vlei_state", return_value=mock_state), \
              patch(
-                 "app.keri.issuer.get_credential_issuer",
-                 new_callable=AsyncMock,
-                 return_value=mock_issuer,
+                 "app.keri_client.get_keri_client",
+                 return_value=mock_client,
              ):
             said = await mgr.issue_le_credential(
                 org_name="Test Org",
@@ -190,11 +200,11 @@ class TestMockVLEIStateRegression:
                 pseudo_lei="549300TESTLEI000001",
             )
 
-        assert said == mock_cred_info.said
+        assert said == cred_said
         # Verify the edge used qvi_credential_said from mock_state
-        call_kwargs = mock_issuer.issue_credential.call_args
-        edges = call_kwargs.kwargs.get("edges") or call_kwargs[1].get("edges")
-        assert edges["qvi"]["n"] == mock_state.qvi_credential_said
+        call_args = mock_client.issue_credential.call_args
+        req = call_args[0][0]  # First positional arg is IssueCredentialRequest
+        assert req.edges["qvi"]["n"] == mock_state.qvi_credential_said
 
     @pytest.mark.asyncio
     async def test_issue_le_fails_when_no_state_anywhere(self):

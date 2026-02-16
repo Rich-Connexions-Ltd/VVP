@@ -35,7 +35,7 @@ DOSSIER_SAID = "EAbcdef1234567890abcdef1234567890abcdef12"
 
 @dataclass
 class FakeCredentialInfo:
-    """Minimal stand-in for app.keri.issuer.CredentialInfo."""
+    """Minimal stand-in for KeriAgentClient credential response."""
 
     said: str
     issuer_aid: str = "EIssuerAID000000000000000000000000000000000"
@@ -87,8 +87,8 @@ def _make_fake_builder(credential_saids=None):
     return builder
 
 
-def _make_fake_issuer(credential_saids=None):
-    """Create a mock CredentialIssuer that returns FakeCredentialInfo."""
+def _make_fake_client(credential_saids=None):
+    """Create a mock KeriAgentClient that returns FakeCredentialInfo."""
     saids = credential_saids or [DOSSIER_SAID]
     cred_map = {s: FakeCredentialInfo(said=s) for s in saids}
     issuer = AsyncMock()
@@ -116,9 +116,8 @@ class TestCacheMiss:
                 return_value=_make_fake_builder(),
             ),
             patch(
-                "app.keri.issuer.get_credential_issuer",
-                new_callable=AsyncMock,
-                return_value=_make_fake_issuer(),
+                "app.keri_client.get_keri_client",
+                return_value=_make_fake_client(),
             ),
         ):
             trust, warning = await check_dossier_revocation(
@@ -145,9 +144,8 @@ class TestCacheMiss:
                 return_value=_make_fake_builder(),
             ),
             patch(
-                "app.keri.issuer.get_credential_issuer",
-                new_callable=AsyncMock,
-                return_value=_make_fake_issuer(),
+                "app.keri_client.get_keri_client",
+                return_value=_make_fake_client(),
             ),
         ):
             await check_dossier_revocation(
@@ -177,9 +175,8 @@ class TestCacheMiss:
                 return_value=_make_fake_builder(saids),
             ),
             patch(
-                "app.keri.issuer.get_credential_issuer",
-                new_callable=AsyncMock,
-                return_value=_make_fake_issuer(saids),
+                "app.keri_client.get_keri_client",
+                return_value=_make_fake_client(saids),
             ),
         ):
             trust, _ = await check_dossier_revocation(
@@ -315,9 +312,8 @@ class TestChainResolutionFailure:
                 return_value=failing_builder,
             ),
             patch(
-                "app.keri.issuer.get_credential_issuer",
-                new_callable=AsyncMock,
-                return_value=_make_fake_issuer(),
+                "app.keri_client.get_keri_client",
+                return_value=_make_fake_client(),
             ),
         ):
             trust, warning = await check_dossier_revocation(
@@ -345,9 +341,8 @@ class TestBuildCacheEntry:
                 return_value=_make_fake_builder(),
             ),
             patch(
-                "app.keri.issuer.get_credential_issuer",
-                new_callable=AsyncMock,
-                return_value=_make_fake_issuer(),
+                "app.keri_client.get_keri_client",
+                return_value=_make_fake_client(),
             ),
         ):
             cached_dossier, chain_info = await _build_cache_entry(DOSSIER_SAID)
@@ -378,9 +373,8 @@ class TestBuildCacheEntry:
                 return_value=_make_fake_builder(saids),
             ),
             patch(
-                "app.keri.issuer.get_credential_issuer",
-                new_callable=AsyncMock,
-                return_value=_make_fake_issuer(saids),
+                "app.keri_client.get_keri_client",
+                return_value=_make_fake_client(saids),
             ),
         ):
             _, chain_info = await _build_cache_entry("ESAID2")

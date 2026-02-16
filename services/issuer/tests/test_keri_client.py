@@ -786,7 +786,7 @@ class TestVVPMethods:
                 identity_name="test-id",
                 dossier_said="EHyKQS68x",
                 orig_tn="+15551001",
-                dest_tn="+15551006",
+                dest_tn=["+15551006"],
             )
         )
         assert result.passport_jwt == SAMPLE_VVP_ATTESTATION["passport_jwt"]

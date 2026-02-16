@@ -9,13 +9,17 @@ Enforcement points use these adapters:
 - validate_credential_edge_constraints(): single credential edge resolution
 - validate_dossier_constraints(): batch credential edge resolution
 - validate_signing_constraints(): dossier walk + TN ECC + jurisdiction
+
+Sprint 68c: Migrated from direct app.keri.* access to KeriAgentClient.
 """
 
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Optional
 
 import app.config as _cfg
+from app.keri_client import get_keri_client, KeriAgentUnavailableError
 from app.vetter.constants import (
     KNOWN_EXTENDED_SCHEMA_SAIDS,
     VALID_ECC_CODES,
@@ -204,35 +208,29 @@ async def validate_credential_edge_constraints(
 ) -> list[ConstraintCheckResult]:
     """Credential-edge-level: resolve VetterCert from credential's certification edge.
 
-    1. Load credential from KERI store
+    1. Load credential from KERI Agent
     2. Check if schema is extended — if not, skip (base schema)
     3. Extract 'certification' edge SAID — if missing on extended, violation
     4. Load VetterCert, parse ecc/jurisdiction targets
     5. Run appropriate constraint check based on credential type
     """
-    from app.keri.registry import get_registry_manager
-
-    registry_mgr = await get_registry_manager()
-    reger = registry_mgr.regery.reger
+    client = get_keri_client()
 
     # Load credential
-    try:
-        creder = reger.creds.get(keys=credential_said)
-        if creder is None:
-            return []
-    except Exception:
+    cred = await client.get_credential(credential_said)
+    if cred is None:
         return []
 
-    schema_said = creder.schema if hasattr(creder, "schema") else ""
+    schema_said = cred.schema_said
     if schema_said not in KNOWN_EXTENDED_SCHEMA_SAIDS:
         log.debug("VETTER_CONSTRAINT_SKIPPED", extra={"schema_said": schema_said, "reason": "base_schema"})
         return []
 
     cred_type = _schema_to_credential_type(schema_said)
-    attrib = creder.attrib if hasattr(creder, "attrib") else {}
+    attrib = cred.attributes
 
     # Extract certification edge
-    edges = creder.edge if hasattr(creder, "edge") else {}
+    edges = cred.edges or {}
     if isinstance(edges, dict):
         cert_edge = edges.get("certification")
     else:
@@ -263,64 +261,47 @@ async def validate_credential_edge_constraints(
         _log_evaluation(schema_said, result)
         return [result]
 
-    # Load the VetterCert credential
-    try:
-        vetter_creder = reger.creds.get(keys=cert_said)
-        if vetter_creder is None:
-            result = ConstraintCheckResult(
-                check_type="unresolvable_cert",
-                credential_type=cred_type,
-                target_value=credential_said[:16],
-                is_authorized=False,
-                reason=f"VetterCertification {cert_said[:16]}... not found in KERI store",
-            )
-            _log_evaluation(schema_said, result)
-            return [result]
-    except Exception:
+    # Load the VetterCert credential via KERI Agent
+    vetter_cred = await client.get_credential(cert_said)
+    if vetter_cred is None:
         result = ConstraintCheckResult(
             check_type="unresolvable_cert",
             credential_type=cred_type,
             target_value=credential_said[:16],
             is_authorized=False,
-            reason=f"Error loading VetterCertification {cert_said[:16]}...",
+            reason=f"VetterCertification {cert_said[:16]}... not found in KERI store",
         )
         _log_evaluation(schema_said, result)
         return [result]
 
     # Check VetterCert schema
-    vc_schema = vetter_creder.schema if hasattr(vetter_creder, "schema") else ""
-    if vc_schema != VETTER_CERT_SCHEMA_SAID:
+    if vetter_cred.schema_said != VETTER_CERT_SCHEMA_SAID:
         result = ConstraintCheckResult(
             check_type="unresolvable_cert",
             credential_type=cred_type,
             target_value=credential_said[:16],
             is_authorized=False,
-            reason=f"Certification edge points to non-VetterCert schema: {vc_schema[:16]}...",
+            reason=f"Certification edge points to non-VetterCert schema: {vetter_cred.schema_said[:16]}...",
         )
         _log_evaluation(schema_said, result)
         return [result]
 
     # Check VetterCert revocation
-    try:
-        state = reger.states.get(keys=cert_said)
-        if state is not None and hasattr(state, "et") and state.et in ("rev", "brv"):
-            result = ConstraintCheckResult(
-                check_type="unresolvable_cert",
-                credential_type=cred_type,
-                target_value=credential_said[:16],
-                is_authorized=False,
-                reason="VetterCertification is revoked",
-            )
-            _log_evaluation(schema_said, result)
-            return [result]
-    except Exception:
-        pass
+    if vetter_cred.status == "revoked":
+        result = ConstraintCheckResult(
+            check_type="unresolvable_cert",
+            credential_type=cred_type,
+            target_value=credential_said[:16],
+            is_authorized=False,
+            reason="VetterCertification is revoked",
+        )
+        _log_evaluation(schema_said, result)
+        return [result]
 
     # Check expiry
-    vc_attrib = vetter_creder.attrib if hasattr(vetter_creder, "attrib") else {}
+    vc_attrib = vetter_cred.attributes
     cert_expiry = vc_attrib.get("certificationExpiry")
     if cert_expiry:
-        from datetime import datetime, timezone
         try:
             expiry_dt = datetime.fromisoformat(cert_expiry)
             if expiry_dt.tzinfo is None:
@@ -383,12 +364,17 @@ async def validate_dossier_constraints(
 
     For each credential, resolves VetterCert via its certification edge and
     validates constraints. This is credential-edge-centric, not org-centric.
+
+    Raises KeriAgentUnavailableError if the KERI Agent is unreachable,
+    so callers can propagate 503 to the client.
     """
     all_results = []
     for said in credential_saids:
         try:
             results = await validate_credential_edge_constraints(said)
             all_results.extend(results)
+        except KeriAgentUnavailableError:
+            raise  # Agent outage must not be swallowed
         except Exception as e:
             log.warning(f"Constraint check failed for credential {said[:16]}...: {e}")
     return all_results
@@ -404,21 +390,15 @@ async def validate_signing_constraints(
     then validates each one. Also checks orig_tn ECC against each TN
     credential's VetterCert.
     """
-    from app.keri.registry import get_registry_manager
-
-    registry_mgr = await get_registry_manager()
-    reger = registry_mgr.regery.reger
+    client = get_keri_client()
 
     # Load root dossier credential to find edges
-    try:
-        root_creder = reger.creds.get(keys=dossier_said)
-        if root_creder is None:
-            return []
-    except Exception:
+    root_cred = await client.get_credential(dossier_said)
+    if root_cred is None:
         return []
 
     # Walk edges to collect credential SAIDs
-    edges = root_creder.edge if hasattr(root_creder, "edge") else {}
+    edges = root_cred.edges or {}
     cred_saids = []
     if isinstance(edges, dict):
         for edge_name, edge_val in edges.items():
@@ -434,35 +414,34 @@ async def validate_signing_constraints(
     results = await validate_dossier_constraints(all_saids)
 
     # Additionally check orig_tn ECC against any TN credential's VetterCert
-    # (the dossier constraint check above already validates per-credential,
-    # but we also want to check the signing TN specifically)
     for said in cred_saids:
         try:
-            creder = reger.creds.get(keys=said)
-            if creder is None:
+            cred = await client.get_credential(said)
+            if cred is None:
                 continue
-            schema = creder.schema if hasattr(creder, "schema") else ""
-            if schema != _EXT_TNALLOC_SAID:
+            if cred.schema_said != _EXT_TNALLOC_SAID:
                 continue
             # This is a TN credential — check orig_tn against its VetterCert
-            edge_data = creder.edge if hasattr(creder, "edge") else {}
+            edge_data = cred.edges or {}
             cert_edge = edge_data.get("certification") if isinstance(edge_data, dict) else None
             if cert_edge is None:
                 continue
             cert_said = cert_edge.get("n") if isinstance(cert_edge, dict) else None
             if not cert_said:
                 continue
-            vc_creder = reger.creds.get(keys=cert_said)
-            if vc_creder is None:
+            vc_cred = await client.get_credential(cert_said)
+            if vc_cred is None:
                 continue
-            vc_attrib = vc_creder.attrib if hasattr(vc_creder, "attrib") else {}
+            vc_attrib = vc_cred.attributes
             ecc_targets = vc_attrib.get("ecc_targets", [])
             # Check the signing TN's ECC
             tn_result = check_tn_ecc_constraint(orig_tn, ecc_targets)
             if not tn_result.is_authorized:
                 tn_result.reason = f"Signing TN {orig_tn} ECC: {tn_result.reason}"
-                _log_evaluation(schema, tn_result)
+                _log_evaluation(cred.schema_said, tn_result)
                 results.append(tn_result)
+        except KeriAgentUnavailableError:
+            raise  # Agent outage must not be swallowed
         except Exception as e:
             log.warning(f"Signing TN ECC check failed for credential {said[:16]}...: {e}")
 
