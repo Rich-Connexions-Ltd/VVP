@@ -453,7 +453,7 @@
         for (const org of (data.organizations || [])) {
           if (!org.aid) continue; // skip orgs without an AID
           const option = document.createElement('option');
-          option.value = org.aid;
+          option.value = org.id;
           option.textContent = org.name || org.aid;
           option.dataset.orgName = org.name || '';
           select.appendChild(option);
@@ -551,24 +551,33 @@
         };
 
         const vetterName = document.getElementById('vetterName').value.trim();
-        if (vetterName) {
-          attributes.name = vetterName;
+        if (!vetterName) {
+          throw new Error('Please enter a vetter name');
         }
+        attributes.name = vetterName;
 
         const expiry = document.getElementById('expiry').value;
         if (expiry) {
           attributes.certificationExpiry = new Date(expiry).toISOString();
         }
 
+        const orgId = document.getElementById('vetterOrg').value;
+        if (!orgId) {
+          throw new Error('Please select an organization');
+        }
+
         const payload = {
-          registry_name: document.getElementById('registry').value,
-          schema_said: VETTER_SCHEMA_SAID,
-          attributes: attributes,
-          recipient_aid: document.getElementById('vetterOrg').value,
-          publish_to_witnesses: document.getElementById('publishWitnesses').checked,
+          organization_id: orgId,
+          ecc_targets: attributes.ecc_targets,
+          jurisdiction_targets: attributes.jurisdiction_targets,
+          name: attributes.name,
         };
 
-        const res = await authFetch('/credential/issue', {
+        if (attributes.certificationExpiry) {
+          payload.certificationExpiry = attributes.certificationExpiry;
+        }
+
+        const res = await authFetch('/vetter-certifications', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -588,7 +597,7 @@
             <strong>Vetter Certification Issued Successfully!</strong>
             <div class="result-field">
               <strong>Credential SAID:</strong>
-              <code>${data.credential.said}</code>
+              <code>${data.said}</code>
             </div>
             <p>This certification can now be used as a backlink edge in TN Allocation and Legal Entity credentials.</p>
           </div>
