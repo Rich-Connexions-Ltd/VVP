@@ -418,8 +418,18 @@ jobs:
         run: |
           RG="${{ secrets.AZURE_RG }}"
 
-          if az containerapp show --name vvp-keri-agent --resource-group "$RG" &>/dev/null; then
-            echo "vvp-keri-agent already exists"
+          # Check if app exists and is healthy
+          PROVISION_STATE=$(az containerapp show --name vvp-keri-agent --resource-group "$RG" \
+            --query "properties.provisioningState" -o tsv 2>/dev/null || echo "NotFound")
+
+          if [ "$PROVISION_STATE" = "Failed" ]; then
+            echo "::warning::vvp-keri-agent exists in Failed state — deleting and recreating..."
+            az containerapp delete --name vvp-keri-agent --resource-group "$RG" --yes 2>/dev/null || true
+            PROVISION_STATE="NotFound"
+          fi
+
+          if [ "$PROVISION_STATE" != "NotFound" ]; then
+            echo "vvp-keri-agent already exists (state: $PROVISION_STATE)"
             echo "created=false" >> $GITHUB_OUTPUT
           else
             echo "vvp-keri-agent does not exist — provisioning..."
@@ -429,12 +439,20 @@ jobs:
               --query "properties.managedEnvironmentId" -o tsv)
             echo "Environment ID: $ENV_ID"
 
+            # Get ACR credentials for the new container app to pull images
+            ACR_SERVER="${{ secrets.ACR_LOGIN_SERVER }}"
+            ACR_USER=$(az acr credential show -n "${{ secrets.ACR_NAME }}" --query username -o tsv)
+            ACR_PASS=$(az acr credential show -n "${{ secrets.ACR_NAME }}" --query 'passwords[0].value' -o tsv)
+
             # Create with internal-only ingress, single replica, paused (min 0)
             az containerapp create \
               --name vvp-keri-agent \
               --resource-group "$RG" \
               --environment "$ENV_ID" \
               --image "$IMAGE" \
+              --registry-server "$ACR_SERVER" \
+              --registry-username "$ACR_USER" \
+              --registry-password "$ACR_PASS" \
               --target-port 8002 \
               --ingress internal \
               --min-replicas 0 \
