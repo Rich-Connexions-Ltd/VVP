@@ -162,14 +162,16 @@
         </div>
 
         <div class="form-group">
-          <label for="vetterAid">Vetter AID (recipient)</label>
-          <input type="text" id="vetterAid" placeholder="AID of the organization being certified" required/>
-          <p class="hint">The AID of the vetter organization that will be authorized to issue credentials</p>
+          <label for="vetterOrg">Vetter Organization (recipient)</label>
+          <select id="vetterOrg" required>
+            <option value="">Loading organizations...</option>
+          </select>
+          <p class="hint">Select the organization to be authorized as a vetter</p>
         </div>
 
         <div class="form-group">
           <label for="vetterName">Vetter Organization Name</label>
-          <input type="text" id="vetterName" placeholder="e.g., Acme Vetting Services Ltd"/>
+          <input type="text" id="vetterName" placeholder="Auto-filled from selected organization"/>
         </div>
 
         <!-- ECC Targets -->
@@ -439,6 +441,37 @@
       }
     }
 
+    // Load organizations for the recipient picker
+    async function loadOrganizations() {
+      const select = document.getElementById('vetterOrg');
+      try {
+        const res = await authFetch('/organizations/names');
+        if (!res.ok) throw new Error('Failed to load');
+        const data = await res.json();
+
+        select.innerHTML = '<option value="">Select an organization...</option>';
+        for (const org of (data.organizations || [])) {
+          if (!org.aid) continue; // skip orgs without an AID
+          const option = document.createElement('option');
+          option.value = org.aid;
+          option.textContent = org.name || org.aid;
+          option.dataset.orgName = org.name || '';
+          select.appendChild(option);
+        }
+      } catch (e) {
+        select.innerHTML = '<option value="">Unable to load organizations</option>';
+        console.warn('Failed to load organizations:', e);
+      }
+    }
+
+    // Auto-fill vetter name when organization is selected
+    document.getElementById('vetterOrg').addEventListener('change', function() {
+      const selected = this.options[this.selectedIndex];
+      if (selected && selected.dataset.orgName) {
+        document.getElementById('vetterName').value = selected.dataset.orgName;
+      }
+    });
+
     // Load existing certifications
     async function loadCertifications() {
       const container = document.getElementById('certList');
@@ -531,7 +564,7 @@
           registry_name: document.getElementById('registry').value,
           schema_said: VETTER_SCHEMA_SAID,
           attributes: attributes,
-          recipient_aid: document.getElementById('vetterAid').value.trim(),
+          recipient_aid: document.getElementById('vetterOrg').value,
           publish_to_witnesses: document.getElementById('publishWitnesses').checked,
         };
 
@@ -576,6 +609,7 @@
     buildSelector(document.getElementById('eccSelector'), E164_CODES, 'ecc');
     buildSelector(document.getElementById('jurisdictionSelector'), ISO_CODES, 'jurisdiction');
     loadRegistries();
+    loadOrganizations();
     loadCertifications();
   </script>
 </body>
