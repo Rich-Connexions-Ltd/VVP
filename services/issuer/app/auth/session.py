@@ -200,8 +200,14 @@ class InMemorySessionStore(SessionStore):
                 email = session.key_id[5:]  # Strip "user:" prefix
                 user = user_store.get_user(email)
 
-                if user is None:
+                user_valid = False
+                if user is not None:
+                    # Found in file-based store — check enabled flag
+                    user_valid = not (hasattr(user, 'enabled') and not user.enabled)
+                else:
                     # Not in file-based store — check DB-backed user store
+                    # Note: We must check enabled INSIDE the db session to avoid
+                    # DetachedInstanceError after session.commit() expires attrs.
                     try:
                         from app.auth.db_users import get_db_user_store
                         from app.db.session import get_db_session
@@ -210,11 +216,11 @@ class InMemorySessionStore(SessionStore):
                             db_store = get_db_user_store()
                             db_user = db_store.get_user_by_email(db, email)
                             if db_user is not None and db_user.enabled:
-                                user = db_user  # Found in DB, valid
+                                user_valid = True
                     except Exception as e:
                         log.debug(f"DB user check failed: {e}")
 
-                if user is None or (hasattr(user, 'enabled') and not user.enabled):
+                if not user_valid:
                     del self._sessions[session_id]
                     log.warning(
                         f"Session {session_id[:8]}... invalidated: "
