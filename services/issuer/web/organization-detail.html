@@ -99,6 +99,37 @@
     }
     th { font-weight: 600; font-size: 0.75rem; text-transform: uppercase; color: var(--vvp-text-muted); }
     .empty-state { text-align: center; padding: 2rem; color: var(--vvp-text-muted); }
+    .btn-reset-pw {
+      padding: 0.25rem 0.5rem;
+      font-size: 0.75rem;
+      background: #6c757d;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .btn-reset-pw:hover { background: #5a6268; }
+    .btn-reset-pw:disabled { opacity: 0.5; cursor: not-allowed; }
+    .modal-overlay {
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000;
+    }
+    .modal-box {
+      background: white; border-radius: 8px; padding: 1.5rem; width: 400px; max-width: 90vw;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    }
+    .modal-box h3 { margin: 0 0 1rem 0; }
+    .modal-box .form-group { margin-bottom: 1rem; }
+    .modal-box label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.25rem; }
+    .modal-box input { width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; font-size: 0.9rem; box-sizing: border-box; }
+    .modal-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
+    .modal-actions button { padding: 0.4rem 1rem; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
+    .modal-actions .btn-cancel { background: #e9ecef; color: #333; }
+    .modal-actions .btn-confirm { background: var(--vvp-primary, #2563eb); color: white; }
+    .modal-actions .btn-confirm:disabled { opacity: 0.5; cursor: not-allowed; }
+    .modal-result { margin-top: 0.75rem; font-size: 0.85rem; }
+    .modal-result.success { color: #059669; }
+    .modal-result.error { color: #dc2626; }
   </style>
 </head>
 <body>
@@ -259,7 +290,7 @@
         }
         panel.innerHTML = `
           <table>
-            <thead><tr><th>Email</th><th>Name</th><th>Roles</th><th>Enabled</th></tr></thead>
+            <thead><tr><th>Email</th><th>Name</th><th>Roles</th><th>Enabled</th><th>Actions</th></tr></thead>
             <tbody>
               ${users.map(u => `
                 <tr>
@@ -267,6 +298,7 @@
                   <td>${escapeHtml(u.name)}</td>
                   <td>${(u.org_roles || []).map(r => escapeHtml(r)).join(', ') || '<em>none</em>'}</td>
                   <td><span class="status-badge ${u.enabled ? 'enabled' : 'disabled'}">${u.enabled ? 'Yes' : 'No'}</span></td>
+                  <td>${u.is_oauth_user ? '<em style="color:#999; font-size:0.8rem;">OAuth</em>' : `<button class="btn-reset-pw" onclick="resetPassword('${u.id}', '${escapeHtml(u.email)}')">Reset Password</button>`}</td>
                 </tr>
               `).join('')}
             </tbody>
@@ -347,6 +379,75 @@
         `;
       } catch (err) {
         panel.innerHTML = `<div class="empty-state">Error: ${escapeHtml(err.message)}</div>`;
+      }
+    }
+
+    function resetPassword(userId, email) {
+      // Show modal dialog for new password
+      const overlay = document.createElement('div');
+      overlay.className = 'modal-overlay';
+      overlay.innerHTML = `
+        <div class="modal-box">
+          <h3>Reset Password</h3>
+          <p style="font-size:0.85rem; color:#666; margin:0 0 1rem 0;">Set a new password for <strong>${escapeHtml(email)}</strong></p>
+          <div class="form-group">
+            <label for="newPassword">New Password</label>
+            <input type="password" id="newPassword" placeholder="Minimum 8 characters" minlength="8"/>
+          </div>
+          <div class="form-group">
+            <label for="confirmPassword">Confirm Password</label>
+            <input type="password" id="confirmPassword" placeholder="Repeat password"/>
+          </div>
+          <div id="resetResult" class="modal-result"></div>
+          <div class="modal-actions">
+            <button class="btn-cancel" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+            <button class="btn-confirm" id="resetConfirmBtn" onclick="submitPasswordReset('${userId}')">Reset</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+      overlay.querySelector('#newPassword').focus();
+    }
+
+    async function submitPasswordReset(userId) {
+      const newPw = document.getElementById('newPassword').value;
+      const confirmPw = document.getElementById('confirmPassword').value;
+      const resultEl = document.getElementById('resetResult');
+      const btn = document.getElementById('resetConfirmBtn');
+
+      if (newPw.length < 8) {
+        resultEl.className = 'modal-result error';
+        resultEl.textContent = 'Password must be at least 8 characters.';
+        return;
+      }
+      if (newPw !== confirmPw) {
+        resultEl.className = 'modal-result error';
+        resultEl.textContent = 'Passwords do not match.';
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = 'Resetting...';
+      resultEl.textContent = '';
+
+      try {
+        const res = await authFetch(`/users/${userId}/password`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+          body: JSON.stringify({ new_password: newPw }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Failed to reset password');
+
+        resultEl.className = 'modal-result success';
+        resultEl.textContent = 'Password reset successfully.';
+        btn.textContent = 'Done';
+        setTimeout(() => document.querySelector('.modal-overlay')?.remove(), 1500);
+      } catch (err) {
+        resultEl.className = 'modal-result error';
+        resultEl.textContent = err.message;
+        btn.disabled = false;
+        btn.textContent = 'Reset';
       }
     }
 
