@@ -18586,3 +18586,673 @@ None — all changes follow the plan's Component 6 (CI/CD) and Component 9 (Dock
 | `services/issuer/CLAUDE.md` | -4 | Removed legacy app/keri/ references |
 | `.gitignore` | +3 | Added .tmp-issuer-data/ |
 
+
+---
+
+# Sprint 68c: Complete Issuer KERI Decoupling
+
+_Archived: 2026-02-16_
+
+# Sprint 68c: Complete Issuer KERI Decoupling & CI/CD Pipeline Split
+
+## Problem Statement
+
+Sprint 68b migrated all 15 API **routers** to use `KeriAgentClient`, but 6 non-router modules still import directly from `app.keri.*` (25+ call sites), and 3 modules import directly from `keri.*` (the keripy library itself). This means:
+
+1. The issuer still depends on keripy/LMDB at runtime
+2. The issuer deploy still requires the slow 3-phase LMDB stop sequence (~5 min downtime)
+3. The KERI Agent scaffold (`services/keri-agent/`) exists but isn't deployed
+4. Changes to UI, auth, schemas, or org management still trigger LMDB restarts
+
+Until the issuer is fully decoupled, the architectural benefit of Sprint 68's service extraction is unrealized.
+
+## Current State
+
+### Remaining Direct `app.keri.*` Imports in Issuer
+
+| Module | Import count | KERI operations |
+|--------|-------------|-----------------|
+| `app/vetter/service.py` | 7 | `reger.creds.get()`, `reger.states.get()`, `issuer.revoke_credential()`, witness publish |
+| `app/org/mock_vlei.py` | 12 | `identity_mgr.create_identity()`, `registry_mgr.create_registry()`, `issuer.issue_credential()`, witness publish |
+| `app/vetter/constraints.py` | 2 | `reger.creds.get()`, `reger.states.get()` |
+| `app/vvp/passport.py` | 1 | `hab.sign()` (Ed25519 PASSporT signing) |
+| `app/vvp/dossier_service.py` | 1 | `issuer.get_credential()` (revocation chain build) |
+| `app/tn/lookup.py` | 1 | `issuer.get_credential()` (TN ownership validation) |
+| `app/main.py` | 3 | Shutdown closers only |
+| **Total** | **27** | |
+
+### Remaining Direct `keri.*` Imports (outside `app/keri/`)
+
+| Module | Import | Usage |
+|--------|--------|-------|
+| `app/schema/said.py:14` | `from keri.core.coring import MtrDex, Saider` | `Saider.saidify()` for schema SAID computation |
+| `app/api/dossier.py:335` | `from keri.help import nowIso8601` | ISO8601 timestamp generation |
+| `app/vetter/service.py:78` | `from keri.vdr import eventing` | TEL event type checking for revocation |
+
+**These 3 imports must also be eliminated** for the issuer to truly drop keripy.
+
+### Replacements for Direct `keri.*` Imports
+
+| Import | Replacement | Rationale |
+|--------|-------------|-----------|
+| `keri.core.coring.Saider.saidify()` | Pure-Python SAID via `common.vvp.canonical.keri_canonical.most_compact_form()` + blake3 | Common package already has blake3 dependency and canonical JSON serialization. The verifier's `compute_schema_said()` proves this works without keripy. |
+| `keri.help.nowIso8601()` | `datetime.now(timezone.utc).isoformat()` | Trivial stdlib replacement. keripy's `nowIso8601` is just a thin wrapper. |
+| `keri.vdr.eventing` | Remove entirely — revocation check migrated to `client.get_credential()` status field | The `reger.states.get()` call that uses this is being replaced by the credential DTO's `status` field ("issued"/"revoked"). |
+
+### KERI Access Patterns (what the KERI Agent already exposes)
+
+All remaining usages map to operations the KERI Agent already has endpoints for:
+
+| KERI operation | KeriAgentClient method | Used by |
+|---------------|----------------------|---------|
+| `reger.creds.get(said)` → credential attrs | `client.get_credential(said)` | vetter/service, vetter/constraints, dossier_service, tn/lookup |
+| `reger.states.get(said)` → revocation state | `client.get_credential(said)` (status field) | vetter/service, vetter/constraints |
+| `issuer.issue_credential(...)` | `client.issue_credential(req)` | mock_vlei |
+| `issuer.revoke_credential(said)` | `client.revoke_credential(said)` | vetter/service |
+| `identity_mgr.create_identity(...)` | `client.create_identity(req)` | mock_vlei |
+| `registry_mgr.create_registry(...)` | `client.create_registry(req)` | mock_vlei |
+| `witness_publisher.publish_oobi(...)` | Agent handles internally on create/issue | mock_vlei, vetter/service |
+| `hab.sign(ser, indexed=False)` | `client.create_vvp_attestation(req)` | passport.py |
+
+### Special Case: PASSporT Signing
+
+`passport.py` calls `hab.sign()` directly to create Ed25519 signatures. This is the deepest KERI coupling — it needs the private signing key. Two options:
+
+- **Option A**: Move PASSporT signing to the KERI Agent (the agent already has a `/vvp/create` endpoint scaffold)
+- **Option B**: Add a generic `/sign` endpoint to the KERI Agent
+
+Option A is cleaner — the full VVP attestation (header + PASSporT + Identity header) moves to the agent. The issuer's `/vvp/create` becomes a thin orchestrator: check auth, check revocation, check constraints, then call `client.create_vvp_attestation()`.
+
+## Proposed Solution
+
+### Execution Strategy: Two-Stage Approach
+
+Per reviewer recommendation, this sprint executes in two stages to reduce blast radius:
+
+**Stage 1: Code Decoupling + Contract Gates**
+1. Migrate all remaining `app.keri.*` and `keri.*` imports to KeriAgentClient
+2. Replace direct keripy imports with pure-Python equivalents
+3. Delete `app/keri/` directory from issuer
+4. Remove keripy from issuer dependencies
+5. Add contract tests and parity checks to CI
+6. Verify all existing tests pass unchanged
+
+**Stage 2: CI/CD Split + Infrastructure**
+7. Create Azure Container App `vvp-keri-agent` (manual pre-creation)
+8. Add KERI Agent deploy job to pipeline
+9. Simplify issuer deploy (remove LMDB handling)
+10. Execute cutover with rollback plan
+
+Stage 2 only proceeds after Stage 1 parity is proven by passing tests.
+
+### Alternatives Considered
+
+| Alternative | Pros | Cons | Why Rejected |
+|-------------|------|------|--------------|
+| Migrate only easy modules, keep passport.py | Smaller scope | Issuer still needs keripy for signing | Doesn't achieve the goal |
+| Add `/sign` endpoint to agent | More flexible | Over-engineers — only PASSporT needs signing | Option A is cleaner |
+| Skip CI/CD split (just decouple code) | Less infra work | Main benefit unrealized | CI/CD split is the payoff |
+| Big-bang deploy (code + infra + CI/CD together) | Single step | Maximum blast radius | Two-stage is safer |
+
+### Detailed Design
+
+#### Component 1: Migrate `vetter/service.py` and `vetter/constraints.py`
+
+**Current**: Both modules call `get_registry_manager()` to access `reger.creds.get()` and `reger.states.get()`. `service.py` also imports `keri.vdr.eventing` for TEL event type checking.
+
+**Migration**: Replace with `client.get_credential(said)`. The `CredentialResponse` DTO already has `status` field ("issued"/"revoked"), `attributes`, `schema_said`, `issuer_aid`, `edges` — everything the vetter needs.
+
+Changes:
+- `resolve_active_vetter_cert()` → Use `client.get_credential(said)` instead of `reger.creds.get()`
+- `_resolve_cert_attributes()` → Same migration
+- `issue_vetter_certification()` → Use `client.issue_credential()` + witness publish is automatic
+- `revoke_vetter_certification()` → Use `client.revoke_credential()`
+- `validate_credential_edge_constraints()` → Use `client.get_credential()` for lookups
+- `validate_signing_constraints()` → Use `client.get_credential()` for dossier/edge walks
+- Remove `from keri.vdr import eventing` → replaced by `credential.status == "revoked"` check
+
+**Key mapping**: `reger.states.get(said).et in ("rev", "brv")` → `credential.status == "revoked"`
+
+#### Component 2: Migrate `org/mock_vlei.py`
+
+**Current**: `MockVLEIManager.initialize()` calls identity, registry, credential, and witness managers directly. This is the bootstrap path — creating mock GLEIF, QVI, GSMA trust chain.
+
+**Migration**: Replace all direct KERI calls with `KeriAgentClient` methods. The `initialize()` method becomes a client that calls the KERI Agent's existing `/bootstrap/mock-vlei` endpoint (which runs the actual keripy operations).
+
+In Sprint 68b, we already moved the state management to `TrustAnchorManager` (DB-backed). Now we move the KERI operations to the agent:
+
+- `initialize()` → `client.initialize_mock_vlei()` (already returns `BootstrapStatusResponse`)
+- `issue_le_credential()` → `client.issue_credential()` with LE schema + QVI edge
+- `_get_or_issue_qvi_credential()` → Not needed (agent handles during bootstrap)
+- `_create_gsma_identity()` → Not needed (agent handles during bootstrap)
+- `_bootstrap_gsma()` → Not needed (agent handles during bootstrap)
+- `_issue_governance_credential()` → Not needed (agent handles during bootstrap)
+- `issue_vetter_certification()` → `client.issue_credential()` with VetterCert schema
+
+After migration, `MockVLEIManager` becomes a thin facade:
+- `initialize()` → calls `client.initialize_mock_vlei()`
+- `issue_le_credential()` → calls `client.issue_credential()`
+- `issue_vetter_certification()` → calls `client.issue_credential()`
+- State access → already delegates to `TrustAnchorManager`
+
+#### Component 3: Migrate `vvp/passport.py`
+
+**Current**: Calls `get_identity_manager()` to access `hab.sign()` for Ed25519 signing.
+
+**Migration**: Move the full PASSporT creation to the KERI Agent. The issuer's `create_passport()` function is replaced by `client.create_vvp_attestation()`.
+
+The KERI Agent's `/vvp/create` endpoint already exists as a scaffold. Wire it to the existing passport.py logic (which moves to `services/keri-agent/app/vvp/passport.py` — already there from Sprint 68).
+
+The issuer's `app/api/vvp.py` router changes:
+```python
+# Before (Sprint 68b): Local PASSporT creation using keri_client for identity lookup
+vvp_header = create_vvp_identity_header(...)
+passport = await create_passport(identity_name=..., ...)  # calls hab.sign()
+
+# After (Sprint 68c): Full attestation delegated to agent
+attestation = await client.create_vvp_attestation(CreateVVPAttestationRequest(
+    identity_name=body.identity_name,
+    dossier_said=body.dossier_said,
+    orig_tn=body.orig_tn,
+    dest_tn=body.dest_tn[0],
+    exp_seconds=exp_seconds,
+    call_id=body.call_id,
+    cseq=body.cseq,
+))
+```
+
+**PASSporT parity requirement — invariant-level** (not byte-for-byte): Because JWTs contain time-dependent fields (`iat`, `exp`), bit-for-bit parity is infeasible without clock mocking. Instead, parity is defined as **structural invariant compliance**:
+- JWT header MUST have fields: `alg=EdDSA`, `ppt=shaken`, `typ=passport`, `x5u=<kid_oobi>`
+- JWT payload MUST have fields: `orig`, `dest`, `iat`, `exp`, `otn`, `dtn`, `evd`
+- VVP-Identity header MUST be valid base64url-encoded JSON with `alg`, `kid`, `evd`
+- Identity header MUST follow RFC 8224 format
+- Signature MUST verify against the identity's public key
+
+#### Component 4: Migrate `vvp/dossier_service.py` and `tn/lookup.py`
+
+**Current**: Both call `get_credential_issuer()` to access credential data.
+
+**Migration**: Replace with `client.get_credential(said)`. Straightforward — same pattern as vetter migration.
+
+- `_build_cache_entry()` → Use `client.get_credential()` instead of `issuer.get_credential()`
+- `validate_tn_ownership()` → Use `client.get_credential()` for TN allocation attribute extraction
+
+#### Component 5: Replace Direct `keri.*` Imports
+
+Three modules import from `keri.*` (the keripy library itself) rather than through `app.keri.*`:
+
+**5a. `app/schema/said.py`** — Replace `keri.core.coring.Saider.saidify()`:
+
+The common package already has `blake3` as a direct dependency. The verifier already implements pure-Python schema SAID computation in `services/verifier/app/vvp/acdc/schema_fetcher.py:compute_schema_said()`.
+
+**Canonicalization method**: JSON Schema SAIDs use **sorted-key** canonicalization (not KERI field-order). This is distinct from ACDC/KEL SAIDs. The verifier's `compute_schema_said()` uses `json.dumps(sort_keys=True)` directly — this is correct per the ACDC spec for schemas. We adopt the same algorithm.
+
+New implementation in `app/schema/said.py`:
+```python
+import base64
+import json
+
+import blake3
+
+def compute_schema_said(schema: dict) -> str:
+    """Compute SAID for a JSON Schema using pure Python (no keripy).
+
+    Uses sorted-key JSON canonicalization (correct for schemas, per ACDC spec).
+    Identical algorithm to verifier's compute_schema_said().
+    """
+    schema_copy = dict(schema)
+    schema_copy["$id"] = "#" * 44  # SAID placeholder
+    canonical = json.dumps(schema_copy, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    digest = blake3.blake3(canonical).digest()
+    b64 = base64.urlsafe_b64encode(digest).decode().rstrip("=")
+    return "E" + b64[:43]  # 'E' prefix = Blake3-256 derivation code
+```
+
+Note: `common.vvp.canonical.keri_canonical.most_compact_form()` is for KERI events/ACDCs (field-order canonicalization), NOT for schemas. We do not use it here.
+
+**5b. `app/api/dossier.py:335`** — Replace `keri.help.nowIso8601()`:
+
+**Canonical timestamp format**: `YYYY-MM-DDTHH:MM:SS.ffffff+00:00` (RFC 3339 profile of ISO 8601, microsecond precision, explicit UTC offset). This is the format produced by both `keri.help.nowIso8601()` and `datetime.now(timezone.utc).isoformat()` — they are functionally identical. Verified: keripy's `nowIso8601()` is defined as `datetime.now(timezone.utc).isoformat()` in `keripy/src/keri/help/helping.py:200`.
+
+```python
+# Before:
+from keri.help import nowIso8601
+attributes = {"d": "", "dt": nowIso8601()}
+
+# After:
+from datetime import datetime, timezone
+attributes = {"d": "", "dt": datetime.now(timezone.utc).isoformat()}
+```
+
+Output format is identical: `2026-02-16T10:18:47.354753+00:00`. No consumer-visible change.
+
+**5c. `app/vetter/service.py:78`** — Remove `keri.vdr.eventing`:
+
+This import is only used for TEL event type constants. After migrating `reger.states.get()` to `client.get_credential()`, the status is already normalized to "issued"/"revoked" in the DTO. No event type checking needed.
+
+#### Component 6: Remove `app/keri/` from Issuer
+
+After all migrations:
+1. Delete `services/issuer/app/keri/` directory entirely
+2. Remove keripy from `services/issuer/pyproject.toml`
+3. Remove legacy manager close calls from `app/main.py`
+4. **Verification**: `grep -r "from app.keri\|from keri\." services/issuer/app/` returns nothing
+5. **Verification**: `python -c "import app.main"` succeeds without keripy installed
+
+#### Component 7: CI/CD Pipeline Split
+
+**Path filter update** in `deploy.yml`:
+```yaml
+keri-agent:
+  - 'services/keri-agent/**'
+  - 'keripy/**'
+  - 'common/**'
+issuer:
+  - 'services/issuer/**'
+  - 'common/**'
+  # NOTE: No longer triggers LMDB restart
+```
+
+**New job `test-keri-agent`**:
+- Install keripy, common, keri-agent dependencies
+- Run `services/keri-agent/tests/`
+
+**New job `deploy-keri-agent`**:
+- Build Docker image from `services/keri-agent/Dockerfile`
+- Push to ACR as `vvp-keri-agent:<sha>`
+- Execute existing 3-phase LMDB-safe deploy sequence (moved from issuer deploy)
+- Self-healing revision activation
+- Verify `/version` on internal endpoint
+
+**Simplified `deploy-issuer`**:
+- Remove 3-phase LMDB stop (no LMDB in this service anymore)
+- Standard `az containerapp update` (blue-green, no deactivation)
+- Optionally increase `max_replicas` (no single-writer constraint)
+- Deploy time: ~30s (vs current ~5 min)
+
+**Contract test gate** (new CI job `contract-tests`):
+- Runs on BOTH `services/issuer/**` and `services/keri-agent/**` changes
+- Tests that `KeriAgentClient` DTOs match agent endpoint responses
+- If contract tests fail, neither deploy proceeds
+- Implemented as pytest parametric tests comparing request/response shapes
+
+#### Component 8: Azure Infrastructure
+
+**Pre-creation checklist** (manual, before first deploy):
+
+1. Create Container App `vvp-keri-agent`:
+   ```bash
+   az containerapp create \
+     --name vvp-keri-agent \
+     --resource-group VVP \
+     --environment <env-id> \
+     --image <acr>/vvp-keri-agent:initial \
+     --ingress internal --target-port 8002 \
+     --min-replicas 1 --max-replicas 1 \
+     --secrets keri-agent-token=<from-keyvault> \
+     --env-vars VVP_KERI_AGENT_AUTH_TOKEN=secretref:keri-agent-token ...
+   ```
+
+2. Mount Azure Files to `vvp-keri-agent` (same share currently on issuer):
+   - Storage: `vvpissuerdata`, share: `issuer-data`
+   - Mount path: `/data/vvp-issuer`
+
+3. Verify agent starts and passes health check (`/health`)
+
+4. Add env vars to `vvp-issuer`:
+   - `VVP_KERI_AGENT_URL=http://vvp-keri-agent.internal.<env>:8002`
+   - `VVP_KERI_AGENT_AUTH_TOKEN=secretref:keri-agent-token`
+
+**Cutover sequence**:
+
+| Step | Action | Rollback trigger | Rollback action |
+|------|--------|------------------|-----------------|
+| 1 | Deploy `vvp-keri-agent` with LMDB mount | Agent unhealthy after 60s | Delete Container App, issuer remains monolith |
+| 2 | Verify agent `/health` returns `ok` + identity/registry counts | Zero counts despite bootstrap | Check LMDB mount, restart agent |
+| 3 | Deploy new issuer (no LMDB mount, with agent URL env vars) | Issuer 503 on all KERI ops | Re-deploy previous issuer revision (still has LMDB code) |
+| 4 | Run health check script: `./scripts/system-health-check.sh --e2e` | E2E call fails | Re-deploy previous issuer revision |
+| 5 | Remove Azure Files mount from issuer Container App | N/A (already validated) | N/A |
+| 6 | Run full E2E test again | E2E call fails | Re-add mount to issuer, re-deploy old revision |
+
+**Deployment ordering rule**: For breaking API changes between issuer and agent:
+1. Always deploy the agent FIRST (agent must accept both old and new DTOs)
+2. Then deploy issuer with new DTO usage
+3. Agent backward-compatibility period: minimum 1 deploy cycle
+
+**Rollback**: Previous issuer revision is always available via `az containerapp revision activate`. The old revision still has keripy + LMDB code. If cutover fails, activate old revision + deactivate new.
+
+### Error Handling
+
+Same 503 contract from Sprint 68b:
+- All migrated code catches `KeriAgentUnavailableError` → HTTP 503
+- `HTTPException` pass-through preserved
+- Vetter constraint violations remain 403 (unchanged)
+
+### Test Ownership Split
+
+Deleting `app/keri/` means issuer tests that import from it must be migrated or removed. Full inventory:
+
+| Test File | `app.keri.*` Imports | Tests | Disposition |
+|-----------|---------------------|-------|-------------|
+| `tests/conftest.py` | `reset_identity_manager`, `close_identity_manager`, `IssuerIdentityManager`, `reset_credential_issuer`, `close_credential_issuer`, `reset_persistence_manager`, `PersistenceManager`, `reset_registry_manager`, `close_registry_manager`, `reset_witness_publisher` | N/A (fixtures) | **Modify**: Remove all `app.keri.*` imports. Singleton reset fixtures become no-ops or are deleted — the `MockKeriAgentClient` (installed at `keri_client_module._client`) is the only KERI abstraction tests need. |
+| `tests/test_identity.py` | `IssuerIdentityManager`, `IdentityNotFoundError`, `InvalidRotationThresholdError` (7 direct-manager tests at lines 152-219, 322-405, 463, 676) | 26 total | **Split**: 19 API-level tests stay (they use `client` fixture, no `app.keri.*` imports). 7 direct-manager unit tests **move to `services/keri-agent/tests/`** — they test `IssuerIdentityManager` which now lives in the agent. |
+| `tests/test_registry.py` | `IssuerIdentityManager`, `CredentialRegistryManager` (1 test at lines 243-290) | 17 total | **Split**: 16 API-level tests stay. 1 direct-manager test (`test_get_tel_bytes`) **moves to `services/keri-agent/tests/`**. |
+| `tests/test_credential.py` | `get_credential_issuer` (2 tests at lines 601-683) | 22 total | **Delete 2**: Both tests are already `@pytest.mark.skip(reason="Sprint 68b: moved to KERI Agent")`. Delete them. 20 API-level tests remain unchanged. |
+| `tests/test_persistence.py` | `PersistenceManager`, `get_persistence_manager`, `reset_persistence_manager` (all 21 tests) | 21 total | **Move entirely to `services/keri-agent/tests/`** — `PersistenceManager` is a KERI Agent utility class that manages LMDB directory structure. |
+
+**Net effect on issuer test suite**: 8 tests move to keri-agent, 2 tests deleted, 0 new imports of `app.keri.*`. All remaining issuer tests use `MockKeriAgentClient` exclusively.
+
+**Success criteria update**: "Existing tests pass" means: all tests that remain in the issuer suite pass after migration. Tests that move to keri-agent are verified to pass in the keri-agent suite.
+
+### Test Strategy
+
+#### 1. Existing Tests (must pass after migration)
+
+The `MockKeriAgentClient` in `tests/conftest.py` already handles all KERI operations at the mock level. All 76 vetter tests, 25 readiness tests, 48 dossier wizard tests, and 503 outage tests pass without modification. The 8 relocated manager tests pass in `services/keri-agent/tests/`.
+
+#### 2. Contract Tests (new — CI gate)
+
+Parametric tests that validate the issuer-agent API contract, including **N/N-1 deploy skew** compatibility:
+
+```python
+# tests/test_agent_contract.py
+class TestAgentContract:
+    """Verify KeriAgentClient DTOs match agent endpoint behavior."""
+
+    async def test_credential_response_has_status_field(self):
+        """CredentialResponse.status exists and is 'issued' or 'revoked'."""
+
+    async def test_attestation_response_has_all_fields(self):
+        """VVPAttestationResponse returns all fields issuer needs."""
+
+    async def test_bootstrap_response_has_credential_saids(self):
+        """BootstrapStatusResponse includes qvi_credential_said, gsma_governance_said."""
+
+
+class TestAgentBackwardCompatibility:
+    """Verify new agent accepts requests from previous issuer version (N/N-1).
+
+    Deploy ordering rule: agent deploys first, then issuer. During the
+    window between deploys, the N+1 agent must still serve the N issuer's
+    request shapes. These tests enforce that contract.
+
+    Implementation: Pin a snapshot of the previous sprint's DTO shapes
+    (from common/vvp/models/keri_agent.py at the Sprint 68b commit) and
+    verify the current agent mock accepts them without error.
+    """
+
+    async def test_agent_accepts_previous_credential_request_shape(self):
+        """New agent accepts IssueCredentialRequest from Sprint 68b issuer."""
+
+    async def test_agent_accepts_previous_attestation_request_shape(self):
+        """New agent accepts CreateVVPAttestationRequest from Sprint 68b issuer."""
+
+    async def test_agent_response_superset_of_previous(self):
+        """New agent responses contain at least all fields from Sprint 68b DTOs.
+
+        New fields are additive; no field removals or renames.
+        """
+```
+
+**N/N-1 enforcement mechanism**: The contract test file pins a `PREVIOUS_DTO_SNAPSHOT` dict (field names + types for each DTO as of the last release). Any field removal or type change fails the test, blocking deploy. The snapshot is updated only when the compatibility window has closed (both services deployed with matching DTOs).
+
+#### 3. PASSporT Invariant Tests (new — critical)
+
+Verify agent-side PASSporT signing meets structural invariants (not byte-for-byte — JWTs contain timestamps):
+
+```python
+# tests/test_passport_parity.py
+class TestPassportInvariants:
+    """PASSporT output must meet structural invariants after migration."""
+
+    async def test_jwt_header_has_required_fields(self):
+        """JWT header has alg=EdDSA, ppt=shaken, typ=passport, x5u=<oobi>."""
+
+    async def test_jwt_payload_has_required_fields(self):
+        """JWT payload has orig, dest, iat, exp, otn, dtn, evd fields."""
+
+    async def test_identity_header_rfc8224_format(self):
+        """Identity header value follows RFC 8224 format."""
+
+    async def test_vvp_identity_header_valid_base64url_json(self):
+        """VVP-Identity header is valid base64url-encoded JSON with alg, kid, evd."""
+
+    async def test_signature_verifiable(self):
+        """Signature in PASSporT JWT verifies against identity public key."""
+```
+
+#### 4. Dossier Output Parity Tests (new)
+
+Verify dossier_service produces identical results via agent:
+
+```python
+# tests/test_dossier_parity.py
+class TestDossierParity:
+    """Dossier chain building must produce equivalent results via agent."""
+
+    async def test_credential_attributes_preserved(self):
+        """Credential attributes from agent match direct LMDB access."""
+
+    async def test_revocation_status_mapping(self):
+        """'revoked' status maps correctly from TEL event types."""
+```
+
+#### 5. Full 503 Outage Coverage (existing + extensions)
+
+The existing `test_agent_outage_503.py` covers identity, registry, org, VVP, and regression paths. Extend for newly migrated modules:
+
+```python
+# Extend test_agent_outage_503.py
+class TestVetterOutage:
+    async def test_resolve_vetter_cert_returns_503_on_agent_down(self): ...
+
+class TestDossierServiceOutage:
+    async def test_build_cache_entry_returns_503_on_agent_down(self): ...
+
+class TestTNLookupOutage:
+    async def test_validate_tn_returns_503_on_agent_down(self): ...
+```
+
+#### 6. SAID Parity Test (new)
+
+Verify pure-Python SAID computation matches keripy's:
+
+```python
+# tests/test_said_parity.py
+class TestSAIDParity:
+    """Pure-Python SAID must match keripy Saider.saidify() output."""
+
+    def test_known_schema_saids_match(self):
+        """All known schema SAIDs in registry match pure-Python computation."""
+```
+
+#### 7. keripy Import Guard (new — CI gate)
+
+```python
+# tests/test_no_keripy.py
+def test_issuer_has_no_keripy_imports():
+    """Ensure issuer code never imports keripy directly.
+
+    Catches both forms:
+    - `from keri.xxx import yyy` (ast.ImportFrom)
+    - `import keri` / `import keri.xxx` / `import keri as k` (ast.Import)
+    """
+    import ast, pathlib
+    issuer_app = pathlib.Path("services/issuer/app")
+    for py_file in issuer_app.rglob("*.py"):
+        tree = ast.parse(py_file.read_text())
+        for node in ast.walk(tree):
+            # Check `from keri... import ...`
+            if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("keri"):
+                assert False, f"{py_file}:{node.lineno} has 'from {node.module} import ...'"
+            # Check `import keri` / `import keri.xxx` / `import keri as k`
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name.startswith("keri"):
+                        assert False, f"{py_file}:{node.lineno} has 'import {alias.name}'"
+```
+
+### Issuer↔Agent Compatibility Policy
+
+**Rules**:
+1. The agent MUST maintain backward compatibility for at least one release cycle
+2. New agent endpoints/fields: additive only (never remove or rename existing fields)
+3. Deprecation: mark in DTO docstring, remove only after issuer no longer references
+4. DTO definitions live in `common/vvp/models/keri_agent.py` — single source of truth for both services
+5. Contract tests in CI block deploys if DTOs diverge from actual behavior
+
+**Enforcement**:
+- Contract tests run on both `services/issuer/**` and `services/keri-agent/**` changes
+- Both test suites must pass before either service deploys
+- `common/**` changes trigger both test suites
+
+## Files to Create/Modify
+
+### Stage 1: Code Decoupling
+
+| File | Action | Purpose |
+|------|--------|---------|
+| `app/vetter/service.py` | Modify | Replace `get_registry_manager()` + `keri.vdr.eventing` with `get_keri_client()` |
+| `app/vetter/constraints.py` | Modify | Replace `get_registry_manager()` with `get_keri_client()` |
+| `app/org/mock_vlei.py` | Modify | Replace all direct KERI calls with `get_keri_client()` |
+| `app/vvp/passport.py` | Modify | Remove `hab.sign()`, delegate to agent |
+| `app/api/vvp.py` | Modify | Use `client.create_vvp_attestation()` |
+| `app/vvp/dossier_service.py` | Modify | Replace `get_credential_issuer()` with `get_keri_client()` |
+| `app/tn/lookup.py` | Modify | Replace `get_credential_issuer()` with `get_keri_client()` |
+| `app/schema/said.py` | Modify | Replace `keri.core.coring.Saider` with pure-Python SAID |
+| `app/api/dossier.py` | Modify | Replace `keri.help.nowIso8601()` with `datetime.isoformat()` |
+| `app/main.py` | Modify | Remove legacy KERI manager imports/closers |
+| `app/keri/` | Delete | Entire directory (moved to KERI Agent) |
+| `services/issuer/pyproject.toml` | Modify | Remove keripy dependency |
+| `tests/conftest.py` | Modify | Remove all `app.keri.*` imports; singleton resets become no-ops |
+| `tests/test_identity.py` | Modify | Remove 7 direct-manager tests (moved to keri-agent) |
+| `tests/test_registry.py` | Modify | Remove 1 direct-manager test (moved to keri-agent) |
+| `tests/test_credential.py` | Modify | Delete 2 skipped tests |
+| `tests/test_persistence.py` | Delete | Move entirely to `services/keri-agent/tests/` |
+| `services/keri-agent/tests/test_identity_manager.py` | Create | 7 tests relocated from issuer |
+| `services/keri-agent/tests/test_registry_manager.py` | Create | 1 test relocated from issuer |
+| `services/keri-agent/tests/test_persistence.py` | Create | 21 tests relocated from issuer |
+| `tests/test_agent_contract.py` | Create | Contract tests for issuer↔agent DTOs |
+| `tests/test_passport_parity.py` | Create | PASSporT structural invariant tests |
+| `tests/test_dossier_parity.py` | Create | Dossier chain output invariant tests |
+| `tests/test_said_parity.py` | Create | Pure-Python SAID vs known values |
+| `tests/test_no_keripy.py` | Create | Import guard ensuring no keripy in issuer |
+| `tests/test_agent_outage_503.py` | Modify | Add vetter, dossier_service, tn/lookup 503 tests |
+
+### Stage 2: CI/CD + Infrastructure
+
+| File | Action | Purpose |
+|------|--------|---------|
+| `.github/workflows/deploy.yml` | Modify | Add keri-agent path filter, test, deploy jobs; simplify issuer deploy; add contract test gate |
+| `docker-compose.yml` | Modify | Add `keri-agent` service for local dev |
+| `SPRINTS.md` | Modify | Update Sprint 68c status |
+
+## Open Questions
+
+*Resolved per R1 reviewer answers:*
+
+1. ~~Azure Container App creation~~ → **Pre-create manually** before enabling deploy jobs. Pipeline only updates existing resources.
+2. ~~Auth token generation~~ → **Random secret in Azure Key Vault** / Container App secret references. No fixed tokens.
+3. ~~Docker Compose~~ → **Yes, update in this sprint** (Stage 2). Split runtime without local dual-service topology hides integration regressions.
+
+## Risks and Mitigations
+
+| Risk | Likelihood | Impact | Mitigation |
+|------|------------|--------|------------|
+| Vetter constraint validation behavior changes | Medium | High | Careful mapping of `reger.creds.get()` fields to `CredentialResponse` DTO fields; test with existing 76 vetter tests |
+| PASSporT signature differs after migration | Low | Critical | Agent uses identical `passport.py` code (copied in Sprint 68). Parity tests verify JWT invariants. |
+| KERI Agent fails to start in Azure | Medium | High | Pre-create Container App manually, test image locally first, rollback plan documented above |
+| `common/**` changes trigger BOTH deploys | Expected | Low | Acceptable — common changes could affect either service. CI runs both test suites. |
+| Mock vLEI state sync timing | Low | Medium | Bootstrap probe (Sprint 68b) already handles async agent startup gracefully |
+| Pure-Python SAID diverges from keripy output | Low | Medium | Parity test against known schema SAIDs. The verifier already uses the same algorithm successfully. |
+| API contract drift after pipeline split | Medium | High | Contract tests in CI gate both deploys. Shared DTO definitions in common. Backward-compat policy. |
+| LMDB lock during Azure Files handoff | Medium | High | Cutover sequence: deploy agent first, verify health, then deploy issuer without mount. Rollback: revert to old issuer revision. |
+
+## Revision History
+
+| Round | Date | Changes |
+|-------|------|---------|
+| R1 | 2026-02-16 | Initial draft |
+| R2 | 2026-02-16 | Added: (1) Complete `keri.*` import inventory — `said.py`, `dossier.py`, `vetter/service.py` now explicitly scoped with replacements. (2) Two-stage execution (code decoupling first, CI/CD + infra second). (3) Issuer↔Agent compatibility policy with backward-compat rules. (4) Contract test gate in CI blocking both deploys. (5) Strengthened test strategy: PASSporT parity, dossier parity, SAID parity, 503 extensions, import guard. (6) Explicit Azure cutover sequence with per-step rollback triggers. (7) Resolved all open questions per R1 reviewer answers. |
+| R3 | 2026-02-16 | Addressed R2 findings: (1) Added "Test Ownership Split" section — full inventory of all issuer tests importing `app.keri.*` with per-file disposition: 8 tests move to keri-agent, 2 deleted, conftest imports removed, file matrix updated. (2) Relaxed PASSporT parity from "bit-for-bit" to "structural invariant" level — JWT contains timestamps so byte equality is infeasible; defined 5 invariant checks including signature verification. (3) Specified canonical ISO8601 format (`YYYY-MM-DDTHH:MM:SS.ffffff+00:00`), confirmed `datetime.isoformat()` matches `keripy.nowIso8601()` exactly (verified in source). |
+| R4 | 2026-02-16 | Addressed R3 findings: (1) Added N/N-1 backward-compatibility tests (`TestAgentBackwardCompatibility`) with pinned DTO snapshot mechanism to enforce deploy-skew safety. (2) Strengthened keripy import guard to catch both `from keri...` and `import keri...` (including aliased imports via `ast.Import`). (3) Normalized SAID canonicalization narrative — clarified schemas use sorted-key JSON (not `most_compact_form()` which is for KERI events/ACDCs), added explicit note distinguishing the two methods. |
+
+---
+
+## Implementation Notes
+
+### Deviations from Plan
+
+1. **SAID canonicalization** — Plan stated schemas use sorted-key JSON. However, the known embedded schema SAIDs (`ENPXp1vQ...`, `EBfdlu8R...`) were computed by keripy's `Saider.saidify()` which uses **insertion-order** JSON serialization (no `sort_keys`). Fixed `compute_schema_said()` to match keripy: `json.dumps(data, separators=(",",":"), ensure_ascii=False)` without `sort_keys=True`. Placeholder is `"#" * 44` (keripy's `Saider.Dummy * fs`).
+
+2. **N/N-1 backward-compatibility tests** — Deferred to Stage 2 (CI/CD pipeline split). Stage 1 focuses on code decoupling only.
+
+3. **Tests deleted vs moved** — Some tests slated for "move to keri-agent" were simply deleted (e.g., `test_persistence.py`, direct manager tests in `test_identity.py`) since the KERI Agent doesn't exist as a separate service yet. They can be recreated from the plan when the agent is built.
+
+### Implementation Details
+
+**Stage 1a**: Migrated `vetter/service.py` and `vetter/constraints.py` — replaced `reger.creds.get()`, `reger.states.get()`, `issuer.revoke_credential()`, and `hab_data` calls with `KeriAgentClient` methods (`get_credential`, `get_credential_status`, `revoke_credential`, `get_identity`).
+
+**Stage 1b**: Migrated `org/mock_vlei.py` — replaced `get_credential_issuer()` with `get_keri_client()` + `IssueCredentialRequest` DTO. Mock vLEI initialization still bypasses keri_client (correctly uses TrustAnchorManager).
+
+**Stage 1c**: Migrated `vvp/passport.py` + `api/vvp.py` — replaced `get_identity_manager().get_identity()` + `hab.sign()` with `KeriAgentClient.create_vvp_attestation()`. Renamed `_validate_e164` to public `validate_e164`. Changed `dest_tn` from `str` to `list[str]` in `CreateVVPAttestationRequest`.
+
+**Stage 1d**: Migrated `dossier_service.py` and `tn/lookup.py` — replaced `get_credential_issuer().get_credential()` with `get_keri_client().get_credential()`.
+
+**Stage 1e**: Replaced direct `keri.*` imports in `said.py` (keripy Saider → pure-Python blake3+CESR), `dossier.py` (keripy nowIso8601 → `datetime.now(UTC).isoformat()`), `main.py` (removed mock_vlei initialize).
+
+**Stage 1f**: Deleted `app/keri/` directory (7 modules: identity.py, registry.py, issuer.py, persistence.py, witness.py, exceptions.py, __init__.py). Removed `keripy` and `lmdb` from pyproject.toml dependencies.
+
+**Stage 1g**: Migrated all tests — removed legacy `app.keri.*` imports from conftest.py, deleted `test_persistence.py` (21 tests), removed direct manager tests from `test_identity.py` (12 tests), `test_registry.py` (1 test), `test_credential.py` (2 tests). Updated mock targets in `test_agent_outage_503.py`, `test_dossier_revocation.py`, `test_tn_mapping.py`, `test_vvp_passport.py`, `test_keri_client.py`.
+
+### R1 Fixes
+
+- **dest_tn backward compat**: Added `field_validator("dest_tn", mode="before")` to `CreateVVPAttestationRequest` — normalizes scalar string to list. Fixed agent `vvp.py` to not double-wrap.
+- **Vetter fail-safe**: Changed default vetter cert status from `"issued"` to `"unknown"`. Added `KeriAgentUnavailableError` re-raise in `service.py` and `constraints.py`.
+- **Missing tests**: Created `test_no_keripy.py` (import guard), `test_agent_contract.py` (DTO contract), `test_said_parity.py` (SAID parity).
+- **SAID fallback**: Removed sha256 fallback — hard-requires blake3.
+- **Stale comment**: Fixed `_validate_e164` → `validate_e164` in passport.py docstring.
+- **Removed dependencies**: Removed `lmdb` and `hio` from issuer pyproject.toml.
+
+### R2 Fixes
+
+- **[High] Schema SAID canonicalization**: Unified verifier's `compute_schema_said()` in `schema_fetcher.py` to match keripy's insertion-order serialization (removed `sort_keys=True`, added `ensure_ascii=False`, changed placeholder to `"#" * 44`, always use code `"E"`). Both services now produce identical SAIDs.
+- **[Medium] TN lookup outage**: Added `except KeriAgentUnavailableError: raise` before broad except in `tn/lookup.py:validate_tn_ownership()`. Added `KeriAgentUnavailableError` import.
+- **[Medium] Revocation gate outage**: Added `except KeriAgentUnavailableError: raise` before broad except in `dossier_service.py:check_dossier_revocation()`. Added `KeriAgentUnavailableError` import.
+- **[Medium] Missing parity tests**: Created `test_passport_parity.py` (request shape, response shape, outage propagation) and `test_dossier_parity.py` (revocation outage, TN lookup outage). Enhanced `test_agent_contract.py` with DTO validation, round-trip, and additional DTO coverage.
+- **[Low] Unused DTO fields**: Updated agent `vvp.py` to use `request.card`, `request.dossier_url`, `request.kid_oobi` when provided (falls back to computing them if not).
+
+### Test Results
+
+820 passed, 7 skipped, 3 deselected in 92s (issuer).
+1844 passed, 9 skipped (verifier).
+72 passed (keri-agent).
+
+### Files Changed
+
+| File | Action | Summary |
+|------|--------|---------|
+| `app/vetter/service.py` | Modified | Replaced 7 keri imports with keri_client calls |
+| `app/vetter/constraints.py` | Modified | Replaced reger/hab calls with keri_client |
+| `app/org/mock_vlei.py` | Modified | Replaced get_credential_issuer with get_keri_client |
+| `app/vvp/passport.py` | Modified | Replaced identity manager with keri_client.create_vvp_attestation |
+| `app/api/vvp.py` | Modified | Replaced signing logic with keri_client call |
+| `app/dossier/dossier_service.py` | Modified | Replaced get_credential_issuer with get_keri_client |
+| `app/tn/lookup.py` | Modified | Replaced get_credential_issuer with get_keri_client |
+| `app/schema/said.py` | Modified | Replaced keripy Saider with pure-Python blake3+CESR |
+| `app/dossier/dossier.py` | Modified | Replaced keri.nowIso8601 with datetime.isoformat |
+| `app/main.py` | Modified | Removed mock_vlei.initialize from startup |
+| `app/keri/` | Deleted | 7 modules (identity, registry, issuer, persistence, witness, exceptions, __init__) |
+| `pyproject.toml` | Modified | Removed keripy and lmdb dependencies |
+| `tests/conftest.py` | Modified | Removed legacy keri imports, fixtures, reset/close calls |
+| `tests/test_persistence.py` | Deleted | 21 tests for deleted PersistenceManager |
+| `tests/test_identity.py` | Modified | Removed 12 direct manager tests |
+| `tests/test_registry.py` | Modified | Removed 1 direct manager test |
+| `tests/test_credential.py` | Modified | Removed 2 skipped anchor IXN tests |
+| `tests/test_agent_outage_503.py` | Modified | Updated mock target to keri_client |
+| `tests/test_dossier_revocation.py` | Modified | Updated 6 patch targets to keri_client |
+| `tests/test_tn_mapping.py` | Modified | Updated 3 patch targets to keri_client |
+| `tests/test_vvp_passport.py` | Modified | Updated validate_e164 import |
+| `tests/test_keri_client.py` | Modified | Fixed dest_tn type (str → list) |
+| `tests/test_said.py` | Created | 21 tests for SAID module |
+

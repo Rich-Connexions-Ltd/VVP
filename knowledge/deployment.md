@@ -286,6 +286,14 @@ az vm run-command invoke --resource-group VVP --name vvp-pbx \
 | `ADMIN_ENDPOINT_ENABLED` | `true` | Enable `/admin/*` endpoints |
 | `VVP_DASHBOARD_SERVICES` | local defaults | JSON dashboard service config |
 
+#### KERI Agent Client (Sprint 68c)
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `VVP_KERI_AGENT_URL` | `http://localhost:8002` | KERI Agent service URL (internal) |
+| `VVP_KERI_AGENT_AUTH_TOKEN` | *(empty)* | Bearer token for inter-service auth |
+| `VVP_KERI_AGENT_TIMEOUT` | `30` | Read timeout (seconds) |
+| `VVP_KERI_AGENT_WRITE_TIMEOUT` | `120` | Write timeout for mutations (seconds) |
+
 #### KERI/Witness
 | Variable | Default | Purpose |
 |----------|---------|---------|

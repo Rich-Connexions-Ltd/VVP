@@ -139,7 +139,9 @@ All issuer endpoints use consistent HTTP status codes:
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `GET` | `/healthz` | Health check with witness status |
+| `GET` | `/livez` | Liveness probe — always 200 (ACA liveness) |
+| `GET` | `/healthz` | Readiness probe — 200 if DB reachable, 503 if not (ACA readiness). Reports KERI Agent status informatively but does NOT fail on agent outage. |
+| `GET` | `/readyz` | Full operational readiness — 200 only when DB AND KERI Agent are both up. Used by CI/CD gates and monitoring. |
 | `GET` | `/api/dashboard/status` | Dashboard health data (service status, KERI state) |
 
 ### Authentication (`/auth`)
@@ -549,6 +551,64 @@ When found via OSP delegation, the response contains the **owner org's** data (o
 | `GET` | `/admin/benchmarks/ui` | Benchmarks UI redirect |
 
 Legacy redirects (all `GET`, return 302): `/create` → `/ui/identity`, `/registry/ui` → `/ui/registry`, `/schemas/ui` → `/ui/schemas`, `/credentials/ui` → `/ui/credentials`, `/dossier/ui` → `/ui/dossier`
+
+---
+
+## KERI Agent Service API (`services/keri-agent/`)
+
+Base URL: `http://keri-agent.internal:8002` (internal only)
+
+**Auth**: Bearer token via `Authorization: Bearer <VVP_KERI_AGENT_AUTH_TOKEN>`
+
+### Health & Bootstrap
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/healthz` | Readiness probe (KERI managers initialized) |
+| `GET` | `/bootstrap/status` | Mock vLEI bootstrap status |
+
+### Identity
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/identity` | Create KERI identity (inception) |
+| `GET` | `/identity` | List identities |
+| `GET` | `/identity/{aid}` | Get identity details |
+| `GET` | `/identity/{aid}/oobi` | Get OOBI URL |
+| `POST` | `/identity/{aid}/rotate` | Rotate keys |
+| `DELETE` | `/identity/{aid}` | Delete identity |
+
+### Registry
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/registry` | Create credential registry |
+| `GET` | `/registry` | List registries |
+| `GET` | `/registry/{registry_key}` | Get registry details |
+| `DELETE` | `/registry/{registry_key}` | Delete registry |
+
+### Credential
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/credential/issue` | Issue ACDC credential |
+| `GET` | `/credential` | List credentials |
+| `GET` | `/credential/{said}` | Get credential details |
+| `GET` | `/credential/{said}/cesr` | Get credential in CESR format |
+| `POST` | `/credential/{said}/revoke` | Revoke credential |
+| `DELETE` | `/credential/{said}` | Delete credential |
+
+### Dossier
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/dossier/build` | Build dossier from credential SAID (DFS edge walk) |
+
+### VVP Attestation
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/vvp/create` | Create VVP attestation (PASSporT signing + header construction) |
 
 ---
 

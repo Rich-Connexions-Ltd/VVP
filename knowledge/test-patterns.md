@@ -133,6 +133,11 @@ Key shared fixtures:
 | `test_vetter_constraints.py` | Pydantic validation, `resolve_active_vetter_cert()`, edge injection, constants (27 tests, Sprint 61) |
 | `test_dossier_readiness.py` | Dossier readiness endpoint, per-slot status, I2I checks, bproxy gate (25 tests, Sprint 65) |
 | `test_walkthrough.py` | Walkthrough page auth/access, route registration (Sprint 66) |
+| `test_no_keripy.py` | AST-based import guard — ensures no keripy/lmdb/hio imports in issuer code (Sprint 68c) |
+| `test_agent_contract.py` | 28 DTO contract tests — field presence, validation, round-trip serialization (Sprint 68c) |
+| `test_said_parity.py` | 26 SAID parity tests — pure-Python blake3+CESR vs embedded schema SAIDs (Sprint 68c) |
+| `test_passport_parity.py` | 13 attestation request/response shape and outage propagation tests (Sprint 68c) |
+| `test_dossier_parity.py` | 4 outage propagation tests — KeriAgentUnavailableError through revocation/TN paths (Sprint 68c) |
 
 ---
 
@@ -223,4 +228,29 @@ with patch("app.api.dossier.get_keri_client", new_callable=AsyncMock, return_val
 ```python
 async def _get_credential_cesr(said):
     return f'{{"d":"{said}","v":"ACDC10JSON"}}'.encode()
+```
+
+### Sprint 68c Test Patterns
+
+**Import guard test** (`test_no_keripy.py`): AST-based analysis ensures no issuer source file imports `keripy`, `lmdb`, or `hio`. Walks `app/` directory, parses each `.py` file, checks `Import` and `ImportFrom` AST nodes. Prevents accidental re-coupling:
+```python
+def test_no_keripy_imports():
+    for py_file in Path("app").rglob("*.py"):
+        tree = ast.parse(py_file.read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    assert not alias.name.startswith(("keri.", "lmdb", "hio"))
+```
+
+**DTO contract tests** (`test_agent_contract.py`): Validates that issuer DTOs (`CreateVVPAttestationRequest`, `BootstrapStatusResponse`, `DossierBuildRequest`, etc.) match the agent's expected field names and types. Includes validation tests (missing required fields) and round-trip serialization (`.model_dump()` → `Model(**data)`).
+
+**SAID parity tests** (`test_said_parity.py`): Tests pure-Python blake3+CESR SAID computation against known schema SAIDs embedded in `common/vvp/schema/schemas/*.json`. Verifies insertion-order JSON, `"#" * 44` placeholder, and CESR "E" prefix.
+
+**Outage propagation tests** (`test_dossier_parity.py`, `test_passport_parity.py`): Verify that `KeriAgentUnavailableError` propagates through all code paths (TN lookup, dossier revocation, attestation) rather than being swallowed by broad `except Exception`. Key pattern: patch `_build_cache_entry` or `get_keri_client` at the source module (not the importing module) because functions are imported inside function bodies:
+```python
+# Correct: patch at source module (lazy import picks it up)
+with patch("app.keri_client.get_keri_client", return_value=mock_client):
+# Wrong: patch at consuming module (function imports inside body, bypasses patch)
+with patch("app.tn.lookup.get_keri_client", return_value=mock_client):
 ```

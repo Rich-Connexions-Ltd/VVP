@@ -1,5 +1,67 @@
 # VVP Verifier Change Log
 
+## Sprint 68c: Complete Issuer KERI Decoupling
+
+**Date:** 2026-02-16
+**Status:** Complete
+
+### Summary
+
+Completes the issuer's decoupling from keripy/LMDB by migrating all remaining non-router modules (`vetter/service.py`, `vetter/constraints.py`, `org/mock_vlei.py`, `vvp/passport.py`, `vvp/dossier_service.py`, `tn/lookup.py`, `schema/said.py`, `api/dossier.py`) from direct `app.keri.*` and `keri.*` imports to `KeriAgentClient`. Deletes the entire `app/keri/` directory. Removes keripy, lmdb, and hio from issuer dependencies. Adds pure-Python SAID computation (blake3+CESR, insertion-order JSON). Unifies schema SAID canonicalization between issuer and verifier. Adds comprehensive contract, parity, and import-guard tests.
+
+820 issuer tests + 1844 verifier tests + 72 keri-agent tests pass, 0 failures.
+
+### Key Changes
+
+- **Full keripy decoupling** — Deleted `app/keri/` directory (7 modules), removed `keripy`, `lmdb`, `hio` from pyproject.toml
+- **Pure-Python SAID** — `app/schema/said.py` replaces keripy's `Saider.saidify()` with blake3 + CESR encoding, insertion-order JSON (matches keripy behavior)
+- **Unified SAID canonicalization** — Verifier's `schema_fetcher.py:compute_schema_said()` updated to use insertion-order JSON (was sorted-keys), matching issuer and keripy
+- **VVP attestation delegation** — PASSporT signing fully delegated to KERI Agent via `client.create_vvp_attestation()`
+- **dest_tn backward compat** — `CreateVVPAttestationRequest.dest_tn` accepts both scalar string and list via `field_validator`
+- **Agent uses pre-computed values** — Agent `vvp.py` uses `request.card`, `request.dossier_url`, `request.kid_oobi` when provided
+- **KeriAgentUnavailableError propagation** — Added explicit re-raise in `tn/lookup.py`, `dossier_service.py`, `vetter/service.py`, `vetter/constraints.py` (fail-safe: agent outage → 503, not silent degradation)
+- **Vetter fail-safe** — Default cert status changed from "issued" to "unknown" when agent unavailable
+- **New test files** — `test_no_keripy.py` (import guard), `test_agent_contract.py` (28 DTO contract tests), `test_said_parity.py` (26 SAID parity tests), `test_passport_parity.py` (13 attestation tests), `test_dossier_parity.py` (4 outage propagation tests)
+- **Three-tier health** — `/livez`, `/healthz`, `/readyz` endpoints with bootstrap probe
+- **Gemini reviewer** — Added `scripts/gemini-review.py` as alternative reviewer when Codex unavailable
+
+### Review Rounds
+
+| Round | Reviewer | Verdict | Key Findings |
+|-------|----------|---------|--------------|
+| R1 | Codex | CHANGES_REQUESTED | dest_tn contract, vetter fail-safe, missing tests, SAID fallback, stale docstring |
+| R2 | Codex | CHANGES_REQUESTED | Schema SAID divergence, TN lookup outage, revocation gate masking, incomplete parity tests, unused DTO fields |
+| R3 | Codex | (rate limited) | — |
+| R4 | Gemini 2.5 Pro | APPROVED | CHANGES.md update (addressed here) |
+
+### Files Changed
+
+| File | Action | Summary |
+|------|--------|---------|
+| `services/issuer/app/vetter/service.py` | Modified | Replaced 7 keri imports with keri_client, fail-safe error handling |
+| `services/issuer/app/vetter/constraints.py` | Modified | KeriAgentUnavailableError propagation |
+| `services/issuer/app/org/mock_vlei.py` | Modified | Replaced get_credential_issuer with get_keri_client |
+| `services/issuer/app/vvp/passport.py` | Modified | Replaced identity manager, renamed validate_e164 |
+| `services/issuer/app/api/vvp.py` | Modified | Delegate to client.create_vvp_attestation() |
+| `services/issuer/app/vvp/dossier_service.py` | Modified | KeriAgentUnavailableError propagation |
+| `services/issuer/app/tn/lookup.py` | Modified | KeriAgentUnavailableError propagation |
+| `services/issuer/app/schema/said.py` | Modified | Pure-Python blake3+CESR SAID computation |
+| `services/issuer/app/api/dossier.py` | Modified | datetime.isoformat() replaces keri.nowIso8601() |
+| `services/issuer/app/main.py` | Modified | Removed legacy KERI manager imports |
+| `services/issuer/app/keri/` | Deleted | 7 modules (identity, registry, issuer, persistence, witness, exceptions, __init__) |
+| `services/issuer/pyproject.toml` | Modified | Removed keripy, lmdb, hio dependencies |
+| `services/verifier/app/vvp/acdc/schema_fetcher.py` | Modified | Unified SAID canonicalization (insertion-order JSON) |
+| `services/keri-agent/app/api/vvp.py` | Modified | Use pre-computed card/dossier_url/kid_oobi from request |
+| `common/common/vvp/models/keri_agent.py` | Modified | dest_tn backward compat validator, card/dossier_url/kid_oobi fields |
+| `services/issuer/tests/test_no_keripy.py` | Created | Import guard (AST-based) |
+| `services/issuer/tests/test_agent_contract.py` | Created | 28 DTO contract/validation/round-trip tests |
+| `services/issuer/tests/test_said_parity.py` | Created | 26 SAID parity tests against embedded schemas |
+| `services/issuer/tests/test_passport_parity.py` | Created | 13 attestation request/response shape tests |
+| `services/issuer/tests/test_dossier_parity.py` | Created | 4 outage propagation tests |
+| `scripts/gemini-review.py` | Created | Gemini-based code reviewer |
+
+---
+
 ## Sprint 68b: Issuer KERI Agent Client Migration
 
 **Date:** 2026-02-16
