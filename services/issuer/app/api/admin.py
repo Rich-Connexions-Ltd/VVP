@@ -1410,6 +1410,28 @@ class MockVLEIReinitializeResponse(BaseModel):
     message: str
 
 
+@router.post("/publish-identity/{name}")
+async def publish_identity(
+    name: str,
+    request: Request,
+    principal: Principal = require_admin,
+):
+    """Publish an identity's KEL to witnesses.
+
+    Useful after key rotations to sync witness state.
+    Requires: issuer:admin role.
+    """
+    from app.keri_client import get_keri_client
+
+    client = get_keri_client()
+    try:
+        await client.publish_identity(name)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Publish failed: {e}")
+
+    return {"name": name, "published": True}
+
+
 @router.post("/mock-vlei/reinitialize", response_model=MockVLEIReinitializeResponse)
 async def reinitialize_mock_vlei(
     request: Request,
