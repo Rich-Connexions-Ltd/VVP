@@ -10,6 +10,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from app.keri_client import KeriAgentUnavailableError
 from common.vvp.utils.tn_utils import parse_tn_allocation, TNParseError
 
 log = logging.getLogger(__name__)
@@ -122,6 +123,8 @@ async def validate_tn_ownership(db: Session, org_id: str, tn: str) -> bool:
         except TNParseError as e:
             log.warning(f"Failed to parse TN allocation from {cred.said[:16]}...: {e}")
             continue
+        except KeriAgentUnavailableError:
+            raise  # Propagate agent outage as 503
         except Exception as e:
             log.error(f"Error validating TN against {cred.said[:16]}...: {e}")
             continue

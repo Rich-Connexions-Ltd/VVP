@@ -43,13 +43,15 @@ async def _session_cleanup_task():
             log.error(f"Session cleanup error: {e}")
 
 
-async def _bootstrap_probe():
+async def _bootstrap_probe(app: FastAPI):
     """Background task: poll KERI Agent until healthy, then sync trust anchors.
 
     Sprint 68b: One-shot probe. Polls agent GET /bootstrap/status every 5s
     (10s on error). Stops after first successful sync. The issuer starts
     immediately; this probe runs in the background so non-KERI routes work
     while the agent is still starting up.
+
+    Sprint 68c: Sets app.state.keri_agent_ready on successful sync.
     """
     client = get_keri_client()
     while True:
@@ -60,7 +62,8 @@ async def _bootstrap_probe():
                     from app.org.trust_anchors import get_trust_anchor_manager
                     tam = get_trust_anchor_manager()
                     tam.sync_from_agent(status)
-                    log.info("Trust anchors synced from KERI Agent")
+                    app.state.keri_agent_ready = True
+                    log.info("Trust anchors synced from KERI Agent — keri_agent_ready=True")
                     return  # One-shot: done
                 else:
                     log.debug("KERI Agent not yet initialized, retrying...")
@@ -100,9 +103,12 @@ async def lifespan(app: FastAPI):
         get_keri_client()
         log.info("KERI Agent client initialized")
 
+        # Sprint 68c: Initialize keri_agent_ready flag BEFORE spawning probe
+        app.state.keri_agent_ready = False
+
         # Sprint 68b: Start background bootstrap probe to sync trust anchors
         if MOCK_VLEI_ENABLED:
-            bootstrap_task = asyncio.create_task(_bootstrap_probe())
+            bootstrap_task = asyncio.create_task(_bootstrap_probe(app))
             log.info("Bootstrap probe started (polling KERI Agent)")
         else:
             log.info("Mock vLEI disabled (VVP_MOCK_VLEI_ENABLED=false)")

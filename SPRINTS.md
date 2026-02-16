@@ -57,7 +57,7 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 67 | Trust Anchor Admin & Credential Issuance UI | COMPLETE | Sprint 61, 65 |
 | 68 | KERI Agent Service Extraction | COMPLETE | Sprint 33, 67 |
 | 68b | Issuer KERI Agent Client Migration | COMPLETE | Sprint 68 |
-| 68c | Complete Issuer KERI Decoupling & CI/CD Split | IN PROGRESS | Sprint 68b |
+| 68c | Complete Issuer KERI Decoupling & CI/CD Split | COMPLETE | Sprint 68b |
 | 69 | Ephemeral LMDB & Zero-Downtime KERI Deploys | TODO | Sprint 68c |
 
 ---

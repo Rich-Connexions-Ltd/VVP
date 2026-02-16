@@ -26,7 +26,7 @@ RUN pip install --no-cache-dir -U pip && pip install --no-cache-dir .
 COPY services/keri-agent/config /srv/config
 
 # Data volume for LMDB persistence
-VOLUME /data/vvp-issuer
+VOLUME /data/vvp-keri-agent
 
 # Environment
 ENV PYTHONUNBUFFERED=1

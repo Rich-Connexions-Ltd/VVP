@@ -38,6 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       witness: ${{ inputs.force_all == true && 'true' || steps.filter.outputs.witness }}
+      keri-agent: ${{ inputs.force_all == true && 'true' || steps.filter.outputs.keri-agent }}
       issuer: ${{ inputs.force_all == true && 'true' || steps.filter.outputs.issuer }}
       verifier: ${{ inputs.force_all == true && 'true' || steps.filter.outputs.verifier }}
       sip-redirect: ${{ inputs.force_all == true && 'true' || steps.filter.outputs.sip-redirect }}
@@ -51,6 +52,10 @@ jobs:
           filters: |
             witness:
               - 'services/witness/**'
+            keri-agent:
+              - 'services/keri-agent/**'
+              - 'keripy/**'
+              - 'common/**'
             issuer:
               - 'services/issuer/**'
               - 'common/**'
@@ -67,7 +72,7 @@ jobs:
               - 'services/pbx/config/**'
 
   # =========================================================================
-  # TEST JOBS - Run tests for both services
+  # TEST JOBS - Run tests for all services
   # =========================================================================
   test-verifier:
     needs: [changes]
@@ -115,6 +120,56 @@ jobs:
           file: services/verifier/coverage.xml
         continue-on-error: true
 
+  test-keri-agent:
+    needs: [changes]
+    if: needs.changes.outputs.keri-agent == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/keri-agent
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install libsodium
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsodium-dev
+          ldconfig -p | grep libsodium || echo "libsodium found in apt paths"
+
+      - name: Install keripy (vendored)
+        working-directory: .
+        run: pip install keripy/
+
+      - name: Install common package
+        working-directory: common
+        run: pip install -e .
+
+      - name: Install dependencies
+        run: |
+          pip install -e .
+          pip install pytest pytest-asyncio pytest-cov
+
+      - name: Verify pysodium import
+        run: python3 -c "import pysodium; print('pysodium OK')"
+
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ -v --cov=app --cov-report=xml --cov-fail-under=70
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          file: services/keri-agent/coverage.xml
+        continue-on-error: true
+
   test-issuer:
     needs: [changes]
     if: needs.changes.outputs.issuer == 'true'
@@ -158,9 +213,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libsodium-dev
           ldconfig -p | grep libsodium || echo "libsodium found in apt paths"
-
-      - name: Install keripy
-        run: pip install keri>=1.2.0
 
       - name: Install common package
         working-directory: common
@@ -325,13 +377,221 @@ jobs:
           exit 1
 
   # =========================================================================
-  # DEPLOY ISSUER
+  # DEPLOY KERI AGENT
   # =========================================================================
   # LMDB on Azure Files requires stop-before-deploy: the old revision must
   # fully stop and release the LMDB file lock before the new revision starts.
+  # Only redeploys when keripy, keri-agent code, or common changes.
+  deploy-keri-agent:
+    needs: [changes, test-keri-agent]
+    if: needs.changes.outputs.keri-agent == 'true' && !failure()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Login to ACR
+        run: |
+          az acr login -n "${{ secrets.ACR_NAME }}"
+
+      - name: Build and push keri-agent image
+        run: |
+          IMAGE="${{ secrets.ACR_LOGIN_SERVER }}/vvp-keri-agent:${{ github.sha }}"
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+          docker build -t "$IMAGE" -f services/keri-agent/Dockerfile .
+          docker push "$IMAGE"
+
+      - name: Stop old revision (release LMDB lock on shared volume)
+        run: |
+          # The KERI Agent uses LMDB (via keripy) on an Azure Files volume mount.
+          # LMDB file locks prevent two revisions from running simultaneously.
+          # We must fully stop all old revisions and wait for the lock to release
+          # before deploying the new revision.
+
+          MAX_WAIT=${{ inputs.lock_wait_seconds || '120' }}
+          DEACTIVATE_RETRIES=3
+
+          # --- Phase 1: Deactivate all active revisions with retry ---
+          ACTIVE_REVS=$(az containerapp revision list \
+            --name vvp-keri-agent \
+            --resource-group "${{ secrets.AZURE_RG }}" \
+            --query "[?properties.active].name" -o tsv 2>/dev/null || echo "")
+
+          REV_COUNT=$(echo "$ACTIVE_REVS" | grep -c '[a-z]' || echo "0")
+          echo "Found $REV_COUNT active revision(s) to deactivate"
+          if [ "$REV_COUNT" -gt 3 ]; then
+            echo "::warning::Unusually high number of active revisions ($REV_COUNT)"
+          fi
+
+          if [ -n "$ACTIVE_REVS" ]; then
+            for REV in $ACTIVE_REVS; do
+              echo "Deactivating revision: $REV"
+              for ATTEMPT in $(seq 1 $DEACTIVATE_RETRIES); do
+                if az containerapp revision deactivate \
+                  --name vvp-keri-agent \
+                  --resource-group "${{ secrets.AZURE_RG }}" \
+                  --revision "$REV" 2>/dev/null; then
+                  echo "  Deactivated on attempt $ATTEMPT"
+                  break
+                fi
+                echo "  Deactivate attempt $ATTEMPT/$DEACTIVATE_RETRIES failed, retrying in 5s..."
+                sleep 5
+              done
+            done
+
+            # --- Phase 2: Poll until all revisions are fully stopped ---
+            ELAPSED=0
+            INTERVAL=5
+            while [ $ELAPSED -lt $MAX_WAIT ]; do
+              RUNNING=$(az containerapp revision list \
+                --name vvp-keri-agent \
+                --resource-group "${{ secrets.AZURE_RG }}" \
+                --query "[?properties.runningState=='Running' || properties.runningState=='Processing' || properties.runningState=='Activating'].name" -o tsv 2>/dev/null)
+              REPLICAS=$(az containerapp revision list \
+                --name vvp-keri-agent \
+                --resource-group "${{ secrets.AZURE_RG }}" \
+                --query "[?properties.active && properties.replicas > \`0\`].name" -o tsv 2>/dev/null)
+              if [ -z "$RUNNING" ] && [ -z "$REPLICAS" ]; then
+                echo "All revisions stopped after ${ELAPSED}s"
+                break
+              fi
+              echo "Waiting for LMDB lock release... (${ELAPSED}s elapsed, running: ${RUNNING:-none}, replicas: ${REPLICAS:-none})"
+              sleep $INTERVAL
+              ELAPSED=$((ELAPSED + INTERVAL))
+            done
+
+            if [ $ELAPSED -ge $MAX_WAIT ]; then
+              echo "::error::Revisions did not stop within ${MAX_WAIT}s — aborting to prevent LMDB lock conflict"
+              az containerapp revision list \
+                --name vvp-keri-agent \
+                --resource-group "${{ secrets.AZURE_RG }}" \
+                --query "[].{name:name, active:properties.active, state:properties.runningState, replicas:properties.replicas}" -o table 2>/dev/null || true
+              exit 1
+            fi
+          else
+            echo "No active revisions to deactivate (first deploy or already stopped)"
+          fi
+
+          # --- Phase 3: LMDB lock release buffer ---
+          echo "Waiting 10s for LMDB file lock release on Azure Files..."
+          sleep 10
+          echo "Ready for new revision deployment"
+
+      - name: Set keri-agent secrets
+        run: |
+          az containerapp secret set \
+            --resource-group "${{ secrets.AZURE_RG }}" \
+            --name "vvp-keri-agent" \
+            --secrets "keri-agent-auth-token=${{ secrets.KERI_AGENT_AUTH_TOKEN }}"
+
+      - name: Deploy keri-agent
+        run: |
+          az containerapp update \
+            --resource-group "${{ secrets.AZURE_RG }}" \
+            --name "vvp-keri-agent" \
+            --image "$IMAGE" \
+            --min-replicas 1 \
+            --max-replicas 1 \
+            --set-env-vars \
+              "GIT_SHA=${{ github.sha }}" \
+              "GITHUB_REPOSITORY=${{ github.repository }}" \
+              "VVP_WITNESS_CONFIG=/srv/config/witnesses-azure.json" \
+              "VVP_MOCK_VLEI_ENABLED=true" \
+              "VVP_KERI_AGENT_AUTH_TOKEN=secretref:keri-agent-auth-token"
+
+      - name: Ensure new revision is active
+        run: |
+          RG="${{ secrets.AZURE_RG }}"
+          NEW_REV=$(az containerapp show \
+            --name vvp-keri-agent \
+            --resource-group "$RG" \
+            --query "properties.latestRevisionName" -o tsv)
+
+          echo "New revision: $NEW_REV"
+
+          if [ -z "$NEW_REV" ]; then
+            echo "::error::Could not determine latest revision name"
+            exit 1
+          fi
+
+          IS_ACTIVE=$(az containerapp revision show \
+            --name vvp-keri-agent \
+            --resource-group "$RG" \
+            --revision "$NEW_REV" \
+            --query "properties.active" -o tsv)
+
+          echo "Revision $NEW_REV active=$IS_ACTIVE"
+
+          if [ "$IS_ACTIVE" != "true" ]; then
+            echo "::warning::New revision is not active — activating explicitly"
+            az containerapp revision activate \
+              --name vvp-keri-agent \
+              --resource-group "$RG" \
+              --revision "$NEW_REV"
+            echo "Activated revision $NEW_REV"
+            sleep 5
+
+            IS_ACTIVE=$(az containerapp revision show \
+              --name vvp-keri-agent \
+              --resource-group "$RG" \
+              --revision "$NEW_REV" \
+              --query "properties.active" -o tsv)
+
+            if [ "$IS_ACTIVE" != "true" ]; then
+              echo "::error::Failed to activate revision $NEW_REV"
+              az containerapp revision list \
+                --name vvp-keri-agent \
+                --resource-group "$RG" \
+                --query "[].{name:name, active:properties.active, state:properties.runningState, replicas:properties.replicas, traffic:properties.trafficWeight}" -o table 2>/dev/null || true
+              exit 1
+            fi
+          fi
+
+          echo "Revision $NEW_REV is active and should be starting"
+
+      - name: Verify keri-agent health
+        run: |
+          # KERI Agent LMDB/Habery initialization on Azure Files takes ~3 minutes.
+          # Poll /healthz (readiness) for up to 7 minutes.
+          INTERVALS=(10 10 10 15 15 15 20 20 20 20 20 20 25 25 25 25 25 25 25 25)
+          TOTAL=${#INTERVALS[@]}
+          for i in "${!INTERVALS[@]}"; do
+            ATTEMPT=$((i + 1))
+            # Use internal URL if available, otherwise construct from container app name
+            RESPONSE=$(curl -sf --max-time 10 https://vvp-keri-agent.internal.rcnx.io/healthz 2>/dev/null || \
+                       az containerapp exec --name vvp-keri-agent --resource-group "${{ secrets.AZURE_RG }}" \
+                         --command "curl -sf http://localhost:8002/healthz" 2>/dev/null || echo '{}')
+            if echo "$RESPONSE" | grep -q '"status"'; then
+              echo "KERI Agent is healthy (attempt ${ATTEMPT}/${TOTAL})"
+              exit 0
+            fi
+            echo "Attempt ${ATTEMPT}/${TOTAL}: waiting for KERI Agent..."
+            sleep "${INTERVALS[$i]}"
+          done
+          echo "::error::KERI Agent health check failed after 7 minutes"
+          exit 1
+
+  # =========================================================================
+  # DEPLOY ISSUER
+  # =========================================================================
+  # Sprint 68: Issuer no longer owns LMDB — standard deploy, no lock handling.
+  # When both keri-agent and issuer change, issuer deploys AFTER keri-agent.
   deploy-issuer:
-    needs: [changes, test-issuer]
-    if: needs.changes.outputs.issuer == 'true' && !failure()
+    needs: [changes, test-issuer, deploy-keri-agent]
+    # Run if issuer changed AND (keri-agent didn't change OR keri-agent deployed successfully)
+    if: |
+      needs.changes.outputs.issuer == 'true' && !failure() &&
+      (needs.changes.outputs.keri-agent != 'true' || needs.deploy-keri-agent.result == 'success')
     runs-on: ubuntu-latest
 
     steps:
@@ -358,87 +618,12 @@ jobs:
           docker build -t "$IMAGE" -f services/issuer/Dockerfile .
           docker push "$IMAGE"
 
-      - name: Stop old revision (release LMDB lock on shared volume)
+      - name: Set issuer secrets
         run: |
-          # The issuer uses LMDB (via keripy) on an Azure Files volume mount.
-          # LMDB file locks prevent two revisions from running simultaneously.
-          # We must fully stop all old revisions and wait for the lock to release
-          # before deploying the new revision.
-
-          MAX_WAIT=${{ inputs.lock_wait_seconds || '120' }}
-          DEACTIVATE_RETRIES=3
-
-          # --- Phase 1: Deactivate all active revisions with retry ---
-          # NOTE: We do NOT call `az containerapp update --min-replicas 0` here
-          # because that creates a phantom intermediate revision as a side effect.
-          # Deactivation alone is sufficient to stop containers and release the
-          # LMDB lock. The polling loop (Phase 2) waits for full stop.
-          ACTIVE_REVS=$(az containerapp revision list \
-            --name vvp-issuer \
+          az containerapp secret set \
             --resource-group "${{ secrets.AZURE_RG }}" \
-            --query "[?properties.active].name" -o tsv)
-
-          REV_COUNT=$(echo "$ACTIVE_REVS" | grep -c '[a-z]' || echo "0")
-          echo "Found $REV_COUNT active revision(s) to deactivate"
-          if [ "$REV_COUNT" -gt 3 ]; then
-            echo "::warning::Unusually high number of active revisions ($REV_COUNT)"
-          fi
-
-          if [ -n "$ACTIVE_REVS" ]; then
-            for REV in $ACTIVE_REVS; do
-              echo "Deactivating revision: $REV"
-              for ATTEMPT in $(seq 1 $DEACTIVATE_RETRIES); do
-                if az containerapp revision deactivate \
-                  --name vvp-issuer \
-                  --resource-group "${{ secrets.AZURE_RG }}" \
-                  --revision "$REV" 2>/dev/null; then
-                  echo "  Deactivated on attempt $ATTEMPT"
-                  break
-                fi
-                echo "  Deactivate attempt $ATTEMPT/$DEACTIVATE_RETRIES failed, retrying in 5s..."
-                sleep 5
-              done
-            done
-
-            # --- Phase 2: Poll until all revisions are fully stopped ---
-            ELAPSED=0
-            INTERVAL=5
-            while [ $ELAPSED -lt $MAX_WAIT ]; do
-              RUNNING=$(az containerapp revision list \
-                --name vvp-issuer \
-                --resource-group "${{ secrets.AZURE_RG }}" \
-                --query "[?properties.runningState=='Running' || properties.runningState=='Processing' || properties.runningState=='Activating'].name" -o tsv 2>/dev/null)
-              REPLICAS=$(az containerapp revision list \
-                --name vvp-issuer \
-                --resource-group "${{ secrets.AZURE_RG }}" \
-                --query "[?properties.active && properties.replicas > \`0\`].name" -o tsv 2>/dev/null)
-              if [ -z "$RUNNING" ] && [ -z "$REPLICAS" ]; then
-                echo "All revisions stopped after ${ELAPSED}s"
-                break
-              fi
-              echo "Waiting for LMDB lock release... (${ELAPSED}s elapsed, running: ${RUNNING:-none}, replicas: ${REPLICAS:-none})"
-              sleep $INTERVAL
-              ELAPSED=$((ELAPSED + INTERVAL))
-            done
-
-            if [ $ELAPSED -ge $MAX_WAIT ]; then
-              echo "::error::Revisions did not stop within ${MAX_WAIT}s — aborting to prevent LMDB lock conflict"
-              # Log final state for debugging
-              az containerapp revision list \
-                --name vvp-issuer \
-                --resource-group "${{ secrets.AZURE_RG }}" \
-                --query "[].{name:name, active:properties.active, state:properties.runningState, replicas:properties.replicas}" -o table 2>/dev/null || true
-              exit 1
-            fi
-          else
-            echo "No active revisions to deactivate"
-          fi
-
-          # --- Phase 3: LMDB lock release buffer ---
-          # Azure Files mount may hold the lock briefly after container reports stopped.
-          echo "Waiting 10s for LMDB file lock release on Azure Files..."
-          sleep 10
-          echo "Ready for new revision deployment"
+            --name "vvp-issuer" \
+            --secrets "keri-agent-auth-token=${{ secrets.KERI_AGENT_AUTH_TOKEN }}"
 
       - name: Deploy issuer
         run: |
@@ -456,115 +641,26 @@ jobs:
               "VVP_POSTGRES_USER=${{ secrets.POSTGRES_USER }}" \
               "VVP_POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}" \
               "VVP_POSTGRES_DB=${{ secrets.POSTGRES_DB }}" \
-              "VVP_ISSUER_BASE_URL=https://vvp-issuer.rcnx.io"
-
-      - name: Ensure new revision is active
-        run: |
-          RG="${{ secrets.AZURE_RG }}"
-
-          # Get the name of the newest revision (just created by the deploy step)
-          NEW_REV=$(az containerapp show \
-            --name vvp-issuer \
-            --resource-group "$RG" \
-            --query "properties.latestRevisionName" -o tsv)
-
-          echo "New revision: $NEW_REV"
-
-          if [ -z "$NEW_REV" ]; then
-            echo "::error::Could not determine latest revision name"
-            exit 1
-          fi
-
-          # Check if the new revision is active
-          IS_ACTIVE=$(az containerapp revision show \
-            --name vvp-issuer \
-            --resource-group "$RG" \
-            --revision "$NEW_REV" \
-            --query "properties.active" -o tsv)
-
-          echo "Revision $NEW_REV active=$IS_ACTIVE"
-
-          if [ "$IS_ACTIVE" != "true" ]; then
-            echo "::warning::New revision is not active — activating explicitly"
-            az containerapp revision activate \
-              --name vvp-issuer \
-              --resource-group "$RG" \
-              --revision "$NEW_REV"
-            echo "Activated revision $NEW_REV"
-            sleep 5
-
-            # Verify activation succeeded
-            IS_ACTIVE=$(az containerapp revision show \
-              --name vvp-issuer \
-              --resource-group "$RG" \
-              --revision "$NEW_REV" \
-              --query "properties.active" -o tsv)
-
-            if [ "$IS_ACTIVE" != "true" ]; then
-              echo "::error::Failed to activate revision $NEW_REV"
-              az containerapp revision list \
-                --name vvp-issuer \
-                --resource-group "$RG" \
-                --query "[].{name:name, active:properties.active, state:properties.runningState, replicas:properties.replicas, traffic:properties.trafficWeight}" -o table 2>/dev/null || true
-              exit 1
-            fi
-          fi
-
-          echo "Revision $NEW_REV is active and should be starting"
+              "VVP_ISSUER_BASE_URL=https://vvp-issuer.rcnx.io" \
+              "VVP_KERI_AGENT_URL=https://vvp-keri-agent.internal.rcnx.io" \
+              "VVP_KERI_AGENT_AUTH_TOKEN=secretref:keri-agent-auth-token"
 
       - name: Verify deployed version
         run: |
           EXPECTED="${{ github.sha }}"
-          RG="${{ secrets.AZURE_RG }}"
-          ACTIVATION_FIXED=false
-
-          # LMDB/Habery initialization on Azure Files takes ~3 minutes,
-          # plus image pull and container startup. Poll for 7 minutes total
-          # (420s): short intervals early, longer later.
-          INTERVALS=(10 10 10 15 15 15 20 20 20 20 20 20 25 25 25 25 25 25 25 25)
-          TOTAL=${#INTERVALS[@]}
-          for i in "${!INTERVALS[@]}"; do
-            ATTEMPT=$((i + 1))
+          # Issuer no longer needs LMDB init — should be fast (~30s).
+          # Poll for 2 minutes max.
+          for i in {1..12}; do
             RESPONSE=$(curl -sf --max-time 10 https://vvp-issuer.rcnx.io/version || echo '{}')
             DEPLOYED=$(echo "$RESPONSE" | jq -r '.git_sha // empty')
             if [ "$DEPLOYED" = "$EXPECTED" ]; then
-              echo "Version verified: ${DEPLOYED:0:7} (attempt ${ATTEMPT}/${TOTAL})"
+              echo "Version verified: ${DEPLOYED:0:7}"
               exit 0
             fi
-
-            # Check revision health and activation state
-            REV_INFO=$(az containerapp revision list \
-              --name vvp-issuer \
-              --resource-group "$RG" \
-              --query "[?properties.trafficWeight > \`0\`].{name:name, active:properties.active, health:properties.healthState, running:properties.runningState}" -o json 2>/dev/null || echo "[]")
-
-            HEALTH=$(echo "$REV_INFO" | jq -r '.[0].health // empty')
-            IS_ACTIVE=$(echo "$REV_INFO" | jq -r '.[0].active // empty')
-            REV_NAME=$(echo "$REV_INFO" | jq -r '.[0].name // empty')
-            RUNNING=$(echo "$REV_INFO" | jq -r '.[0].running // empty')
-
-            # Fail fast if unhealthy
-            if [ "$HEALTH" = "Unhealthy" ]; then
-              echo "::error::New revision is unhealthy — check container logs"
-              az containerapp logs show --name vvp-issuer \
-                --resource-group "$RG" --tail 30 2>/dev/null || true
-              exit 1
-            fi
-
-            # Self-heal: if revision has traffic but is not active, activate it
-            if [ "$IS_ACTIVE" = "false" ] && [ -n "$REV_NAME" ] && [ "$ACTIVATION_FIXED" = "false" ]; then
-              echo "::warning::Revision $REV_NAME has traffic but active=false — activating"
-              az containerapp revision activate \
-                --name vvp-issuer \
-                --resource-group "$RG" \
-                --revision "$REV_NAME" 2>/dev/null || echo "::warning::Activation attempt failed"
-              ACTIVATION_FIXED=true
-            fi
-
-            echo "Attempt ${ATTEMPT}/${TOTAL}: expected ${EXPECTED:0:7}, got ${DEPLOYED:0:7} (health: ${HEALTH:-unknown}, active: ${IS_ACTIVE:-unknown}, running: ${RUNNING:-unknown})"
-            sleep "${INTERVALS[$i]}"
+            echo "Attempt $i/12: expected ${EXPECTED:0:7}, got ${DEPLOYED:0:7}"
+            sleep 10
           done
-          echo "::error::Issuer version mismatch after 7 minutes"
+          echo "::error::Issuer version mismatch after 2 minutes"
           exit 1
 
   # =========================================================================
@@ -723,13 +819,9 @@ jobs:
   # POST-DEPLOYMENT INTEGRATION TESTS
   # =========================================================================
   # Run selective integration tests after deployment based on which services changed.
-  # - Only issuer changed → run issuer-only tests (~39 tests)
-  # - Only verifier changed → run E2E tests that exercise the verifier (~5 tests)
-  # - Both changed → run all integration tests (~44 tests)
-  # - Manual override via workflow_dispatch test_suite input
   post-deployment-tests:
-    needs: [changes, deploy-verifier, deploy-issuer]
-    if: (needs.changes.outputs.verifier == 'true' || needs.changes.outputs.issuer == 'true') && !failure()
+    needs: [changes, deploy-verifier, deploy-issuer, deploy-keri-agent]
+    if: (needs.changes.outputs.verifier == 'true' || needs.changes.outputs.issuer == 'true' || needs.changes.outputs.keri-agent == 'true') && !failure()
     runs-on: ubuntu-latest
 
     env:
@@ -743,6 +835,7 @@ jobs:
         run: |
           ISSUER_CHANGED="${{ needs.changes.outputs.issuer }}"
           VERIFIER_CHANGED="${{ needs.changes.outputs.verifier }}"
+          KERI_AGENT_CHANGED="${{ needs.changes.outputs.keri-agent }}"
           SUITE_OVERRIDE="${{ inputs.test_suite }}"
 
           # Default to auto if not specified (push trigger has no inputs)
@@ -750,7 +843,7 @@ jobs:
             if [ "$ISSUER_CHANGED" = "true" ] && [ "$VERIFIER_CHANGED" = "true" ]; then
               MARKERS="integration and not benchmark"
               SUITE_NAME="all (both services changed)"
-            elif [ "$ISSUER_CHANGED" = "true" ]; then
+            elif [ "$ISSUER_CHANGED" = "true" ] || [ "$KERI_AGENT_CHANGED" = "true" ]; then
               MARKERS="integration and issuer and not benchmark"
               SUITE_NAME="issuer-only (verifier unchanged)"
             elif [ "$VERIFIER_CHANGED" = "true" ]; then
@@ -788,9 +881,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libsodium-dev
-
-      - name: Install keripy
-        run: pip install keri>=1.2.0
 
       - name: Install common package
         working-directory: common

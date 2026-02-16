@@ -212,6 +212,10 @@ class KeriAgentClient:
         """Current circuit breaker state."""
         return self._circuit.state
 
+    def is_circuit_closed(self) -> bool:
+        """Whether the circuit breaker is closed (agent considered reachable)."""
+        return self._circuit.state == "closed"
+
     # -------------------------------------------------------------------------
     # Internal request helpers
     # -------------------------------------------------------------------------

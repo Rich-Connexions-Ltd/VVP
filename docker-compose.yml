@@ -1,7 +1,7 @@
 # VVP Local Development Environment
 # Usage:
 #   docker-compose up -d witnesses     # Start witnesses only (default)
-#   docker-compose --profile full up   # Start witnesses + verifier
+#   docker-compose --profile full up   # Start witnesses + verifier + keri-agent + issuer
 #   docker-compose down                # Stop all services
 
 services:
@@ -70,8 +70,44 @@ services:
       - full
 
   # ===========================================================================
-  # VVP Issuer (Sprint 28)
+  # KERI Agent (Sprint 68 — LMDB/keripy state management)
   # ===========================================================================
+  # Owns all KERI cryptographic state. Single replica. Internal-only.
+  # Start with: docker-compose --profile full up
+
+  keri-agent:
+    build:
+      context: .
+      dockerfile: services/keri-agent/Dockerfile
+    container_name: vvp-keri-agent
+    ports:
+      - "8002:8002"  # Exposed in dev for debugging
+    volumes:
+      - keri-agent-data:/data/vvp-keri-agent
+      - ./services/keri-agent/config:/srv/config:ro
+    environment:
+      - VVP_KERI_AGENT_DATA_DIR=/data/vvp-keri-agent
+      - VVP_KERI_AGENT_AUTH_TOKEN=dev-token
+      - VVP_MOCK_VLEI_ENABLED=true
+      - VVP_WITNESS_CONFIG=/srv/config/witnesses.json
+    depends_on:
+      witnesses:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - vvp-network
+    profiles:
+      - full
+
+  # ===========================================================================
+  # VVP Issuer (Sprint 28+, refactored Sprint 68)
+  # ===========================================================================
+  # Business logic, auth, UI, PostgreSQL. Proxies KERI operations to keri-agent.
   # Start with: docker-compose --profile full up
 
   issuer:
@@ -82,13 +118,14 @@ services:
     ports:
       - "8001:8001"
     volumes:
-      - issuer-data:/data/vvp-issuer
       - ./services/issuer/config:/srv/config:ro
     environment:
       - VVP_WITNESS_CONFIG=/srv/config/witnesses.json
       - VVP_AUTH_ENABLED=false  # Disabled for local development UI
+      - VVP_KERI_AGENT_URL=http://keri-agent:8002
+      - VVP_KERI_AGENT_AUTH_TOKEN=dev-token
     depends_on:
-      witnesses:
+      keri-agent:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/healthz"]
@@ -107,4 +144,4 @@ networks:
 
 volumes:
   witness-data:
-  issuer-data:
+  keri-agent-data:

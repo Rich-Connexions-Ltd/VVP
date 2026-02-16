@@ -93,22 +93,15 @@ async def fetch_schema(schema_said: str) -> Dict[str, Any]:
 def compute_schema_said(schema_doc: Dict[str, Any]) -> str:
     """Compute SAID for a JSON Schema document.
 
-    IMPORTANT: This function uses sorted keys for canonicalization, which is
-    CORRECT for JSON Schema documents per the ACDC spec. This is DIFFERENT from:
-    - KEL events (use keri.kel_parser.compute_kel_event_said - uses KERI field ordering)
-    - ACDC credentials (use parser.compute_acdc_said - uses ACDC field ordering)
-
-    JSON Schemas don't have a defined event type with prescribed field ordering,
-    so they use lexicographic (sorted) key ordering as their canonical form.
-
-    Algorithm (per KERI/CESR spec):
-    1. Replace '$id' field (schema SAID field) with placeholder of same length
-    2. Serialize to canonical JSON:
-       - Deterministic key ordering (sorted keys) - CORRECT for schemas
-       - No whitespace between elements
-       - UTF-8 encoded
-    3. Compute Blake3-256 hash of canonical bytes
+    Algorithm (matches keripy Saider.saidify):
+    1. Replace '$id' field with '#' * 44 placeholder
+    2. Serialize to JSON: insertion order, compact separators, UTF-8
+    3. Compute Blake3-256 hash of serialized bytes
     4. CESR-encode hash with 'E' prefix (44 chars total)
+
+    Key order is preserved (not sorted) to match keripy's Saider.saidify()
+    behavior. keripy uses json.dumps(ked, separators=(",",":"), ensure_ascii=False)
+    with NO sort_keys. Schema SAIDs depend on key order in the source JSON.
 
     Note: Uses same _cesr_encode() from kel_parser.py for consistency.
 
@@ -137,27 +130,19 @@ def compute_schema_said(schema_doc: Dict[str, Any]) -> str:
     # Create copy with placeholder in SAID field
     data_copy = dict(schema_doc)
 
-    # Schema documents use '$id' field for their SAID (JSON Schema convention)
-    # Placeholder must match length of declared $id (as in validate_acdc_said)
-    original_id = data_copy.get("$id", "")
-    placeholder_length = len(original_id) if original_id else 44
-    if placeholder_length < 44:
-        placeholder_length = 44  # Minimum for Blake3-256 CESR encoding
+    # Placeholder: '#' * 44 — matches keripy Saider.Dummy * Matter.Sizes[code].fs
+    data_copy["$id"] = "#" * 44
 
-    # Use derivation code from original SAID, or 'E' for Blake3-256
-    code = original_id[0] if original_id else "E"
-    placeholder = code + "#" * (placeholder_length - 1)
-    data_copy["$id"] = placeholder
-
-    # Canonical JSON: sorted keys, no whitespace, UTF-8
-    canonical = json.dumps(data_copy, separators=(",", ":"), sort_keys=True)
+    # JSON serialization: insertion order, compact, UTF-8
+    # Matches keripy dumps(): json.dumps(ked, separators=(",",":"), ensure_ascii=False)
+    canonical = json.dumps(data_copy, separators=(",", ":"), ensure_ascii=False)
     canonical_bytes = canonical.encode("utf-8")
 
     # Blake3-256 hash
     digest = blake3_hash(canonical_bytes)
 
-    # CESR-encode with derivation code
-    computed_said = _cesr_encode(digest, code=code)
+    # CESR-encode with 'E' (Blake3-256) prefix
+    computed_said = _cesr_encode(digest, code="E")
     return computed_said
 
 

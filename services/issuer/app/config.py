@@ -244,7 +244,7 @@ API_KEYS_JSON: str | None = os.getenv("VVP_API_KEYS")  # Inline JSON override
 
 # Authentication settings
 AUTH_ENABLED: bool = os.getenv("VVP_AUTH_ENABLED", "true").lower() == "true"
-AUTH_EXEMPT_PATHS: set[str] = {"/healthz", "/version"}  # Always exempt
+AUTH_EXEMPT_PATHS: set[str] = {"/livez", "/healthz", "/readyz", "/version"}  # Always exempt
 
 # Docs/OpenAPI protection
 # Default: protected (require auth). Set to "true" to exempt from auth.

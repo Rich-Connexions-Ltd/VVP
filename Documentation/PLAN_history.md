@@ -17485,3 +17485,1104 @@ The migration proceeds in dependency order, testing after each step:
 | R11 | 2026-02-16 | Address R7 code review findings: (1) [Medium] Fixed `_get_gsma_aid()` in admin.py to use `get_trust_anchor_manager().get_mock_vlei_state()` instead of broken `get_mock_vlei` import. (2) [Medium] Made `MockVLEIManager.state` property delegate to `get_mock_vlei_state()` (TrustAnchorManager, DB-backed) so all callers (including vetter/service.py) automatically get consistent state. Also updated `is_initialized` property. Direct `self._state` access is now only used internally by `initialize()`. Suite: 787 passed, 12 skipped. |
 | R12 | 2026-02-16 | Address R8 code review findings: (1) [Medium] Changed read endpoints to return HTTP 503 on agent outage instead of empty/zero results — affects GET /identity (list), GET /registry (list), GET /credential (list), GET /admin/stats. This aligns with the approved plan's error-mapping contract (Component 9). All endpoints now consistently return 503 when the KERI agent is unavailable. Suite: 787 passed, 12 skipped. |
 
+
+---
+
+# Sprint 68: Complete Issuer KERI Decoupling & CI/CD Split
+
+_Archived: 2026-02-16_
+
+# Sprint 68: KERI Agent Service Extraction
+
+## Problem Statement
+
+Every push to `services/issuer/**` triggers a full redeployment with LMDB restart: stop running revision (release lock), deploy new image, wait ~3 minutes for Habery/LMDB initialization on Azure Files, verify health. This yields ~4-5 min downtime, is error-prone (LMDB lock races, phantom revisions, stuck `active=false` states), and disproportionate — most changes (UI tweaks, auth fixes, API logic, schema management, dashboard updates) never touch KERI/LMDB.
+
+By isolating the KERI/LMDB layer into its own Container App, changes to business logic deploy in seconds with zero LMDB disruption. The KERI Agent only redeploys when cryptographic infrastructure actually changes.
+
+## Current State
+
+The issuer is a monolith (~393 lines in `main.py`, ~2,100 lines in `app/keri/`, ~617 lines in `issuer.py`) where KERI managers (identity, registry, credential issuer) are singletons initialized during lifespan startup. MockVLEIManager orchestrates KERI managers to create the trust chain. 16 API routers are mounted — 6 directly import KERI managers, 3 more have indirect KERI dependencies through MockVLEIManager or DossierBuilder.
+
+Clean architectural boundary already exists between KERI-dependent code (`app/keri/`, `app/dossier/builder.py`, `app/org/mock_vlei.py`) and KERI-free code (`app/auth/`, `app/db/`, `app/api/{auth,dashboard,user,schema,session,org_api_key}.py`).
+
+## Proposed Solution
+
+### Approach
+
+Split the issuer into two independently deployable FastAPI services within the same Azure Container Apps Environment:
+
+1. **KERI Agent** (`services/keri-agent/`) — Owns all LMDB/keripy state. Single replica. Internal-only ingress. Exposes a REST API for identity, registry, credential, dossier, VVP, and bootstrap operations.
+
+2. **Issuer API** (`services/issuer/`) — Owns business logic, auth, UI, PostgreSQL. 1-3 replicas. Public ingress. Proxies KERI operations to the KERI Agent via a thin HTTP client.
+
+**Why this approach over alternatives:**
+
+| Alternative | Pros | Cons | Why Rejected |
+|-------------|------|------|--------------|
+| gRPC | Strong typing, streaming | New dependency, complexity, generated code | Over-engineered for internal 2-service comm |
+| Sidecar | Simplest networking | Updating Container App restarts ALL containers including sidecars — defeats the purpose | Doesn't achieve independent deployment |
+| Message queue | Async, resilient | New infrastructure (Redis/RabbitMQ), eventual consistency | Over-engineered, credential issuance needs sync response |
+| Feature flag only | Zero architecture change | Still deploys as monolith, LMDB restart on every push | Doesn't solve the core problem |
+
+### Detailed Design
+
+#### Component 1: Shared DTO Models (`common/vvp/models/keri_agent.py`)
+
+**Purpose**: Data transfer objects used by both services to define the API contract. No KERI/LMDB logic — pure Pydantic models.
+
+**Location**: `common/vvp/models/keri_agent.py`
+
+**Models** (all Pydantic BaseModel):
+
+```python
+# Identity DTOs
+class CreateIdentityRequest(BaseModel):
+    name: str
+    key_count: int = 1
+    key_threshold: str = "1"
+    next_key_count: int = 1
+    next_threshold: str = "1"
+    transferable: bool = True
+
+class IdentityResponse(BaseModel):
+    aid: str
+    name: str
+    created_at: str
+    witness_count: int
+    key_count: int
+    sequence_number: int
+    transferable: bool
+
+class RotateKeysRequest(BaseModel):
+    new_key_count: int | None = None
+    new_threshold: str | None = None
+
+class RotationResponse(BaseModel):
+    aid: str
+    name: str
+    previous_sequence_number: int
+    new_sequence_number: int
+    new_key_count: int
+
+# Registry DTOs
+class CreateRegistryRequest(BaseModel):
+    name: str
+    identity_name: str
+
+class RegistryResponse(BaseModel):
+    registry_key: str
+    name: str
+    identity_aid: str
+    identity_name: str
+    credential_count: int
+
+# Credential DTOs
+class IssueCredentialRequest(BaseModel):
+    identity_name: str
+    registry_name: str
+    schema_said: str
+    recipient_aid: str | None = None
+    attributes: dict
+    edges: dict | None = None
+    rules: dict | None = None
+    publish: bool = True
+
+class CredentialResponse(BaseModel):
+    said: str
+    issuer_aid: str
+    recipient_aid: str | None
+    registry_key: str
+    schema_said: str
+    issuance_dt: str
+    status: str
+    revocation_dt: str | None
+    attributes: dict
+    edges: dict | None
+    rules: dict | None
+
+class RevokeCredentialRequest(BaseModel):
+    publish: bool = True
+
+# Dossier DTOs
+class BuildDossierRequest(BaseModel):
+    root_said: str
+    root_saids: list[str] | None = None
+    include_tel: bool = True
+
+class DossierResponse(BaseModel):
+    root_said: str
+    root_saids: list[str]
+    credential_saids: list[str]
+    is_aggregate: bool
+    warnings: list[str]
+
+# VVP DTOs
+class CreateVVPAttestationRequest(BaseModel):
+    identity_name: str
+    dossier_said: str
+    orig_tn: str
+    dest_tn: str
+    exp_seconds: int = 300
+    call_id: str | None = None
+    cseq: str | None = None
+
+class VVPAttestationResponse(BaseModel):
+    vvp_identity_header: str
+    passport_jwt: str
+    identity_header: str
+    dossier_url: str
+    kid_oobi: str
+    iat: int
+    exp: int
+
+# Bootstrap DTOs
+class BootstrapStatusResponse(BaseModel):
+    initialized: bool
+    gleif_aid: str | None
+    gleif_registry_key: str | None
+    qvi_aid: str | None
+    qvi_registry_key: str | None
+    gsma_aid: str | None
+    gsma_registry_key: str | None
+    gleif_name: str | None
+    qvi_name: str | None
+    gsma_name: str | None
+
+# Operational DTOs
+class AgentHealthResponse(BaseModel):
+    status: str
+    identity_count: int
+    registry_count: int
+    credential_count: int
+    lmdb_accessible: bool
+
+class AgentStatsResponse(BaseModel):
+    identity_count: int
+    registry_count: int
+    credential_count: int
+```
+
+#### Component 2: KERI Agent Service (`services/keri-agent/`)
+
+**Purpose**: Standalone FastAPI service owning all LMDB/keripy state.
+
+**Directory structure**:
+```
+services/keri-agent/
+├── app/
+│   ├── __init__.py
+│   ├── main.py                    # Lifespan, router mounting
+│   ├── config.py                  # Agent-specific config (DATA_DIR, witnesses, auth token)
+│   ├── auth.py                    # Inter-service bearer token validation
+│   ├── api/
+│   │   ├── __init__.py
+│   │   ├── identity.py            # Identity CRUD endpoints
+│   │   ├── registry.py            # Registry CRUD endpoints
+│   │   ├── credential.py          # Credential issue/revoke/list/get endpoints
+│   │   ├── dossier.py             # Dossier build/get endpoints
+│   │   ├── vvp.py                 # VVP attestation creation
+│   │   ├── bootstrap.py           # Mock vLEI init/status/reinit
+│   │   └── health.py              # Health check, stats, version
+│   ├── keri/                      # Moved from services/issuer/app/keri/
+│   │   ├── __init__.py
+│   │   ├── identity.py            # IssuerIdentityManager (unchanged)
+│   │   ├── registry.py            # CredentialRegistryManager (unchanged)
+│   │   ├── issuer.py              # CredentialIssuer (unchanged)
+│   │   ├── witness.py             # WitnessPublisher (unchanged)
+│   │   ├── persistence.py         # PersistenceManager (unchanged)
+│   │   └── exceptions.py          # KERI exceptions (unchanged)
+│   ├── dossier/
+│   │   ├── __init__.py
+│   │   ├── builder.py             # DossierBuilder (moved from issuer)
+│   │   └── exceptions.py          # DossierBuildError (moved from issuer)
+│   ├── vvp/                       # VVP attestation logic (moved from issuer)
+│   │   ├── __init__.py
+│   │   ├── passport.py            # PASSporT JWT creation (signing with KERI keys)
+│   │   ├── header.py              # VVP-Identity header creation
+│   │   ├── oobi.py                # OOBI/dossier URL builders
+│   │   ├── card.py                # vCard card claim builder
+│   │   ├── identity.py            # RFC 8224 Identity header builder
+│   │   └── exceptions.py          # VVP exceptions
+│   └── mock_vlei.py               # MockVLEIManager KERI operations (moved)
+├── tests/
+│   ├── conftest.py                # Agent-specific fixtures
+│   ├── test_identity.py           # Ported from issuer
+│   ├── test_registry.py           # Ported from issuer
+│   ├── test_credential.py         # Ported from issuer
+│   ├── test_dossier.py            # Ported from issuer
+│   ├── test_vvp.py                # Ported from issuer
+│   ├── test_bootstrap.py          # Mock vLEI bootstrap tests
+│   └── test_health.py             # Health/stats endpoint tests
+├── config/
+│   └── witnesses.json             # Witness config (copy from issuer)
+├── pyproject.toml
+└── Dockerfile
+```
+
+**Lifespan** (`app/main.py`):
+1. Initialize PersistenceManager (set up directories)
+2. Initialize IssuerIdentityManager (Habery, LMDB)
+3. Initialize CredentialRegistryManager (Regery, shared Habery)
+4. Initialize CredentialIssuer (depends on identity + registry)
+5. Initialize WitnessPublisher
+6. If `MOCK_VLEI_ENABLED`: Run MockVLEIManager KERI operations (create identities, registries, issue trust chain credentials)
+7. Expose bootstrap status for Issuer API to query
+
+**Shutdown**: Close managers in reverse order (credential issuer → registry → identity)
+
+**Auth**: Simple bearer token middleware. The `VVP_KERI_AGENT_AUTH_TOKEN` env var sets the expected token. All endpoints require `Authorization: Bearer <token>`. Health endpoint (`/healthz`) is exempt (for Container App probes).
+
+**Bootstrap endpoint guardrails**:
+- `POST /bootstrap/mock-vlei` and `POST /bootstrap/reinitialize` require bearer token auth (like all other endpoints).
+- Additionally, `POST /bootstrap/reinitialize` checks `VVP_MOCK_VLEI_ENABLED=true` and returns 403 if mock vLEI is disabled. This prevents accidental re-initialization in non-mock environments.
+- `POST /bootstrap/mock-vlei` is idempotent (checks existing state before creating). Safe to call multiple times.
+- These endpoints are intended for automated startup (mock vLEI bootstrap) and admin operations. The bearer token + internal-only ingress provides sufficient protection. In production vLEI environments (future), these endpoints would be disabled entirely via `VVP_MOCK_VLEI_ENABLED=false`.
+
+**Port**: 8002 (avoids conflict with verifier 8000 and issuer 8001).
+
+**API endpoints** (all under KERI Agent at `http://keri-agent:8002`):
+
+| Method | Path | Purpose | Source |
+|--------|------|---------|--------|
+| `POST` | `/identities` | Create identity | `identity.py` router |
+| `GET` | `/identities` | List identities | `identity.py` router |
+| `GET` | `/identities/{name}` | Get identity by name | `identity.py` router |
+| `POST` | `/identities/{name}/rotate` | Rotate keys | `identity.py` router |
+| `GET` | `/identities/{name}/oobi` | Get OOBI URL | `identity.py` router |
+| `GET` | `/identities/{name}/kel` | Get KEL bytes | `identity.py` router |
+| `POST` | `/identities/{name}/publish` | Publish to witnesses | `identity.py` router |
+| `POST` | `/registries` | Create registry | `registry.py` router |
+| `GET` | `/registries` | List registries | `registry.py` router |
+| `GET` | `/registries/{name}` | Get registry by name | `registry.py` router |
+| `GET` | `/registries/{name}/tel` | Get TEL bytes | `registry.py` router |
+| `POST` | `/credentials/issue` | Issue credential | `credential.py` router |
+| `POST` | `/credentials/{said}/revoke` | Revoke credential | `credential.py` router |
+| `GET` | `/credentials` | List credentials | `credential.py` router |
+| `GET` | `/credentials/{said}` | Get credential detail | `credential.py` router |
+| `GET` | `/credentials/{said}/cesr` | Get CESR stream | `credential.py` router |
+| `POST` | `/dossiers/build` | Build dossier | `dossier.py` router |
+| `GET` | `/dossiers/{said}` | Get built dossier | `dossier.py` router |
+| `GET` | `/dossiers/{said}/cesr` | Get dossier CESR | `dossier.py` router |
+| `POST` | `/vvp/create` | Create VVP attestation | `vvp.py` router |
+| `POST` | `/bootstrap/mock-vlei` | Initialize mock vLEI | `bootstrap.py` router |
+| `GET` | `/bootstrap/status` | Get bootstrap state | `bootstrap.py` router |
+| `POST` | `/bootstrap/reinitialize` | Re-init mock vLEI | `bootstrap.py` router |
+| `GET` | `/healthz` | Health check | `health.py` router |
+| `GET` | `/stats` | Counts | `health.py` router |
+| `GET` | `/version` | Version + SHA | `health.py` router |
+
+**Key design decisions for KERI Agent**:
+
+1. **VVP attestation creation moves entirely to KERI Agent** — The `/vvp/create` endpoint in the KERI Agent does everything: get identity, build dossier, extract card claim, create VVP-Identity header, sign PASSporT JWT. This keeps all signing in one service. The Issuer API's `/vvp/create` becomes a thin proxy that adds auth/RBAC then forwards to the agent.
+
+2. **DossierBuilder moves to KERI Agent** — It directly uses `get_credential_issuer()` and `get_registry_manager()` to walk edges and serialize CESR. Keeping it in the agent avoids many round-trips.
+
+3. **MockVLEIManager splits** — KERI operations (create identities, registries, issue credentials) move to the KERI Agent as `mock_vlei.py`. Trust anchor promotion (creating Organization DB records) stays in the Issuer API since it writes to PostgreSQL. The Issuer API fetches bootstrap status from the agent during its startup.
+
+4. **Vetter constraint validation stays in Issuer API** — It reads from PostgreSQL (ManagedCredential, Organization). The KERI Agent's VVP endpoint takes pre-validated requests; the Issuer API's proxy validates constraints before forwarding.
+
+5. **Dossier revocation checking stays in Issuer API** — It uses a local HTTP cache. The Issuer API checks revocation status, then delegates signing to the agent.
+
+#### Component 3: KERI Agent Client (`services/issuer/app/keri_client.py`)
+
+**Purpose**: Async HTTP client replacing direct `app.keri.*` imports.
+
+**Key characteristics**:
+- Uses `httpx.AsyncClient` targeting `VVP_KERI_AGENT_URL` (default `http://keri-agent.internal:8002`)
+- Bearer token auth via `VVP_KERI_AGENT_AUTH_TOKEN`
+- Configurable timeout: `VVP_KERI_AGENT_TIMEOUT` (default 30s), `VVP_KERI_AGENT_WRITE_TIMEOUT` (default 120s for credential issuance/witness publishing)
+- **Retry policy (safe reads only)**: Retries with exponential backoff (0.5s, 1s, 2s, max 3 attempts) are applied **only to idempotent GET requests and 5xx responses**. All mutating operations (`POST /credentials/issue`, `POST /credentials/{said}/revoke`, `POST /bootstrap/*`) are **never retried** — a single failure returns immediately with the error to the caller. This prevents duplicate credential issuance or double-revocation.
+- **Idempotency for writes (end-to-end)**:
+
+  **External contract (Issuer API → external callers)**: Mutating Issuer API endpoints that proxy to the KERI Agent (`POST /credential/issue`, `POST /credentials/{said}/revoke`, `POST /vvp/create`) accept an optional `Idempotency-Key` request header (UUID v4). If provided, the Issuer API passes it through to the KERI Agent. If not provided, the Issuer API generates a UUID, stores it in the issuer's response, and passes it to the agent. **The auto-generated key is always returned in the response body** as `idempotency_key` field, and also returned in error responses (HTTP 5xx) when the agent call succeeded but the subsequent DB write failed. This allows callers to safely retry by extracting the key from the error response and resubmitting with the same `Idempotency-Key` header. External callers that want safe retries should either (a) generate and persist their own `Idempotency-Key` before calling, or (b) capture the `idempotency_key` from any error response for retry.
+
+  **Scope**: Only endpoints that proxy mutating KERI operations are covered by this idempotency contract. DB-only endpoints like `POST /organizations` are NOT covered — they use standard PostgreSQL transaction semantics (unique constraints, rollback on error) and don't risk the cross-store inconsistency that the idempotency key addresses.
+
+  **Internal contract (KERI Agent)**: All mutating agent endpoints (`POST /credentials/issue`, `POST /credentials/{said}/revoke`, `POST /vvp/create`, `POST /bootstrap/*`) require an `Idempotency-Key` header. The agent uses **LMDB-backed idempotency storage** — a dedicated LMDB sub-database (`idempotency`) within the existing KERI data directory. This makes idempotency records durable across agent restarts with zero new dependencies (the agent already uses LMDB).
+
+  Storage format: `idempotency_key (bytes) → msgpack({request_hash, response_json, status_code, created_at})`
+
+  On duplicate key submission:
+  - If `request_hash` matches: return cached response (no re-execution)
+  - If `request_hash` differs: return 409 Conflict (key reuse with different payload)
+  - After agent restart: LMDB is durable, so cached responses survive restarts
+
+  **Concurrency semantics (same-key race)**: The KERI Agent is a single-replica service, so true parallel requests are rare but possible (concurrent HTTP connections). The idempotency middleware uses a **first-write-wins** pattern:
+  1. Before executing the operation, write a "pending" marker to LMDB: `key → {request_hash, status: "pending", created_at}`
+  2. If a "pending" marker already exists for the key: return `HTTP 409 {"detail": "Request in progress"}` (caller should wait and retry)
+  3. Execute the operation
+  4. On success: update marker to `{request_hash, response_json, status_code, status: "complete"}`
+  5. On failure (exception): delete the marker (allow retry with same key)
+
+  This prevents duplicate execution even under concurrent requests with the same key. The "pending" state acts as an in-flight lock. LMDB transactions guarantee atomicity of the marker write.
+
+  **Cleanup**: A background task runs every 10 minutes and deletes entries older than 1 hour (both "complete" and stale "pending" entries that may indicate a crash). This keeps the idempotency sub-database small while providing a generous retry window.
+
+  **Retention**: 1-hour TTL covers transient network retries and the brief window around agent restarts. Callers should not reuse keys after 1 hour. The `Idempotency-Key` header is documented in the KERI Agent OpenAPI spec and the Issuer API OpenAPI spec.
+- Circuit breaker: After 5 consecutive failures within 60s, the client enters "open" state for 30s. During open state, KERI-dependent endpoints return 503 immediately without attempting the call. KERI-free endpoints (auth, users, orgs list, schemas, dashboard) are unaffected. After 30s, the circuit enters "half-open" state and allows one probe call to test recovery.
+- Singleton lifecycle managed in lifespan
+
+**Interface** (methods mirror current manager APIs):
+
+```python
+class KeriAgentClient:
+    # Identity
+    async def create_identity(self, req: CreateIdentityRequest, *, idempotency_key: str | None = None) -> IdentityResponse
+    async def list_identities(self) -> list[IdentityResponse]
+    async def get_identity(self, name: str) -> IdentityResponse | None
+    async def rotate_keys(self, name: str, req: RotateKeysRequest, *, idempotency_key: str | None = None) -> RotationResponse
+    async def get_oobi(self, name: str) -> str
+    async def publish_identity(self, name: str) -> None
+
+    # Registry
+    async def create_registry(self, req: CreateRegistryRequest, *, idempotency_key: str | None = None) -> RegistryResponse
+    async def list_registries(self) -> list[RegistryResponse]
+    async def get_registry(self, name: str) -> RegistryResponse | None
+
+    # Credentials (idempotency_key on all mutating methods)
+    async def issue_credential(self, req: IssueCredentialRequest, *, idempotency_key: str | None = None) -> CredentialResponse
+    async def revoke_credential(self, said: str, publish: bool = True, *, idempotency_key: str | None = None) -> CredentialResponse
+    async def list_credentials(self, **filters) -> list[CredentialResponse]
+    async def get_credential(self, said: str) -> CredentialResponse | None
+    async def get_credential_cesr(self, said: str) -> bytes
+
+    # Dossier
+    async def build_dossier(self, req: BuildDossierRequest, *, idempotency_key: str | None = None) -> DossierResponse
+    async def get_dossier(self, said: str) -> DossierResponse | None
+    async def get_dossier_cesr(self, said: str) -> bytes
+
+    # VVP (idempotency_key for signing)
+    async def create_vvp_attestation(self, req: CreateVVPAttestationRequest, *, idempotency_key: str | None = None) -> VVPAttestationResponse
+
+    # Bootstrap
+    async def get_bootstrap_status(self) -> BootstrapStatusResponse
+    async def initialize_mock_vlei(self, *, idempotency_key: str | None = None) -> BootstrapStatusResponse
+    async def reinitialize_mock_vlei(self, *, idempotency_key: str | None = None) -> BootstrapStatusResponse
+
+    # Operational
+    async def health(self) -> AgentHealthResponse
+    async def stats(self) -> AgentStatsResponse
+```
+
+**Idempotency key passthrough**: All mutating methods accept an optional `idempotency_key` parameter. When provided by the caller (router/service), this key is passed to the internal `_post()` helper which sets the `Idempotency-Key` HTTP header. When `None`, `_post()` auto-generates a UUID. The `_post()` method ALWAYS returns the key used (auto-generated or caller-provided) so the issuer router can include it in responses.
+
+**Issuer response/error model changes**: The following issuer response models gain an optional `idempotency_key: str | None` field:
+
+| Model | File | Endpoints |
+|-------|------|-----------|
+| `IssueCredentialResponse` | `app/api/models.py` | `POST /credential/issue` |
+| `RevokeCredentialResponse` | `app/api/models.py` | `POST /credentials/{said}/revoke` |
+| `CreateVVPResponse` | `app/api/models.py` | `POST /vvp/create` |
+| `CreateDossierResponse` | `app/api/models.py` | `POST /dossier/create` |
+
+**Error response enrichment**: When a mutating endpoint succeeds at the KERI Agent but fails at the issuer DB layer, the error response includes the idempotency key:
+
+```python
+# In credential.py issue_credential():
+key = request.headers.get("Idempotency-Key") or str(uuid.uuid4())
+try:
+    cred = await client.issue_credential(req, idempotency_key=key)
+    register_credential(db, ...)  # DB write
+except SQLAlchemyError:
+    raise HTTPException(
+        status_code=500,
+        detail=json.dumps({
+            "error": "DB write failed after credential issuance",
+            "credential_said": cred.said,
+            "idempotency_key": key,  # Caller can retry with this key
+        }),
+    )
+```
+
+**Contract test**: A passthrough test validates that user-supplied `Idempotency-Key` header takes precedence over auto-generation on every mutating endpoint. Added to test strategy.
+
+#### Component 4: Issuer API Refactoring
+
+**Startup sequence** (new lifespan — graceful degradation):
+
+The issuer MUST start successfully even when the KERI Agent is unavailable. This ensures KERI-free endpoints (auth, users, orgs list, schemas, dashboard, UI) remain accessible during KERI Agent downtime.
+
+1. `init_database()` — PostgreSQL (unchanged)
+2. `get_api_key_store()` — API key loading (unchanged)
+3. Session cleanup task (unchanged)
+4. `get_keri_client()` — Create HTTP client instance (no health check yet)
+5. **Background bootstrap probe** — Launch an asyncio task that:
+   a. Polls `GET /healthz` on the KERI Agent every 5s (max 120s)
+   b. On first successful response, fetch `GET /bootstrap/status`
+   c. Run trust anchor promotion (create/update Organization DB records)
+   d. Set `app.state.keri_agent_ready = True`
+   e. Log "KERI Agent connected, bootstrap complete"
+   f. If timeout expires: log warning, set `keri_agent_ready = False`, continue polling in background
+6. Log startup complete (issuer is serving requests, KERI routes return 503 until step 5d completes)
+
+**Continuous agent availability tracking** (authoritative source of truth for `app.state.keri_agent_ready`):
+
+After initial bootstrap, agent availability is tracked by two complementary mechanisms:
+
+1. **Circuit breaker state** (reactive): The `KeriAgentClient`'s circuit breaker opens after 5 consecutive failures. When the circuit transitions to "open", the client sets `app.state.keri_agent_ready = False`. When the circuit transitions back to "closed" (after a successful half-open probe), it sets `app.state.keri_agent_ready = True`. This provides immediate reactivity to agent failures during normal traffic.
+
+2. **Background health probe** (proactive): The background probe from step 5 continues running every 30s after initial bootstrap. It calls `GET /healthz` on the KERI Agent. If the call fails 3 consecutive times, it sets `app.state.keri_agent_ready = False`. On the next successful call, it sets `app.state.keri_agent_ready = True` and re-fetches bootstrap status (in case the agent re-initialized after a restart). This catches agent outages even during periods of zero KERI traffic (when the circuit breaker has no data).
+
+Both mechanisms write to the same `app.state.keri_agent_ready` flag. The flag is the single source of truth used by:
+- KERI-dependent route guards (return 503 when `False`)
+- `/readyz` endpoint (return 503 when `False`)
+- `/healthz` response body (`keri_agent` field, but not status code)
+
+**Dual-writer conflict resolution**: The flag uses a simple **failure-takes-precedence** policy with a debounce window:
+- **Setting to `False`**: Either mechanism can set the flag to `False` immediately (no debounce). Any single failure signal is treated as authoritative.
+- **Setting to `True`**: Requires the background probe to have succeeded at least once in the last 30s AND the circuit breaker to be in "closed" state. This prevents readiness flapping where a single successful probe immediately marks the agent as ready while the circuit breaker is still open from recent failures.
+- **Transition logging**: All state transitions are logged at INFO level: `"KERI Agent availability: True → False (source: circuit_breaker|background_probe)"`. This provides a clear audit trail for operational debugging.
+- **Race safety**: The flag is an `asyncio.Event` or atomic boolean. Since the issuer runs in a single Python process with asyncio, there are no true concurrent writes — all writers run on the same event loop.
+
+**KERI-dependent route guard**: Each router that proxies to the KERI Agent checks `app.state.keri_agent_ready` before making the call. If `False`, returns HTTP 503 with body `{"detail": "KERI Agent unavailable", "retry_after": 5}`.
+
+**Issuer probe endpoints** (three distinct endpoints, each with one clear purpose):
+
+| Endpoint | Purpose | Status Code | Consumer |
+|----------|---------|-------------|----------|
+| `GET /livez` | **Liveness** — is the process alive? | Always 200 | ACA liveness probe |
+| `GET /healthz` | **Readiness** — can the issuer serve DB-backed traffic? | 200 if DB up, 503 if DB down | ACA readiness probe |
+| `GET /readyz` | **Full operational** — can ALL routes be served? | 200 if DB AND agent up, 503 otherwise | CI/CD gates, alerting |
+
+**ACA probe configuration**:
+- Liveness probe → `GET /livez` (always 200; prevents ACA from killing the container due to dependency outages)
+- Readiness probe → `GET /healthz` (503 when DB is down; removes replica from rotation when it can't serve any useful traffic)
+
+**Probe behavior matrix**:
+
+| DB | KERI Agent | `/livez` | `/healthz` | `/readyz` | ACA routing | Effect |
+|----|-----------|----------|-----------|-----------|-------------|--------|
+| Up | Up | 200 | 200 | 200 | In rotation | Full service |
+| Up | Down | 200 | 200 | 503 | In rotation | KERI-free routes work; KERI routes return 503 at request level |
+| Down | Up | 200 | 503 | 503 | Removed | No traffic routed to this replica |
+| Down | Down | 200 | 503 | 503 | Removed | No traffic routed to this replica |
+
+**Why three endpoints**: Liveness must never return 503 for dependency failures (otherwise ACA kills the container, causing restart loops). Readiness must reflect DB state (since all routes except `/livez` need DB). Full operational readiness (`/readyz`) includes KERI Agent state for CI/CD and monitoring.
+
+**KERI-dependent route gating**: Each KERI-dependent router checks `request.app.state.keri_agent_ready` at request time. If `False`, the router returns `HTTP 503 {"detail": "KERI Agent unavailable", "retry_after": 5}`. This gates only KERI routes while KERI-free routes serve normally.
+
+**Issuer `health.py` router changes**: The existing `health.py` router is refactored to implement all three endpoints. It does NOT proxy KERI Agent health (that's done by route-level gating). The DB connectivity check is a simple `SELECT 1` on the PostgreSQL connection.
+
+`/livez` response: `{"status": "alive"}` — always 200.
+
+`/healthz` response: `{"status": "ok"|"unhealthy", "database": "connected"|"unavailable", "keri_agent": "connected"|"unavailable"}` — 200 when DB reachable, 503 when DB unreachable.
+
+`/readyz` response: `{"ready": true|false, "database": "connected"|"unavailable", "keri_agent": "connected"|"unavailable"}` — 200 only when both DB and agent are reachable. Used by:
+- CI/CD deploy gates (verify full functionality after deploy)
+- `system-health-check.sh` (operational monitoring)
+- Alerting (fire alert when `/readyz` returns 503 for >5 min)
+
+**Router changes** (summary):
+
+| Router | Current | After |
+|--------|---------|-------|
+| `identity.py` | `get_identity_manager()` | `get_keri_client().create_identity()` etc. |
+| `registry.py` | `get_registry_manager()` | `get_keri_client().create_registry()` etc. |
+| `credential.py` | `get_credential_issuer()` | `get_keri_client().issue_credential()` etc. |
+| `dossier.py` | `DossierBuilder`, `get_credential_issuer()` | `get_keri_client().build_dossier()` etc. |
+| `vvp.py` | `get_identity_manager()`, `DossierBuilder`, `create_passport()` | `get_keri_client().create_vvp_attestation()` |
+| `vetter_certification.py` | `service.py` → `get_credential_issuer()` | `service.py` → `get_keri_client().issue_credential()` |
+| `health.py` | `get_identity_manager()` | DB check (`SELECT 1`) + `app.state.keri_agent_ready` flag (no agent proxy call) |
+| `admin.py` | Stats from KERI managers | `get_keri_client().stats()` |
+| `organization.py` | `mock_vlei.issue_le_credential()` | `get_keri_client().issue_credential()` (or `mock_vlei` calls agent) |
+| `tn.py` | Brand extraction via credentials | `get_keri_client().get_credential()` |
+
+**Unambiguous file disposition** (each file has exactly one destination):
+
+| Issuer file | Destination | Rationale |
+|-------------|-------------|-----------|
+| `app/keri/__init__.py` | **Delete** (recreated in KERI Agent) | Module marker |
+| `app/keri/identity.py` | **KERI Agent** `app/keri/identity.py` | KERI manager |
+| `app/keri/registry.py` | **KERI Agent** `app/keri/registry.py` | KERI manager |
+| `app/keri/issuer.py` | **KERI Agent** `app/keri/issuer.py` | KERI manager |
+| `app/keri/witness.py` | **KERI Agent** `app/keri/witness.py` | KERI manager |
+| `app/keri/persistence.py` | **KERI Agent** `app/keri/persistence.py` | KERI storage |
+| `app/keri/exceptions.py` | **KERI Agent** `app/keri/exceptions.py` | KERI exceptions |
+| `app/dossier/builder.py` | **KERI Agent** `app/dossier/builder.py` | Uses KERI managers directly |
+| `app/dossier/exceptions.py` | **KERI Agent** `app/dossier/exceptions.py` | Used by builder |
+| `app/vvp/passport.py` | **KERI Agent** `app/vvp/passport.py` | Signs with KERI private keys |
+| `app/vvp/card.py` | **KERI Agent** `app/vvp/card.py` | Used during signing |
+| `app/vvp/header.py` | **KERI Agent** `app/vvp/header.py` | Used during VVP attestation creation |
+| `app/vvp/oobi.py` | **KERI Agent** `app/vvp/oobi.py` | URL construction used during signing |
+| `app/vvp/identity.py` | **KERI Agent** `app/vvp/identity.py` | RFC 8224 header builder, used during signing |
+| `app/vvp/exceptions.py` | **KERI Agent** `app/vvp/exceptions.py` | VVP signing exceptions |
+| `app/vvp/dossier_service.py` | **Stays in issuer** | Revocation cache (HTTP), no KERI deps |
+| `app/org/mock_vlei.py` | **Split** → see below | Has both KERI and DB operations |
+
+**MockVLEIManager split**:
+
+The current `mock_vlei.py` (~600 lines) has two distinct responsibilities:
+
+1. **KERI operations** (create identities, registries, credentials): → Move to KERI Agent as `app/mock_vlei.py`. This is the `MockVLEIKeriManager` class. Called during agent bootstrap via `POST /bootstrap/mock-vlei`.
+
+2. **Trust anchor promotion** (create Organization DB records, set org_type): → Stays in issuer as `app/org/trust_anchors.py`. This is a new `promote_trust_anchors(bootstrap_status: BootstrapStatusResponse, db: Session)` function. Called during issuer's background bootstrap probe after fetching `GET /bootstrap/status` from the agent.
+
+The split point is clean: everything that calls `get_identity_manager()`, `get_registry_manager()`, or `get_credential_issuer()` moves to the agent. Everything that calls `db.add(Organization(...))` stays in the issuer.
+
+**Issuer `app/vvp/` directory after migration**:
+Only `dossier_service.py` remains. All other files move to the KERI Agent. The `app/vvp/__init__.py` stays as a module marker.
+
+**Dependencies to remove from issuer** `pyproject.toml`:
+- `keri` (keripy) — no longer needed
+- `lmdb` — no longer needed
+- `hio` — no longer needed
+
+**Dependencies to add to issuer** `pyproject.toml`:
+- `httpx` (already a transitive dep, make explicit for KERI Agent client)
+
+#### Component 5: Migration Path (No Feature Flag)
+
+No feature flag. A single migration path avoids dual-code-path complexity:
+
+1. **Development**: Build and test KERI Agent service independently (all tests pass in isolation)
+2. **Refactor issuer**: In a single commit, replace `app/keri/*` imports with `KeriAgentClient` calls, delete moved files
+3. **Deploy**: Follow the production cutover runbook (Component 8 below)
+4. **Rollback**: `git revert` the refactor commit + redeploy restores the monolith
+
+The issuer's `app/keri/` directory is deleted in the same commit that adds `keri_client.py`. There is no state where both exist in the codebase, eliminating confusion about which code path is active.
+
+#### Component 6: CI/CD Pipeline Updates
+
+**Path filter changes** in `deploy.yml`:
+```yaml
+keri-agent:
+  - 'services/keri-agent/**'
+  - 'keripy/**'
+  - 'common/**'
+issuer:
+  - 'services/issuer/**'
+  - 'common/**'
+```
+
+**Note on `common/**` triggering both deploys**: This is intentional and correct. Both services import from common, so any common change must be validated and deployed to both. In practice, common changes are infrequent (schema models, CESR utilities). The key win is that `services/issuer/**` changes (the vast majority of pushes) no longer trigger a KERI Agent redeploy.
+
+**New jobs**:
+- `test-keri-agent`: Run KERI Agent tests (no PostgreSQL needed)
+- `build-keri-agent`: Build Docker image, push to ACR
+- `deploy-keri-agent`: 3-phase LMDB-safe deploy (inherit from current issuer deploy logic)
+
+**Modified jobs**:
+- `test-issuer`: Now KERI-free (faster, mock `KeriAgentClient` responses)
+- `build-issuer`: Simplified Dockerfile (no keripy, no LMDB)
+- `deploy-issuer`: Standard blue-green deploy (no LMDB lock handling). Fast ~30s.
+
+**Deploy ordering in CI/CD**: When both services are triggered (e.g., `common/**` change):
+1. `test-keri-agent` and `test-issuer` run in **parallel**
+2. `build-keri-agent` and `build-issuer` run in **parallel** (after their respective tests pass)
+3. `deploy-keri-agent` runs **first** (LMDB-safe 3-phase deploy, ~4 min)
+4. `deploy-keri-agent` health gate passes (`/healthz` returns 200)
+5. `deploy-issuer` runs **after** keri-agent is healthy (standard deploy, ~30s)
+6. Post-deploy verification: both `/version` endpoints return expected SHA
+
+This ordering ensures the KERI Agent is ready before the Issuer API starts routing to it. The Issuer API's graceful degradation (background bootstrap probe) handles the brief window where the agent is initializing.
+
+#### Component 7: Azure Infrastructure Setup
+
+**Manual steps before first deploy** (one-time):
+
+```bash
+# 1. Generate a shared auth token
+AUTH_TOKEN=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
+
+# 2. Get Container Apps Environment ID
+ENV_ID=$(az containerapp env show -n vvp-env -g VVP --query id -o tsv)
+
+# 3. Create KERI Agent Container App
+az containerapp create \
+  --name vvp-keri-agent \
+  --resource-group VVP \
+  --environment vvp-env \
+  --image mcr.microsoft.com/azurelinux/base/core:3.0 \
+  --min-replicas 1 --max-replicas 1 \
+  --ingress internal --target-port 8002 \
+  --secrets keri-auth-token="$AUTH_TOKEN" \
+  --env-vars \
+    VVP_KERI_AGENT_AUTH_TOKEN=secretref:keri-auth-token \
+    VVP_MOCK_VLEI_ENABLED=true \
+    VVP_KERI_DATA_DIR=/data/vvp-keri-agent
+
+# 4. Mount Azure Files for LMDB persistence
+az containerapp storage set \
+  --name vvp-keri-agent -g VVP \
+  --storage-name vvpissuerdata \
+  --azure-file-account-name vvpissuerdata \
+  --azure-file-share-name vvp-keri-agent \
+  --azure-file-account-key <key> \
+  --access-mode ReadWrite
+
+# 5. Update Issuer Container App — add agent URL and token
+az containerapp update \
+  --name vvp-issuer -g VVP \
+  --set-env-vars \
+    VVP_KERI_AGENT_URL=http://vvp-keri-agent.internal.<env-suffix>:8002 \
+    VVP_KERI_AGENT_AUTH_TOKEN=secretref:keri-auth-token
+
+# NOTE: Do NOT remove Azure Files mount from Issuer yet.
+# Mount removal is deferred to post-stabilization (Cutover Step 5, 24-48h later)
+# to preserve rollback Option A capability.
+```
+
+#### Component 8: Production Cutover Runbook
+
+**Pre-cutover checklist**:
+- [ ] All KERI Agent tests pass locally
+- [ ] All Issuer tests pass locally (with mock client)
+- [ ] Docker Compose full stack works (`docker compose --profile full up`)
+- [ ] Azure Container App `vvp-keri-agent` created (Component 7)
+- [ ] Auth token configured as secret on both Container Apps
+- [ ] Azure Files share `vvp-keri-agent` created (empty — agent's mock vLEI bootstrap will populate it)
+- [ ] Issuer Container App **retains** its Azure Files mount (NOT removed yet — deferred to post-stabilization)
+
+**Cutover sequence** (strict stop-start ordering, eliminates LMDB divergence):
+
+A short outage during cutover is acceptable. Expected total downtime: **~5-6 minutes** (stop old issuer ~60s + deploy KERI Agent with LMDB init ~4 min + deploy new issuer ~30s). This is comparable to the current monolith's worst-case deploy downtime and only occurs once during the initial cutover. After cutover, issuer-only deploys take ~30s with zero KERI disruption.
+
+```
+Step 1: Freeze writes — stop the old issuer
+  ├─ az containerapp revision deactivate (all active issuer revisions)
+  ├─ Poll until stopped (max 60s)
+  ├─ Wait 10s for LMDB lock release
+  └─ At this point: no writes to LMDB, service is down (accepted downtime)
+
+Step 2: Deploy KERI Agent (uses fresh LMDB from mock vLEI bootstrap)
+  ├─ Push services/keri-agent/ to main
+  ├─ CI/CD builds and deploys KERI Agent
+  ├─ Agent lifespan: init LMDB → mock vLEI bootstrap → create trust chain
+  ├─ Verify: az containerapp exec -- curl localhost:8002/healthz → 200
+  ├─ Verify: az containerapp exec -- curl localhost:8002/bootstrap/status → initialized=true
+  └─ At this point: KERI Agent is running with fresh trust chain, issuer still down
+
+Step 3: Deploy refactored Issuer (proxies to KERI Agent)
+  ├─ Push services/issuer/ changes to main
+  ├─ CI/CD deploys new issuer (~30s, no LMDB handling needed)
+  ├─ Issuer starts → background probe connects to KERI Agent → trust anchor promotion
+  ├─ Verify: curl https://vvp-issuer.rcnx.io/healthz → {"status":"ok","keri_agent":"connected"}
+  └─ At this point: new split architecture is live, service restored
+
+Step 4: Smoke test
+  ├─ ./scripts/system-health-check.sh --e2e
+  ├─ Verify credential issuance, dossier creation, VVP attestation via UI
+  └─ Run bootstrap-issuer.py to re-provision test org + API key + TN allocs
+
+Step 5: Post-stabilization cleanup (24-48 hours later, after confirming stability)
+  ├─ Remove Azure Files mount from issuer Container App
+  ├─ Archive old vvp-issuer Azure Files share
+  └─ From this point, rollback to monolith requires mount restore
+```
+
+**Why fresh LMDB (not data copy)**: The KERI Agent creates its own LMDB from scratch via mock vLEI bootstrap. This eliminates LMDB data copy/sync concerns entirely. The only data that needs re-provisioning is org-specific (test org, API keys, TN allocations) which `bootstrap-issuer.py` handles. Since this is a mock/dev KERI infrastructure (not production vLEI with real GLEIF credentials), re-bootstrapping is safe and idempotent.
+
+**IMPORTANT — Mock/dev-only runbook constraint**: This "fresh LMDB bootstrap" cutover path is valid ONLY for environments using mock vLEI infrastructure (`VVP_MOCK_VLEI_ENABLED=true`). If the system ever migrates to production vLEI with real GLEIF-issued credentials, a data-migration strategy (LMDB snapshot copy + quiesce + verification) must be designed before running this runbook. The mock trust chain (GLEIF, QVI, GSMA identities and their credential chains) is recreated from scratch by MockVLEIManager; real vLEI credentials cannot be recreated and must be preserved.
+
+**Rollback procedure** (if Step 3 or 4 fails):
+
+```
+Option A: Quick rollback — revert to monolith (pre-stabilization, ~4 min)
+  ├─ git revert <issuer-refactor-commit>
+  ├─ git push (triggers issuer deploy — monolith restores with LMDB)
+  ├─ Issuer's Azure Files mount is still attached (not removed until Step 5)
+  ├─ Old monolith issuer boots, LMDB initializes from existing Azure Files data
+  ├─ Run bootstrap-issuer.py to re-provision if needed
+  └─ KERI Agent Container App: scale to 0 replicas (harmless to leave running too)
+
+Option B: Quick rollback — after post-stabilization (mount removed)
+  ├─ Restore Azure Files mount on issuer Container App
+  ├─ git revert <issuer-refactor-commit>
+  ├─ git push
+  └─ Same as Option A but with extra mount restore step (~5 min total)
+```
+
+**Key safety properties**:
+- Step 1 stops all writes before any LMDB changes → no divergence possible
+- Step 2 uses fresh LMDB → no stale data copy concerns
+- Step 3's graceful degradation means if the agent is briefly unreachable, KERI-free endpoints keep working
+- Azure Files mount removal is deferred to Step 5 → rollback Option A is always available during the first 24-48 hours
+- **Accepted downtime**: ~5-6 min during initial cutover (stop old issuer ~60s + deploy agent ~4 min + deploy new issuer ~30s). Comparable to current monolith's worst-case deploy. After cutover, issuer-only deploys take ~30s — the key win.
+
+#### Component 9: Docker Compose Updates
+
+```yaml
+keri-agent:
+  build:
+    context: .
+    dockerfile: services/keri-agent/Dockerfile
+  ports:
+    - "8002:8002"  # Exposed in dev for debugging
+  volumes:
+    - keri-agent-data:/data/vvp-keri-agent
+    - ./services/keri-agent/config:/srv/config:ro
+  environment:
+    VVP_KERI_AGENT_AUTH_TOKEN: dev-token
+    VVP_MOCK_VLEI_ENABLED: "true"
+    VVP_KERI_DATA_DIR: /data/vvp-keri-agent
+  depends_on:
+    witness-wan:
+      condition: service_healthy
+    witness-wil:
+      condition: service_healthy
+    witness-wes:
+      condition: service_healthy
+  profiles: ["full"]
+
+issuer:
+  # ... existing config minus LMDB volume
+  environment:
+    VVP_KERI_AGENT_URL: http://keri-agent:8002
+    VVP_KERI_AGENT_AUTH_TOKEN: dev-token
+    # ... existing env vars
+  depends_on:
+    keri-agent:
+      condition: service_healthy
+    # ... existing witness deps removed (KERI Agent handles witnesses)
+```
+
+### Data Flow
+
+**Credential issuance flow (after extraction):**
+
+```
+Browser → POST /credential/issue → Issuer API
+  1. Auth middleware validates API key/session
+  2. RBAC check (credential_write role)
+  3. keri_client.issue_credential(IssueCredentialRequest)
+     → POST http://keri-agent:8002/credentials/issue
+     → KERI Agent:
+       a. Resolve identity (Habery)
+       b. Resolve registry (Regery)
+       c. Create ACDC (proving.credential)
+       d. Create TEL iss event
+       e. Anchor to KEL (ixn)
+       f. Process Tever
+       g. Publish to witnesses
+       h. Return CredentialResponse
+  4. Issuer API stores ManagedCredential in PostgreSQL
+  5. Return response to browser
+```
+
+**VVP attestation flow (after extraction):**
+
+```
+SIP Redirect → POST /vvp/create → Issuer API
+  1. API key auth (X-API-Key header)
+  2. RBAC check (dossier_manager role)
+  3. Revocation check (local HTTP cache)
+  4. Vetter constraint validation (PostgreSQL)
+  5. keri_client.create_vvp_attestation(CreateVVPAttestationRequest)
+     → POST http://keri-agent:8002/vvp/create
+     → KERI Agent:
+       a. Get identity info
+       b. Build dossier (DossierBuilder.build)
+       c. Extract card claim from credentials
+       d. Create VVP-Identity header
+       e. Sign PASSporT JWT with Ed25519
+       f. Build RFC 8224 Identity header
+       g. Return VVPAttestationResponse
+  6. Return response to SIP redirect
+```
+
+### Error Handling
+
+**KERI Agent unavailable**: `KeriAgentClient` raises `KeriAgentUnavailableError` (maps to HTTP 503 with `Retry-After: 5` header). KERI-free endpoints (auth, users, orgs list, schemas, dashboard) continue working. Circuit breaker prevents cascading failures.
+
+**KERI Agent timeout**: Read timeout 30s (GET requests), write timeout 120s (POST credential issuance, which includes witness publishing). Configurable via `VVP_KERI_AGENT_TIMEOUT` and `VVP_KERI_AGENT_WRITE_TIMEOUT`.
+
+**KERI Agent error responses**: The KERI Agent returns structured error responses:
+```json
+{"detail": "Identity not found: acme", "error_code": "IDENTITY_NOT_FOUND"}
+```
+The `KeriAgentClient` maps these to issuer-side exceptions:
+- Agent 400 → `HTTPException(400, detail=...)` (bad request, pass through)
+- Agent 404 → `HTTPException(404, detail=...)` (not found, pass through)
+- Agent 409 → `HTTPException(409, detail=...)` (conflict/duplicate)
+- Agent 5xx → `KeriAgentUnavailableError` (503, triggers circuit breaker)
+
+**Cross-store consistency (LMDB vs PostgreSQL)**:
+
+The service split introduces a cross-store consistency boundary:
+- **KERI Agent (LMDB)**: Source of truth for credential existence, KERI identity state, TEL events
+- **Issuer API (PostgreSQL)**: Advisory records for UI display (`ManagedCredential`, `Organization`)
+
+**Accepted inconsistency window**: If a credential is issued in LMDB (agent returns 200) but the subsequent PostgreSQL insert in the issuer fails, the credential exists in KERI but not in the issuer's DB. This is acceptable because:
+1. The `ManagedCredential` table is for UI display/filtering, not for verification
+2. The verifier resolves credentials via KERI/CESR/witnesses, not via the issuer's DB
+3. The admin can reconcile by calling `GET /credentials` (which proxies to the agent's LMDB) and comparing with the DB
+
+**Reconciliation procedure** (operator-initiated, for post-incident recovery):
+
+When a DB write failure is suspected (e.g., error logs show "SQL commit failed for credential" or orphaned KERI credential alerts):
+
+1. **List agent credentials**: `curl -H "Authorization: Bearer $TOKEN" http://keri-agent:8002/credentials` → list of all KERI credential SAIDs
+2. **List issuer managed credentials**: `SELECT said FROM managed_credentials;` (PostgreSQL)
+3. **Diff**: Find SAIDs in agent but not in issuer DB (orphaned KERI credentials)
+4. **Reconcile**: For each orphaned SAID:
+   a. Fetch full credential: `GET /credentials/{said}` from agent
+   b. Determine owner org: Match `issuer_aid` to Organization's `aid`
+   c. Insert missing `ManagedCredential` row: `INSERT INTO managed_credentials (said, organization_id, schema_said, issuer_aid) VALUES (...)`
+5. **Verify**: Re-run step 3 to confirm diff is empty
+
+This procedure will be codified as a script (`scripts/reconcile-credentials.sh`) that automates steps 1-4 by calling the agent and issuer APIs. The script is run manually by an operator — it is NOT an automated background task, because the inconsistency window is brief and the affected data is advisory (UI display), not correctness-critical.
+
+**Monitoring**: The issuer logs a structured error `"CROSS_STORE_INCONSISTENCY credential_said={said}"` whenever a credential is issued in KERI (agent returns 200) but the PostgreSQL insert fails. Operators can alert on this log pattern to trigger reconciliation proactively.
+
+### Test Strategy
+
+**1. KERI Agent tests** (`services/keri-agent/tests/`):
+- Port existing KERI-dependent tests from issuer (9 files, ~5,500 lines)
+- Update imports from `services.issuer.app.keri.*` to `app.keri.*` (agent's package root)
+- Add endpoint tests for each API route (test via `httpx.AsyncClient` against agent's `app`)
+- Existing patterns: real KERI managers with temp LMDB storage (no mocking)
+- New: Test idempotency-key handling (duplicate POST with same key → cached response)
+- New: Test bearer token auth (missing token → 401, wrong token → 401, correct → 200)
+
+**2. Issuer API tests** (`services/issuer/tests/`):
+- KERI-free tests unchanged (13 files, ~4,500 lines)
+- KERI-dependent tests refactored to mock `KeriAgentClient` responses
+- Existing `conftest.py` simplified: remove KERI manager resets, add mock client fixture
+
+**3. KeriAgentClient unit tests** (`services/issuer/tests/test_keri_client.py`):
+- **Retry policy**: Verify GET requests are retried on 5xx, POST requests are NOT retried
+- **Idempotency key**: Verify every mutating call attaches `Idempotency-Key` header
+- **Circuit breaker states**: Test closed→open→half-open transitions:
+  - 5 consecutive failures → circuit opens → calls return 503 immediately
+  - After 30s → circuit half-opens → one probe call allowed
+  - Probe succeeds → circuit closes
+- **Timeout handling**: Verify read timeout (30s) vs write timeout (120s)
+- **Error mapping**: Agent 4xx → appropriate issuer exception, Agent 5xx → `KeriAgentUnavailableError`
+- **Graceful degradation**: With circuit open, KERI-free routes still work
+
+**4. Contract/compatibility tests** (`services/issuer/tests/test_keri_agent_contract.py`):
+- For each DTO in `common/vvp/models/keri_agent.py`, verify:
+  - Request model can be serialized to JSON matching the agent's expected schema
+  - Response model can be deserialized from the agent's actual response format
+  - Round-trip: `model.model_dump_json()` → JSON → `Model.model_validate_json()` is lossless
+- These tests import from `common` only (no KERI deps) and run fast
+- Catches schema drift between services early (e.g., field renamed in one but not the other)
+
+**5. Failure-injection tests** (`services/issuer/tests/test_failure_modes.py`):
+- **Agent success + issuer DB failure**: Agent issues credential (returns CredentialResponse), but issuer's PostgreSQL insert for `ManagedCredential` fails. Verify:
+  - Issuer returns 500 to caller
+  - Credential exists in KERI Agent (LMDB) but not in Issuer DB
+  - Subsequent retry (by user) with same idempotency key returns agent's cached response, issuer retries DB insert
+  - Document: This is an accepted inconsistency window. The `ManagedCredential` table is advisory (for UI display), not authoritative. The KERI Agent's LMDB is the source of truth for credential existence.
+- **Agent timeout during credential issuance**: Mock agent to hang for >120s. Verify issuer returns 504 Gateway Timeout.
+- **Agent returns 5xx during bootstrap probe**: Verify issuer starts, KERI-free routes return 200, KERI routes return 503 with `retry_after`.
+
+**6. Degraded mode tests** (`services/issuer/tests/test_degraded_mode.py`):
+- **Startup without agent**: Mock agent as unreachable. Issuer starts successfully. Verify:
+  - `/healthz` returns 200 with `keri_agent: "unavailable"`
+  - `/auth/login` works (KERI-free)
+  - `/organizations` list works (DB only)
+  - `/schemas` works (DB only)
+  - `/credential/issue` returns 503
+  - `/vvp/create` returns 503
+  - `/identity` returns 503
+- **Agent comes online mid-operation**: Start with agent down, background probe running. Bring agent up. Verify KERI routes start returning 200 within 10s.
+- **Agent goes down after startup**: Start with agent healthy. Mock agent to become unreachable. Verify circuit breaker opens after 5 failures, KERI routes return 503, KERI-free routes unaffected.
+
+**7. Integration tests** (new, run against both services via Docker Compose):
+- Bootstrap flow: agent starts → bootstraps mock vLEI → issuer fetches status → promotes trust anchors
+- Credential issuance end-to-end (issuer API → agent → LMDB + witnesses)
+- Dossier creation end-to-end
+- VVP attestation end-to-end
+- Agent restart resilience: Stop agent container, verify issuer degrades gracefully, restart agent, verify issuer recovers
+
+## Files to Create/Modify
+
+| File | Action | Purpose |
+|------|--------|---------|
+| `common/vvp/models/keri_agent.py` | Create | Shared DTO models for API contract |
+| `services/keri-agent/` | Create (entire service) | KERI Agent service |
+| `services/keri-agent/app/main.py` | Create | Agent lifespan and router mounting |
+| `services/keri-agent/app/config.py` | Create | Agent-specific configuration |
+| `services/keri-agent/app/auth.py` | Create | Bearer token middleware |
+| `services/keri-agent/app/api/*.py` | Create (7 files) | API routers |
+| `services/keri-agent/app/keri/*.py` | Move from issuer | KERI managers (unchanged logic) |
+| `services/keri-agent/app/dossier/*.py` | Move from issuer | DossierBuilder |
+| `services/keri-agent/app/vvp/*.py` | Move from issuer | VVP signing logic |
+| `services/keri-agent/app/mock_vlei.py` | Move from issuer | MockVLEI KERI operations |
+| `services/keri-agent/tests/*.py` | Create/port | Agent test suite |
+| `services/keri-agent/pyproject.toml` | Create | Dependencies (keripy, FastAPI) |
+| `services/keri-agent/Dockerfile` | Create | Agent container |
+| `services/keri-agent/config/witnesses.json` | Copy | Witness configuration |
+| `services/issuer/app/keri_client.py` | Create | HTTP client to KERI Agent |
+| `services/issuer/app/main.py` | Modify | Remove KERI init, add client init |
+| `services/issuer/app/api/identity.py` | Modify | Use client instead of manager |
+| `services/issuer/app/api/registry.py` | Modify | Use client instead of manager |
+| `services/issuer/app/api/credential.py` | Modify | Use client instead of manager |
+| `services/issuer/app/api/dossier.py` | Modify | Use client instead of manager |
+| `services/issuer/app/api/vvp.py` | Modify | Proxy to agent (add revocation + constraint check) |
+| `services/issuer/app/api/health.py` | Modify | Implement /livez, /healthz (DB check), /readyz (DB + agent flag) — no agent proxy calls |
+| `services/issuer/app/api/admin.py` | Modify | Proxy stats/reinit from agent |
+| `services/issuer/app/api/organization.py` | Modify | Use client for KERI ops |
+| `services/issuer/app/api/tn.py` | Modify | Use client for brand lookup |
+| `services/issuer/app/vetter/service.py` | Modify | Use client instead of KERI managers (6 import sites: registry, identity, witness, issuer) |
+| `services/issuer/app/vetter/constraints.py` | Modify | Use client instead of `get_registry_manager()` (2 import sites at lines 213, 407) |
+| `services/issuer/app/vvp/dossier_service.py` | Modify | Use client instead of `get_dossier_builder()` + `get_credential_issuer()` (2 import sites at lines 122-123) |
+| `services/issuer/app/tn/lookup.py` | Modify | Use client instead of `get_credential_issuer()` (1 import site at line 87) |
+| `services/issuer/app/dossier/formats.py` | Modify | Update to use DTO import from common instead of `DossierContent` from local builder |
+| `services/issuer/app/dossier/__init__.py` | Modify/Delete | Remove re-exports of DossierBuilder (moved to agent) |
+| `services/issuer/app/org/mock_vlei.py` | Modify → split | KERI ops to agent, trust anchor promotion stays |
+| `services/issuer/app/keri/` | Delete | Moved to KERI Agent |
+| `services/issuer/app/dossier/builder.py` | Delete | Moved to KERI Agent |
+| `services/issuer/app/vvp/passport.py` | Delete | Moved to KERI Agent |
+| `services/issuer/app/vvp/card.py` | Delete | Moved to KERI Agent |
+| `services/issuer/pyproject.toml` | Modify | Remove keripy/lmdb/hio deps |
+| `services/issuer/Dockerfile` | Modify | Remove keripy COPY/install |
+| `services/issuer/tests/conftest.py` | Modify | Remove KERI fixtures, add mock client |
+| `services/issuer/tests/test_keri_client.py` | Create | Client retry/circuit breaker tests |
+| `.github/workflows/deploy.yml` | Modify | Add keri-agent deploy job |
+| `docker-compose.yml` | Modify | Add keri-agent service |
+| `knowledge/architecture.md` | Modify | Document two-service architecture |
+| `knowledge/deployment.md` | Modify | Document split deploy pipeline |
+| `knowledge/api-reference.md` | Modify | Document KERI Agent internal API |
+| `services/issuer/CLAUDE.md` | Modify | Remove KERI sections |
+
+## Implementation Order
+
+### Step 1: Shared DTOs (~30 min)
+- Create `common/vvp/models/keri_agent.py` with all request/response models
+- Add tests for model serialization
+
+### Step 2: KERI Agent Service Scaffold (~2 hours)
+- Create `services/keri-agent/` directory structure
+- Move `app/keri/*.py` from issuer (copy, update imports)
+- Move `app/dossier/builder.py` and `app/dossier/exceptions.py`
+- Move `app/vvp/passport.py`, `card.py`, `header.py`, `oobi.py`, `identity.py`, `exceptions.py`
+- Move MockVLEI KERI operations
+- Create `app/config.py` with agent-specific config
+- Create `app/auth.py` with bearer token middleware
+- Create `app/main.py` with lifespan
+- Create API routers wrapping the managers
+- Create `pyproject.toml` and `Dockerfile`
+- Copy `config/witnesses.json`
+
+### Step 3: KERI Agent Tests (~1.5 hours)
+- Create `tests/conftest.py` with agent fixtures
+- Port KERI-dependent tests from issuer
+- Add endpoint-level tests for each router
+- Verify all tests pass with `./scripts/run-tests.sh`
+
+### Step 4: KeriAgentClient (~1 hour)
+- Create `services/issuer/app/keri_client.py`
+- Implement all methods with httpx
+- Implement retry logic and circuit breaker
+- Create `services/issuer/tests/test_keri_client.py`
+
+### Step 5: Issuer API Refactoring (~2 hours)
+- Update lifespan in `main.py`
+- Refactor each KERI-dependent router to use client
+- Split MockVLEIManager (KERI ops → agent, trust promotion → issuer)
+- Update vetter service to use client
+- Remove `app/keri/` directory
+- Remove moved files from `app/dossier/` and `app/vvp/`
+- Update `pyproject.toml` (remove keripy/lmdb/hio)
+- Update `Dockerfile` (remove keripy COPY)
+
+### Step 6: Update Existing Issuer Tests (~1.5 hours)
+- Update `conftest.py` (remove KERI resets, add mock client)
+- Refactor KERI-dependent tests to mock client responses
+- Verify all tests pass
+
+### Step 7: Docker Compose & CI/CD (~1 hour)
+- Update `docker-compose.yml` with keri-agent service
+- Update `.github/workflows/deploy.yml` with keri-agent jobs
+- Update path filters
+
+### Step 8: Knowledge & Documentation (~30 min)
+- Update `knowledge/architecture.md`
+- Update `knowledge/deployment.md`
+- Update `knowledge/api-reference.md`
+- Update `services/issuer/CLAUDE.md`
+
+## Open Questions
+
+1. **Should VVP attestation logic live entirely in the KERI Agent, or should it be split?** The current plan moves all signing to the agent, with the issuer doing revocation/constraint checks before proxying. This means the KERI Agent needs `app/vvp/` (header, passport, card, oobi, identity). Alternative: Keep VVP logic in issuer, have it call the agent for individual KERI operations (get identity, build dossier, sign bytes). Tradeoff: more round-trips vs cleaner separation.
+
+   **Decision: Move VVP attestation entirely to KERI Agent.** The PASSporT signing requires the Ed25519 private key which only the KERI Agent should access. Multiple round-trips would be slower and expose key material boundaries.
+
+2. **Should we create the Azure Container App `vvp-keri-agent` in this sprint?** Yes — it's needed for the first deploy. Document the `az containerapp create` commands in the plan.
+
+## Risks and Mitigations
+
+| Risk | Likelihood | Impact | Mitigation |
+|------|------------|--------|------------|
+| Large code move — risk of regressions | Medium | High | Atomic commit, comprehensive test suite, all existing tests must pass |
+| Network latency between services | Medium | Low | Internal network in same ACA Environment (~1ms). Credential issuance already ~seconds. |
+| KERI Agent unavailable during restart | Low | Medium | Circuit breaker, KERI-free endpoints continue working, agent restarts now rare |
+| Inter-service auth token leak | Low | Medium | Token in Azure secrets, internal-only ingress |
+| Test refactoring effort | Medium | Medium | Port tests methodically, verify each file passes independently |
+| CI/CD pipeline complexity | Medium | Medium | Test locally with Docker Compose before pushing CI/CD changes |
+
+## Revision History
+
+| Round | Date | Changes |
+|-------|------|---------|
+| R1 | 2026-02-16 | Initial draft |
+| R2 | 2026-02-16 | Address R1 review: (1) Safe retry policy — GET-only retries, no auto-retry on mutating POST, idempotency-key support for writes; (2) Graceful startup — issuer starts without KERI Agent, background bootstrap probe, KERI route guard returns 503 until agent ready; (3) Production cutover runbook — ordered deploy sequence (agent first, then issuer), rollback procedure; (4) Removed feature flag — single clean migration path, no dual-code-path; (5) Resolved file-move contradictions — unambiguous destination for every file, explicit MockVLEI split description; (6) Expanded test strategy — contract/compatibility tests, failure-injection tests (agent success + DB failure), degraded mode tests, circuit breaker state tests; (7) Cross-store consistency guidance (LMDB vs PostgreSQL accepted inconsistency window); (8) common/** path filter documented as intentional |
+| R3 | 2026-02-16 | Address R2 review: (1) LMDB divergence eliminated — strict stop-start cutover: stop old issuer → deploy agent with fresh LMDB from bootstrap → deploy new issuer. No data copy, no parallel-write window; (2) Rollback Option A fixed — Azure Files mount removal deferred to post-stabilization Step 5 (24-48h later), so rollback always has mount available; (3) End-to-end idempotency contract defined — external callers pass `Idempotency-Key` through issuer to agent, issuer auto-generates if not provided, agent validates key+hash, 409 on key reuse with different payload, 5-min TTL; (4) Fixed section numbering (Component 7 → Component 9 for Docker Compose) |
+| R4 | 2026-02-16 | Address R3 review: (1) LMDB-backed idempotency — replaced in-memory cache with LMDB sub-database (`idempotency`) for restart-durable idempotency records, 1-hour TTL with background cleanup; (2) Separate readiness endpoint — added `GET /readyz` (503 when agent down) distinct from `GET /healthz` (always 200 liveness), CI/CD gates use readyz, ACA readiness probe uses readyz; (3) Mock/dev-only runbook constraint — explicit guardrail that fresh-LMDB cutover is only for mock vLEI environments, production vLEI requires data-migration strategy |
+| R5 | 2026-02-16 | Address R4 review: (1) Readiness vs degradation conflict fixed — ACA uses `/healthz` (always 200) for both liveness AND readiness probes so KERI-free routes stay routable during agent outage; `/readyz` is operational-only (CI/CD gates, alerting, not ACA probes); KERI-dependent routes gated at request level via `app.state.keri_agent_ready`; (2) Idempotency concurrency semantics — first-write-wins pattern with LMDB "pending" marker as in-flight lock, 409 on concurrent same-key requests, marker deleted on failure for retry safety; (3) Narrowed idempotency scope — removed `POST /organizations` from idempotency contract (DB-centric, not KERI-agent-proxied) |
+| R6 | 2026-02-16 | Address R5 review: (1) ACA readiness now DB-aware — `/healthz` returns 503 when PostgreSQL is down (removes replica from rotation) but stays 200 when only KERI Agent is down (KERI-free routes remain routable); probe behavior matrix added; (2) VVP idempotency fixed — `POST /vvp/create` added to KERI Agent idempotency enforcement list, consistent with external contract |
+| R7 | 2026-02-16 | Address R6 review: (1) Probe contract unambiguous — three distinct endpoints: `/livez` (always 200, liveness), `/healthz` (DB-aware 200/503, readiness), `/readyz` (full operational, CI/CD+alerting); ACA liveness→livez, readiness→healthz; no single endpoint serves dual contradictory purposes; `health.py` does NOT proxy agent health; (2) Mount removal timing fixed — removed `az containerapp storage remove` from Component 7 setup, added explicit NOTE deferring to cutover Step 5 |
+| R8 | 2026-02-16 | Address R7 review: (1) Resolved health.py router contradiction — router summary table and file table both now say health.py does DB check + app.state flag (no agent proxy call), consistent with probe contract; (2) Corrected downtime estimate — cutover downtime is ~5-6 min (stop 60s + agent deploy 4 min + issuer deploy 30s), not 60-90s; explicitly noted this is one-time cost and post-cutover issuer deploys take ~30s |
+| R9 | 2026-02-16 | Address R8 review: Continuous agent availability tracking — `app.state.keri_agent_ready` is authoritative flag updated by two mechanisms: (1) circuit breaker state transitions (reactive, immediate on failure/recovery during traffic); (2) background health probe every 30s (proactive, catches outages during zero-traffic periods). Both mechanisms documented as single source of truth referenced by route guards, `/readyz`, and `/healthz` body. |
+| R10 | 2026-02-16 | Address R9 review: (1) Complete migration inventory — added 6 previously unlisted KERI import sites: `vetter/constraints.py` (2 sites), `vvp/dossier_service.py` (2 sites), `tn/lookup.py` (1 site), `dossier/formats.py` (1 site), `dossier/__init__.py`; (2) Dual-writer conflict resolution — failure-takes-precedence policy, recovery requires both background probe success + circuit breaker closed, transition logging, race safety via asyncio single-loop; (3) Bootstrap endpoint auth/guardrails — bearer token + `VVP_MOCK_VLEI_ENABLED` check for reinit, disabled in non-mock environments |
+| R11 | 2026-02-16 | Address R10 review: (1) Deterministic idempotency for all paths — issuer-generated idempotency keys are returned in both success and error responses (as `idempotency_key` field), enabling callers to extract and reuse the key on retry even when the initial call fails after KERI success but before DB write. External callers can also supply their own key upfront. Both paths now have deterministic recovery. (2) Actionable reconciliation procedure — added step-by-step operator procedure for LMDB↔PostgreSQL reconciliation with specific commands, to be codified as `scripts/reconcile-credentials.sh`. Added structured log monitoring pattern (`CROSS_STORE_INCONSISTENCY`) for proactive alerting. |
+| R12 | 2026-02-16 | Address R11 review: (1) Idempotency key passthrough explicit in interface — added `idempotency_key: str | None = None` parameter to ALL mutating `KeriAgentClient` methods (`issue_credential`, `revoke_credential`, `create_vvp_attestation`, `build_dossier`, `create_identity`, `rotate_keys`, `create_registry`, `initialize_mock_vlei`, `reinitialize_mock_vlei`). `_post()` returns the key used for inclusion in responses. (2) Concrete response model changes — listed exact 4 response models (`IssueCredentialResponse`, `RevokeCredentialResponse`, `CreateVVPResponse`, `CreateDossierResponse`) in `app/api/models.py` that gain `idempotency_key` field. Error response enrichment pattern shown with code example. (3) Contract test — added passthrough precedence test to test strategy. |
+
+---
+
+## Implementation Notes (Sprint 68c)
+
+### Completed Work
+
+Sprint 68c completes the issuer's full KERI decoupling and adds the CI/CD split for independent deployments.
+
+### Changes Made
+
+1. **Issuer Dockerfile** — Removed keripy install (COPY keripy + pip install) and LMDB data volume. Issuer image is now KERI-free.
+
+2. **docker-compose.yml** — Added `keri-agent` service with:
+   - LMDB persistence volume (`keri-agent-data`)
+   - Witness health dependency
+   - Bearer token auth (`dev-token`)
+   - Health check on `/livez`
+   - `full` profile
+   Updated issuer to depend on keri-agent and pass `VVP_KERI_AGENT_URL` + `VVP_KERI_AGENT_AUTH_TOKEN`. Removed issuer LMDB volume.
+
+3. **deploy.yml** — Major CI/CD pipeline updates:
+   - Added `keri-agent` to path-filter change detection (`services/keri-agent/**`, `keripy/**`, `common/**`)
+   - Added `test-keri-agent` job (with keripy, libsodium, coverage)
+   - Added `deploy-keri-agent` job with full LMDB-safe 3-phase deploy (deactivate → poll → lock buffer), revision activation self-healing, and 7-minute health verification
+   - Removed keripy from `test-issuer` job (issuer tests no longer need keripy)
+   - Simplified `deploy-issuer` — removed LMDB lock handling entirely, issuer now deploys like verifier (~30s, standard blue-green)
+   - Added deploy ordering: `deploy-issuer` depends on `deploy-keri-agent` when both change
+   - Removed keripy from `post-deployment-tests` job
+   - Updated post-deployment test trigger to include keri-agent changes
+
+4. **Knowledge files** — Updated `architecture.md` (system diagram, issuer section, new KERI Agent section, deploy profile), `deployment.md` (jobs table, LMDB constraint ownership, service ports, URLs), `issuer/CLAUDE.md` (removed `app/keri/` references)
+
+5. **Cleanup** — Removed accidentally tracked `.tmp-issuer-data/` test databases, added to `.gitignore`
+
+### Deviations from Plan
+
+None — all changes follow the plan's Component 6 (CI/CD) and Component 9 (Docker Compose) specifications.
+
+### Test Results
+
+- Issuer: 796 passed, 7 skipped, 3 deselected
+- Verifier: 1844 passed, 9 skipped
+
+### Files Changed
+
+| File | Lines | Summary |
+|------|-------|---------|
+| `services/issuer/Dockerfile` | -7 | Removed keripy install + LMDB volume |
+| `docker-compose.yml` | +40, -10 | Added keri-agent service, updated issuer deps |
+| `.github/workflows/deploy.yml` | +200, -150 | Added keri-agent CI/CD, simplified issuer deploy |
+| `knowledge/architecture.md` | +30, -10 | Added KERI Agent section, updated diagram |
+| `knowledge/deployment.md` | +15, -5 | Updated deploy jobs, ports, LMDB ownership |
+| `services/issuer/CLAUDE.md` | -4 | Removed legacy app/keri/ references |
+| `.gitignore` | +3 | Added .tmp-issuer-data/ |
+

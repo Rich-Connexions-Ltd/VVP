@@ -41,6 +41,9 @@ htmlcov/
 .tox/
 .nox/
 
+# Caches
+.mypy_cache/
+
 # Claude Code
 .claude/
 
@@ -65,3 +68,6 @@ Thumbs.db
 **/api_keys.local.json
 *.pem
 *.key
+
+# Temporary test data
+.tmp-issuer-data/

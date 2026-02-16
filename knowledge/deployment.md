@@ -10,6 +10,7 @@
 **Workflow dispatch inputs:**
 - `force_all` (boolean) — Deploy ALL services regardless of changed paths
 - `lock_wait_seconds` (string, default `120`) — Max seconds to poll for LMDB lock release
+- `test_suite` (choice: `auto`/`all`/`issuer`/`e2e`, default `auto`) — Post-deployment integration test suite
 
 ### Deployment Flow
 ```
@@ -28,30 +29,40 @@ The pipeline has separate jobs triggered by path filters:
 | Job | Trigger Paths | Target |
 |-----|---------------|--------|
 | `deploy-verifier` | `services/verifier/**`, `common/**` | Azure Container Apps |
-| `deploy-issuer` | `services/issuer/**`, `common/**` | Azure Container Apps (LMDB single-revision) |
+| `deploy-keri-agent` | `services/keri-agent/**`, `keripy/**`, `common/**` | Azure Container Apps (LMDB single-revision, internal-only) |
+| `deploy-issuer` | `services/issuer/**`, `common/**` | Azure Container Apps (no LMDB, fast ~30s deploy) |
 | `deploy-sip-redirect` | `services/sip-redirect/**`, `common/**` | PBX VM via `az vm run-command` |
 | `deploy-sip-verify` | `services/sip-verify/**`, `common/**` | PBX VM via `az vm run-command` |
 | `build-witness-image` + `deploy-witnesses` | `services/witness/**` | Azure Container Apps (3 witnesses) |
 | `deploy-pbx-config` | `services/pbx/config/**` | PBX VM FreeSWITCH dialplan |
 
+**Deploy ordering**: When both keri-agent and issuer change (e.g., `common/**` change), keri-agent deploys first. The issuer's `deploy-issuer` job depends on `deploy-keri-agent` completing successfully. This ensures the KERI Agent is healthy before the issuer starts routing to it.
+
 All path filters are bypassed when `force_all=true` is passed via workflow dispatch.
 
-### Issuer LMDB Constraint
+### KERI Agent LMDB Constraint (Sprint 68c)
 
-The issuer uses LMDB (keripy) on a shared Azure Files volume. **Two revisions CANNOT run simultaneously** — the LMDB lock blocks the new revision's startup. CI/CD uses a 3-phase stop-before-deploy sequence with self-healing activation:
+The KERI Agent (not the issuer) uses LMDB (keripy) on a shared Azure Files volume. **Two KERI Agent revisions CANNOT run simultaneously** — the LMDB lock blocks the new revision's startup. CI/CD uses a 3-phase stop-before-deploy sequence with self-healing activation:
 
 1. **Deactivate revisions** — with up to 3 retries per revision to handle transient Azure API failures. (We do NOT use `az containerapp update --min-replicas 0` because that creates a phantom intermediate revision as a side effect, which can leave the new revision `active=false`.)
 2. **Poll until stopped** — checks both `runningState` and `replicas` count, with 120s timeout (configurable via `lock_wait_seconds` workflow input). **Fails hard** on timeout instead of proceeding.
 3. **Lock release buffer** — 10s sleep after all revisions report stopped, to allow the Azure Files mount to release the LMDB file lock.
 
-After the deploy step (`az containerapp update --min-replicas 1 --max-replicas 3`), two self-healing checks run:
+After the deploy step (`az containerapp update --min-replicas 1 --max-replicas 1`), two self-healing checks run:
 
 - **Ensure new revision is active** — queries `latestRevisionName`, checks `active` state. If `active=false`, explicitly calls `az containerapp revision activate`. Fails the pipeline if activation cannot be achieved.
-- **Verify deployed version** — polls `/version` for 5 minutes. Additionally checks revision activation state via `az containerapp revision list`. If the traffic-weighted revision shows `active=false`, activates it (second safety net). Fails fast if revision is `Unhealthy`.
+- **Verify KERI Agent health** — polls `/healthz` (readiness) for up to 7 minutes (LMDB/Habery initialization on Azure Files takes ~3 minutes). Fails if health check never succeeds.
 
-Brief downtime is ~30-40s.
+KERI Agent downtime during redeploy is ~5-6 minutes (stop old revision ~60s + LMDB init ~3-4 min + verification). The issuer continues serving KERI-free routes (auth, users, schemas, dashboard) during this window; KERI-dependent routes return 503.
 
-**Verification timeout**: Issuer version check polls for **5 minutes** (16 intervals of 10-20s) because LMDB/Habery initialization on Azure Files takes ~3 minutes.
+**Issuer probe contract** (Sprint 68c): Three-endpoint probe model:
+- `GET /livez` — Always 200. Liveness probe. ACA should never kill the container due to dependency failures.
+- `GET /healthz` — 200 if DB reachable, 503 if DB unreachable. ACA readiness probe removes replica from rotation when DB is down.
+- `GET /readyz` — 200 only when DB AND KERI Agent are both up. Used by CI/CD deploy gates and monitoring.
+
+The issuer intentionally stays in ACA rotation (`/healthz` returns 200) when only the KERI Agent is down, since KERI-free routes (auth, users, schemas, dashboard, UI) remain available. KERI-dependent routes return 503 via the circuit breaker in `KeriAgentClient`.
+
+**Issuer deploys** (when only issuer code changes) are fast (~30s) with no LMDB handling — standard blue-green deployment. Version check polls for 2 minutes.
 
 ### SIP Redirect Deploy
 
@@ -87,7 +98,7 @@ gh workflow run "Build and deploy to Azure Container Apps" -R Rich-Connexions-Lt
 # Default: witnesses only
 docker compose up -d
 
-# Full stack: witnesses + verifier + issuer
+# Full stack: witnesses + verifier + keri-agent + issuer
 docker compose --profile full up -d
 
 # View logs
@@ -103,6 +114,7 @@ docker compose down
 |---------|------|----------|
 | Verifier | 8000 | HTTP |
 | Issuer | 8001 | HTTP |
+| KERI Agent | 8002 | HTTP (internal only) |
 | Witness wan | 5642 | HTTP |
 | Witness wil | 5643 | HTTP |
 | Witness wes | 5644 | HTTP |
@@ -112,6 +124,7 @@ docker compose down
 | Service | URL |
 |---------|-----|
 | Verifier | `https://vvp-verifier.wittytree-2a937ccd.uksouth.azurecontainerapps.io` |
+| KERI Agent | `vvp-keri-agent` (internal-only, port 8002) |
 | Issuer | `https://vvp-issuer.rcnx.io` |
 | PBX | `pbx.rcnx.io` |
 
@@ -263,7 +276,7 @@ az vm run-command invoke --resource-group VVP --name vvp-pbx \
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `VVP_ISSUER_BASE_URL` | `http://localhost:8001` | Public base URL for dossier/OOBI URLs |
-| `VVP_ISSUER_DATA_DIR` | auto-detect | LMDB data directory (priority: env → /data/vvp-issuer → ~/.vvp-issuer → /tmp) |
+| `VVP_ISSUER_DATA_DIR` | auto-detect | Local data directory for SQLite/config (priority: env → /data/vvp-issuer → ~/.vvp-issuer → /tmp). LMDB is managed by KERI Agent, not the issuer. |
 | `VVP_ISSUER_PORT` | `8001` | HTTP listen port |
 | `VVP_DATABASE_URL` | `sqlite:///{DATA_DIR}/vvp_issuer.db` | Database connection string |
 | `VVP_POSTGRES_HOST` | *(none)* | PostgreSQL host (overrides DATABASE_URL) |
@@ -403,12 +416,12 @@ cd services/issuer && pip install -e . && uvicorn app.main:app --port 8001
 |--------|---------|
 | `scripts/system-health-check.sh` | 4-phase health check (container apps, PBX, connectivity, E2E SIP). Use `--e2e --timing` for full validation with cache timing. |
 | `scripts/sip-call-test.py` | SIP INVITE test tool. Modes: `--test sign`, `--test verify`, `--test chain`. Timing: `--timing --timing-count N --timing-threshold X`. |
-| `scripts/bootstrap-issuer.py` | Re-provision issuer after LMDB/Postgres wipe. Creates mock vLEI, org, API key, TN allocations, TN mappings. Stdlib-only (runs on PBX). |
+| `scripts/bootstrap-issuer.py` | Re-provision issuer after Postgres/KERI Agent wipe. Creates mock vLEI, org, API key, TN allocations, TN mappings. Stdlib-only (runs on PBX). |
 | `scripts/test_sip_call_test.py` | 21 CLI regression tests for sip-call-test.py. Run via `python3 -m pytest scripts/test_sip_call_test.py`. |
 
-### Issuer Recovery (LMDB/Postgres Wipe)
+### Issuer Recovery (Postgres/KERI Agent Wipe)
 
-After an LMDB corruption or database reset:
+After a KERI Agent LMDB corruption or issuer database reset:
 ```bash
 # Re-provision the complete credential chain
 python3 scripts/bootstrap-issuer.py --url https://vvp-issuer.rcnx.io --admin-key <key>

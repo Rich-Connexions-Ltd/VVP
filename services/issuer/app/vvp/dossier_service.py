@@ -16,6 +16,7 @@ import logging
 import time
 from typing import Optional, Tuple
 
+from app.keri_client import KeriAgentUnavailableError
 from common.vvp.dossier.cache import CachedDossier, DossierCache
 from common.vvp.dossier.config import DOSSIER_CACHE_MAX_ENTRIES, DOSSIER_CACHE_TTL_SECONDS
 from common.vvp.dossier.trust import TrustDecision, revocation_to_trust
@@ -89,6 +90,8 @@ async def check_dossier_revocation(
     log.info(f"Dossier cache miss, resolving chain: {dossier_said[:16]}...")
     try:
         cached_dossier, chain_info = await _build_cache_entry(dossier_said)
+    except KeriAgentUnavailableError:
+        raise  # Propagate agent outage as 503
     except Exception as e:
         log.warning(f"Failed to resolve dossier chain for revocation: {e}")
         return TrustDecision.TRUSTED, f"Chain resolution failed: {e}"

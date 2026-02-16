@@ -4,13 +4,18 @@
 
 The VVP (Verifiable Voice Protocol) system enables cryptographically verifiable proof-of-rights for VoIP calls. It extends STIR/SHAKEN by replacing X.509 certificate chains with KERI-based decentralized identifiers and ACDC credentials.
 
-The system consists of three services plus shared infrastructure:
+The system consists of four services plus shared infrastructure:
 
 ```
 ┌─────────────┐     ┌──────────────┐     ┌─────────────────┐
 │ SIP Redirect │────▶│   Issuer     │     │    Verifier      │
-│ (signs calls)│     │ (credentials)│     │ (validates calls) │
+│ (signs calls)│     │ (business)   │     │ (validates calls) │
 └──────┬──────┘     └──────┬───────┘     └────────┬────────┘
+       │                   │                      │
+       │            ┌──────┴───────┐              │
+       │            │ KERI Agent   │              │
+       │            │ (LMDB/crypto)│              │
+       │            └──────┬───────┘              │
        │                   │                      │
        │            ┌──────┴───────┐              │
        └───────────▶│   Common     │◀─────────────┘
@@ -55,31 +60,54 @@ The system consists of three services plus shared infrastructure:
 
 ### 2. Issuer Service (`services/issuer/`)
 
-**Purpose**: Manages organizations, KERI identities, credential issuance, dossier building, and TN mappings. Provides the signing infrastructure for VVP calls.
+**Purpose**: Manages organizations, credential issuance, dossier building, TN mappings, and VVP attestation signing. Provides business logic, auth, and UI. Proxies all KERI operations to the KERI Agent.
 
-**Stack**: Python 3.12+, FastAPI, SQLAlchemy (SQLite), KERI (keripy)
+**Stack**: Python 3.12+, FastAPI, SQLAlchemy (PostgreSQL), httpx
 
-**Architecture (Sprint 68b)**: All API routers and the DossierBuilder delegate KERI operations to `KeriAgentClient` (`app/keri_client.py`), which proxies to the standalone KERI Agent service. The `app/keri/` modules are retained only for mock vLEI infrastructure and vetter validation that need direct reger access.
+**Architecture (Sprint 68c)**: Fully decoupled from keripy/LMDB. All KERI operations (identity, registry, credential, dossier, VVP signing) are delegated to the KERI Agent via `KeriAgentClient`. The issuer has no `app/keri/` directory and no keripy dependency. Deploys are fast (~30s) with zero LMDB disruption.
 
 **Key Directories**:
 | Directory | Purpose |
 |-----------|---------|
 | `app/main.py` | FastAPI app with all routers |
-| `app/api/` | API routers (15 files — all use `get_keri_client()` since Sprint 68b) |
+| `app/api/` | API routers (15 files — all use `get_keri_client()`) |
 | `app/keri_client.py` | HTTP client for KERI Agent (circuit breaker, retry, error mapping) |
 | `app/vetter/` | Vetter certification business logic and constants (Sprint 61) |
-| `app/keri/` | Legacy KERI integration (used by mock_vlei and vetter only) |
-| `app/dossier/` | Dossier assembly (builder uses KeriAgentClient since Sprint 68b) |
+| `app/dossier/` | Dossier assembly (builder uses KeriAgentClient) |
+| `app/vvp/` | VVP signing (passport, header creation via KeriAgentClient) |
 | `app/auth/` | Authentication (API keys, sessions, OAuth M365, RBAC) |
 | `app/db/` | Database models and session management |
-| `app/org/` | Organization management (mock_vlei, trust_anchors) |
+| `app/org/` | Organization management (mock_vlei facade, trust_anchors) |
 | `app/audit/` | Audit logging |
 | `app/config.py` | Configuration |
-| `web/` | Multi-page web UI (20 pages: identity, registry, schemas, credentials, dossier, vvp, dashboard, admin, vetter, tn-mappings, benchmarks, help, walkthrough, organizations, organization-detail, users, profile, login, 404) |
+| `web/` | Multi-page web UI (20 pages) |
 | `config/witnesses.json` | Witness pool configuration |
-| `tests/` | Test suite (MockKeriAgentClient in conftest.py) |
+| `tests/` | Test suite (MockKeriAgentClient in conftest.py, no keripy dependency) |
 
 **Deployed at**: `https://vvp-issuer.rcnx.io`
+
+### 2b. KERI Agent Service (`services/keri-agent/`)
+
+**Purpose**: Standalone FastAPI service owning all LMDB/keripy state. Manages KERI identities, credential registries, credential issuance/revocation, dossier building, and VVP attestation signing. Single replica. Internal-only ingress.
+
+**Stack**: Python 3.12+, FastAPI, KERI (keripy), LMDB
+
+**Key Directories**:
+| Directory | Purpose |
+|-----------|---------|
+| `app/main.py` | Lifespan (KERI managers init), router mounting |
+| `app/config.py` | Agent-specific config (DATA_DIR, witnesses, auth token) |
+| `app/auth.py` | Inter-service bearer token validation |
+| `app/api/` | API routers (identity, registry, credential, dossier, vvp, bootstrap, health) |
+| `app/keri/` | KERI managers (identity, registry, issuer, witness, persistence) |
+| `app/dossier/` | DossierBuilder (DFS edge walk with direct KERI access) |
+| `app/vvp/` | VVP attestation (PASSporT signing, header creation, card claim) |
+| `app/mock_vlei.py` | Mock vLEI bootstrap (creates trust chain identities + credentials) |
+| `config/witnesses.json` | Witness pool configuration |
+| `tests/` | Test suite (real KERI managers with temp LMDB) |
+
+**Port**: 8002 (internal only)
+**Deployed at**: `vvp-keri-agent` (Azure Container Apps, internal ingress)
 
 ### 3. SIP Redirect Service (`services/sip-redirect/`)
 
@@ -143,14 +171,17 @@ SIP INVITE with VVP headers
   → Return Claim Tree (VALID | INVALID | INDETERMINATE)
 ```
 
-### Call Signing Flow (SIP Redirect → Issuer)
+### Call Signing Flow (SIP Redirect → Issuer → KERI Agent)
 ```
 PBX dials 7XXXX (VVP prefix)
   → SIP INVITE to SIP Redirect (port 5070)
     → Extract caller TN from From header
     → POST /vvp/create to Issuer API (with API key)
-      → Issuer looks up TN mapping
-      → Issuer builds PASSporT JWT (Ed25519 signed)
+      → Issuer validates auth, RBAC, revocation, vetter constraints
+      → Issuer proxies to KERI Agent POST /vvp/create
+        → KERI Agent builds dossier, creates VVP-Identity header
+        → KERI Agent signs PASSporT JWT (Ed25519 with KERI private key)
+        → KERI Agent returns VVP attestation response
       → Issuer returns VVP-Identity + Identity headers
     → SIP 302 Redirect with VVP headers
   → PBX follows redirect to SIP Verify (port 5071)
@@ -174,7 +205,8 @@ Three witnesses run in Docker (or on PBX):
 ### Deployment
 - **CI/CD**: Push to `main` → GitHub Actions → Azure Container Apps
 - **Verifier**: Azure Container Apps (UK South)
-- **Issuer**: Azure Container Apps (UK South)
+- **KERI Agent**: Azure Container Apps (UK South, internal-only, single replica)
+- **Issuer**: Azure Container Apps (UK South, 1-3 replicas)
 - **SIP Redirect**: Deployed on PBX VM (`pbx.rcnx.io`) via Azure CLI
 - **PBX**: Azure VM running FusionPBX/FreeSWITCH on Debian
 
@@ -182,7 +214,7 @@ Three witnesses run in Docker (or on PBX):
 | Profile | Services |
 |---------|----------|
 | (default) | 3 witnesses |
-| `full` | witnesses + verifier + issuer |
+| `full` | witnesses + verifier + keri-agent + issuer |
 
 ### Mock Trust Infrastructure (Issuer)
 

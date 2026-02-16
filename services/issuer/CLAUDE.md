@@ -12,10 +12,6 @@ The Issuer manages the full lifecycle of VVP credentials: organization managemen
 | `app/api/` | API routers (15 router files — all use `get_keri_client()`) |
 | `app/api/models.py` | All Pydantic request/response models (~45 models) |
 | `app/keri_client.py` | `KeriAgentClient` — HTTP client for KERI Agent (circuit breaker, retry) |
-| `app/keri/identity.py` | `IssuerIdentityManager` — legacy, used only by mock_vlei/vetter |
-| `app/keri/registry.py` | `CredentialRegistryManager` — legacy, used only by mock_vlei/vetter |
-| `app/keri/issuer.py` | `CredentialIssuer` — legacy, used only by mock_vlei/vetter |
-| `app/keri/witness.py` | `WitnessPublisher` — legacy, used only by mock_vlei/vetter |
 | `app/dossier/builder.py` | `DossierBuilder` — DFS edge walk via KeriAgentClient |
 | `app/vetter/service.py` | `VetterCertificationManager` — 7-point validation |
 | `app/vetter/constants.py` | Schema SAIDs, ECC/jurisdiction code lists |
@@ -38,7 +34,7 @@ The Issuer manages the full lifecycle of VVP credentials: organization managemen
 
 | Router | Prefix | Key Endpoints |
 |--------|--------|---------------|
-| `health.py` | `/` | `GET /healthz` |
+| `health.py` | `/` | `GET /livez`, `GET /healthz`, `GET /readyz` (Sprint 68c probe contract) |
 | `dashboard.py` | `/` | `GET /api/dashboard/status` |
 | `auth.py` | `/auth` | login, logout, status, OAuth M365 start/callback |
 | `identity.py` | `/identity` | CRUD + OOBI + rotate (6 endpoints) |
@@ -86,7 +82,7 @@ System admins bypass all org role checks. Combined access functions: `check_cred
 ### Auth-Exempt Paths
 
 Configured in `app/config.py:get_auth_exempt_paths()`:
-- Always exempt: `/healthz`, `/version`, `/auth/*`, `/auth/oauth/*`
+- Always exempt: `/livez`, `/healthz`, `/readyz`, `/version`, `/auth/*`, `/auth/oauth/*`
 - When `VVP_UI_AUTH_ENABLED=false` (default): all `/ui/*` pages, `/login`, `/profile`, legacy redirects, `/ui/walkthrough`
 
 ## Multi-Tenancy (Sprint 41+, Sprint 67)
@@ -104,7 +100,7 @@ Configured in `app/config.py:get_auth_exempt_paths()`:
 
 ## Database
 
-SQLAlchemy with SQLite. 9 models in `app/db/models.py`:
+SQLAlchemy with PostgreSQL (SQLite for local dev). 9 models in `app/db/models.py`:
 
 | Model | Purpose |
 |-------|---------|
@@ -118,28 +114,19 @@ SQLAlchemy with SQLite. 9 models in `app/db/models.py`:
 | `TNMapping` | E.164 phone number → dossier + signing identity |
 | `DossierOspAssociation` | Dossier ↔ OSP organization visibility |
 
-## KERI Infrastructure
+## KERI Agent Integration (Sprint 68c)
 
-### Identity (`app/keri/identity.py`)
-- `IssuerIdentityManager` wraps keripy's **Habery** (identity vault)
-- Creates transferable/non-transferable identities with configurable key counts and thresholds
-- Supports key rotation (promotes next keys, generates new next keys)
-- Default: 3 witnesses (wan, wil, wes), threshold of agreement = witness count
+All KERI operations are delegated to the standalone KERI Agent service via `KeriAgentClient` (`app/keri_client.py`). The issuer has **no `app/keri/` directory** and **no keripy dependency**.
 
-### Registry (`app/keri/registry.py`)
-- `CredentialRegistryManager` wraps keripy's **Regery** (TEL manager)
-- **Critical**: Reger must be created with `db=hby.db` for rbdict auto-loading (Sprint 59 fix)
-- TEL inception anchored to KEL via interaction event
-- Legacy Tever recovery from raw TEL data (`_ensure_tevers_loaded()`)
-
-### Credential Issuance (`app/keri/issuer.py`)
-7-step flow: schema validation → registry/identity lookup → ACDC creation (`proving.credential()`) → TEL issuance event → KEL anchoring (ixn) → Tever processing → storage + CESR serialization
-
-### Witness Publishing (`app/keri/witness.py`)
-Two-phase protocol: distribute event to witnesses → collect receipts → redistribute receipts for fullyWitnessed status. Default threshold: 2/3 witnesses.
+### KeriAgentClient (`app/keri_client.py`)
+- Async HTTP client targeting `VVP_KERI_AGENT_URL` (default `http://keri-agent.internal:8002`)
+- Bearer token auth via `VVP_KERI_AGENT_AUTH_TOKEN`
+- Circuit breaker (5 failures → open for 30s → half-open probe)
+- Retry: GET-only retries with exponential backoff, no retry on mutating POST
+- Methods: `create_identity()`, `list_identities()`, `issue_credential()`, `revoke_credential()`, `build_dossier()`, `create_vvp_attestation()`, `get_bootstrap_status()`, etc.
 
 ### Dossier Assembly (`app/dossier/builder.py`)
-DFS edge walk with topological ordering, cycle detection (max depth 10), fault-tolerant missing edges. Outputs CESR or JSON format with optional TEL events.
+DFS edge walk via KeriAgentClient. Credential lookups, CESR retrieval, and edge resolution all go through the agent.
 
 ## Vetter Certification (Sprint 61-62)
 
@@ -207,8 +194,8 @@ Legacy paths (`/create`, `/registry/ui`, `/schemas/ui`, `/credentials/ui`, `/dos
 | `VVP_UI_AUTH_ENABLED` | `false` | Require auth for web UI |
 | `VVP_MOCK_VLEI_ENABLED` | `true` | Enable mock vLEI infrastructure |
 | `VVP_ISSUER_BASE_URL` | `http://localhost:8001` | Public URL for dossier/OOBI links |
-| `VVP_DATABASE_URL` | `sqlite:///{DATA_DIR}/vvp_issuer.db` | SQLAlchemy database URL |
-| `VVP_ISSUER_DATA_DIR` | auto-detect | LMDB/data persistence root |
+| `VVP_DATABASE_URL` | `sqlite:///{DATA_DIR}/vvp_issuer.db` | SQLAlchemy database URL (PostgreSQL in production) |
+| `VVP_ISSUER_DATA_DIR` | auto-detect | Local data directory (database, config) |
 | `VVP_SESSION_TTL` | `3600` | Session TTL (seconds) |
 | `VVP_LOGIN_RATE_LIMIT_MAX` | `5` | Login attempts before lockout |
 | `VVP_OAUTH_M365_ENABLED` | `false` | Enable Microsoft OAuth |

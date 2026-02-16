@@ -9,10 +9,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /srv
 
-# Install keripy (vendored)
-COPY keripy /srv/keripy
-RUN pip install --no-cache-dir /srv/keripy
-
 # Install common package
 COPY common /srv/common
 RUN pip install --no-cache-dir /srv/common
@@ -26,14 +22,11 @@ RUN pip install --no-cache-dir -U pip && pip install --no-cache-dir .
 # Copy config (will be overridden by volume mount in docker-compose)
 COPY services/issuer/config /srv/config
 
-# Data volume for persistence
-VOLUME /data/vvp-issuer
-
 # Environment
 ENV PYTHONUNBUFFERED=1
 ENV VVP_WITNESS_CONFIG=/srv/config/witnesses.json
 
-# Health check
+# Health check — readiness probe (503 when DB down, keeps KERI-free routes available)
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
     CMD curl -f http://localhost:8001/healthz || exit 1
 

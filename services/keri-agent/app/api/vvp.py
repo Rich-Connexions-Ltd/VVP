@@ -51,34 +51,40 @@ async def create_vvp_attestation(request: CreateVVPAttestationRequest):
             detail=f"Signing identity not found: {request.identity_name}",
         )
 
-    # 2. Build OOBI URL for the signing identity
-    if not WITNESS_OOBI_BASE_URLS:
-        raise HTTPException(
-            status_code=500,
-            detail="No witness OOBI base URLs configured",
-        )
-    issuer_oobi = build_issuer_oobi(id_info.aid, WITNESS_OOBI_BASE_URLS[0])
+    # 2. Build OOBI URL — use pre-computed value from request if available
+    if request.kid_oobi:
+        issuer_oobi = request.kid_oobi
+    else:
+        if not WITNESS_OOBI_BASE_URLS:
+            raise HTTPException(
+                status_code=500,
+                detail="No witness OOBI base URLs configured",
+            )
+        issuer_oobi = build_issuer_oobi(id_info.aid, WITNESS_OOBI_BASE_URLS[0])
 
-    # 3. Build dossier URL
-    dossier_url = build_dossier_url(request.dossier_said, VVP_ISSUER_BASE_URL)
+    # 3. Build dossier URL — use pre-computed value from request if available
+    dossier_url = request.dossier_url or build_dossier_url(
+        request.dossier_said, VVP_ISSUER_BASE_URL
+    )
 
-    # 4. Build dossier and extract card claim
-    card = None
-    try:
-        builder = await get_dossier_builder()
-        dossier = await builder.build(request.dossier_said)
+    # 4. Use pre-computed card claim from request, or extract from dossier
+    card = request.card
+    if card is None:
+        try:
+            builder = await get_dossier_builder()
+            dossier = await builder.build(request.dossier_said)
 
-        # Find brand credential and extract card claim
-        issuer = await get_credential_issuer()
-        for said in dossier.credential_saids:
-            cred_info = await issuer.get_credential(said)
-            if cred_info and cred_info.attributes:
-                card_claim = build_card_claim(cred_info.attributes)
-                if card_claim:
-                    card = card_claim
-                    break
-    except Exception as e:
-        log.warning(f"Dossier build/card extraction failed (proceeding without card): {e}")
+            # Find brand credential and extract card claim
+            issuer = await get_credential_issuer()
+            for said in dossier.credential_saids:
+                cred_info = await issuer.get_credential(said)
+                if cred_info and cred_info.attributes:
+                    card_claim = build_card_claim(cred_info.attributes)
+                    if card_claim:
+                        card = card_claim
+                        break
+        except Exception as e:
+            log.warning(f"Dossier build/card extraction failed (proceeding without card): {e}")
 
     # 5. Create timestamps
     iat = int(time.time())
