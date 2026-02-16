@@ -308,7 +308,7 @@ jobs:
               echo "Version verified: ${DEPLOYED:0:7}"
               exit 0
             fi
-            echo "Attempt $i/12: expected ${EXPECTED:0:7}, got ${DEPLOYED:-unknown}"
+            echo "Attempt $i/12: expected ${EXPECTED:0:7}, got ${DEPLOYED:0:7}"
             sleep 10
           done
           echo "::error::Verifier version mismatch after 2 minutes"
@@ -508,9 +508,10 @@ jobs:
           RG="${{ secrets.AZURE_RG }}"
           ACTIVATION_FIXED=false
 
-          # LMDB/Habery initialization on Azure Files takes ~3 minutes.
-          # Poll for 5 minutes total: short intervals early, longer later.
-          INTERVALS=(10 10 10 15 15 15 15 20 20 20 20 20 20 20 20 20)
+          # LMDB/Habery initialization on Azure Files takes ~3 minutes,
+          # plus image pull and container startup. Poll for 7 minutes total
+          # (420s): short intervals early, longer later.
+          INTERVALS=(10 10 10 15 15 15 20 20 20 20 20 20 25 25 25 25 25 25 25 25)
           TOTAL=${#INTERVALS[@]}
           for i in "${!INTERVALS[@]}"; do
             ATTEMPT=$((i + 1))
@@ -550,10 +551,10 @@ jobs:
               ACTIVATION_FIXED=true
             fi
 
-            echo "Attempt ${ATTEMPT}/${TOTAL}: expected ${EXPECTED:0:7}, got ${DEPLOYED:-unknown} (health: ${HEALTH:-unknown}, active: ${IS_ACTIVE:-unknown}, running: ${RUNNING:-unknown})"
+            echo "Attempt ${ATTEMPT}/${TOTAL}: expected ${EXPECTED:0:7}, got ${DEPLOYED:0:7} (health: ${HEALTH:-unknown}, active: ${IS_ACTIVE:-unknown}, running: ${RUNNING:-unknown})"
             sleep "${INTERVALS[$i]}"
           done
-          echo "::error::Issuer version mismatch after 5 minutes"
+          echo "::error::Issuer version mismatch after 7 minutes"
           exit 1
 
   # =========================================================================
@@ -996,7 +997,7 @@ jobs:
               echo "Version verified: ${DEPLOYED:0:7}"
               exit 0
             fi
-            echo "Attempt $i/6: expected ${EXPECTED:0:7}, got ${DEPLOYED:-unknown}"
+            echo "Attempt $i/6: expected ${EXPECTED:0:7}, got ${DEPLOYED:0:7}"
             sleep 10
           done
           echo "::error::SIP Redirect version mismatch after 1 minute"
