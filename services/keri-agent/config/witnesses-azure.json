@@ -1,0 +1,17 @@
+{
+  "iurls": [
+    "https://vvp-witness1.rcnx.io/oobi/BBilc4-L3tFUnfM_wJr4S4OJanAv_VmF_dJNN6vkf2Ha/controller",
+    "https://vvp-witness2.rcnx.io/oobi/BLskRTInXnMxWaGqcpSyMgo0nYbalW99cGZESrz3zapM/controller",
+    "https://vvp-witness3.rcnx.io/oobi/BIKKuvBwpmDVA4Ds-EpL5bt9OqPzWPja2LigFYZN2YfX/controller"
+  ],
+  "oobi_base_urls": [
+    "https://vvp-witness1.rcnx.io",
+    "https://vvp-witness2.rcnx.io",
+    "https://vvp-witness3.rcnx.io"
+  ],
+  "witness_aids": {
+    "wan": "BBilc4-L3tFUnfM_wJr4S4OJanAv_VmF_dJNN6vkf2Ha",
+    "wil": "BLskRTInXnMxWaGqcpSyMgo0nYbalW99cGZESrz3zapM",
+    "wes": "BIKKuvBwpmDVA4Ds-EpL5bt9OqPzWPja2LigFYZN2YfX"
+  }
+}

@@ -413,7 +413,46 @@ jobs:
           docker build -t "$IMAGE" -f services/keri-agent/Dockerfile .
           docker push "$IMAGE"
 
+      - name: Ensure keri-agent container app exists
+        id: ensure_agent
+        run: |
+          RG="${{ secrets.AZURE_RG }}"
+
+          if az containerapp show --name vvp-keri-agent --resource-group "$RG" &>/dev/null; then
+            echo "vvp-keri-agent already exists"
+            echo "created=false" >> $GITHUB_OUTPUT
+          else
+            echo "vvp-keri-agent does not exist — provisioning..."
+
+            # Discover Container App Environment from existing issuer
+            ENV_ID=$(az containerapp show --name vvp-issuer --resource-group "$RG" \
+              --query "properties.managedEnvironmentId" -o tsv)
+            echo "Environment ID: $ENV_ID"
+
+            # Create with internal-only ingress, single replica, paused (min 0)
+            az containerapp create \
+              --name vvp-keri-agent \
+              --resource-group "$RG" \
+              --environment "$ENV_ID" \
+              --image "$IMAGE" \
+              --target-port 8002 \
+              --ingress internal \
+              --min-replicas 0 \
+              --max-replicas 1 \
+              --cpu 1.0 \
+              --memory 2Gi \
+              --env-vars \
+                "GIT_SHA=${{ github.sha }}" \
+                "GITHUB_REPOSITORY=${{ github.repository }}" \
+                "VVP_WITNESS_CONFIG=/srv/config/witnesses-azure.json" \
+                "VVP_MOCK_VLEI_ENABLED=true"
+
+            echo "vvp-keri-agent created successfully"
+            echo "created=true" >> $GITHUB_OUTPUT
+          fi
+
       - name: Stop old revision (release LMDB lock on shared volume)
+        if: steps.ensure_agent.outputs.created != 'true'
         run: |
           # The KERI Agent uses LMDB (via keripy) on an Azure Files volume mount.
           # LMDB file locks prevent two revisions from running simultaneously.
@@ -491,25 +530,39 @@ jobs:
 
       - name: Set keri-agent secrets
         run: |
-          az containerapp secret set \
-            --resource-group "${{ secrets.AZURE_RG }}" \
-            --name "vvp-keri-agent" \
-            --secrets "keri-agent-auth-token=${{ secrets.KERI_AGENT_AUTH_TOKEN }}"
+          TOKEN="${{ secrets.KERI_AGENT_AUTH_TOKEN }}"
+          if [ -n "$TOKEN" ]; then
+            az containerapp secret set \
+              --resource-group "${{ secrets.AZURE_RG }}" \
+              --name "vvp-keri-agent" \
+              --secrets "keri-agent-auth-token=$TOKEN"
+          else
+            echo "::warning::KERI_AGENT_AUTH_TOKEN secret not set — keri-agent running without inter-service auth"
+          fi
 
       - name: Deploy keri-agent
         run: |
+          # Build env-vars list
+          ENV_VARS=(
+            "GIT_SHA=${{ github.sha }}"
+            "GITHUB_REPOSITORY=${{ github.repository }}"
+            "VVP_WITNESS_CONFIG=/srv/config/witnesses-azure.json"
+            "VVP_MOCK_VLEI_ENABLED=true"
+          )
+
+          # Only reference secret if it was set
+          TOKEN="${{ secrets.KERI_AGENT_AUTH_TOKEN }}"
+          if [ -n "$TOKEN" ]; then
+            ENV_VARS+=("VVP_KERI_AGENT_AUTH_TOKEN=secretref:keri-agent-auth-token")
+          fi
+
           az containerapp update \
             --resource-group "${{ secrets.AZURE_RG }}" \
             --name "vvp-keri-agent" \
             --image "$IMAGE" \
             --min-replicas 1 \
             --max-replicas 1 \
-            --set-env-vars \
-              "GIT_SHA=${{ github.sha }}" \
-              "GITHUB_REPOSITORY=${{ github.repository }}" \
-              "VVP_WITNESS_CONFIG=/srv/config/witnesses-azure.json" \
-              "VVP_MOCK_VLEI_ENABLED=true" \
-              "VVP_KERI_AGENT_AUTH_TOKEN=secretref:keri-agent-auth-token"
+            --set-env-vars "${ENV_VARS[@]}"
 
       - name: Ensure new revision is active
         run: |
@@ -561,26 +614,57 @@ jobs:
 
           echo "Revision $NEW_REV is active and should be starting"
 
-      - name: Verify keri-agent health
+      - name: Verify keri-agent running
         run: |
-          # KERI Agent LMDB/Habery initialization on Azure Files takes ~3 minutes.
-          # Poll /healthz (readiness) for up to 7 minutes.
-          INTERVALS=(10 10 10 15 15 15 20 20 20 20 20 20 25 25 25 25 25 25 25 25)
+          # KERI Agent has internal-only ingress — not reachable from GitHub Actions.
+          # Instead, poll the revision's running state via Azure CLI.
+          # LMDB/Habery initialization on Azure Files takes ~3 minutes.
+          # Poll for up to 5 minutes.
+          RG="${{ secrets.AZURE_RG }}"
+          NEW_REV=$(az containerapp show \
+            --name vvp-keri-agent \
+            --resource-group "$RG" \
+            --query "properties.latestRevisionName" -o tsv)
+          echo "Monitoring revision: $NEW_REV"
+
+          INTERVALS=(10 10 15 15 15 20 20 20 20 25 25 25 25 25)
           TOTAL=${#INTERVALS[@]}
           for i in "${!INTERVALS[@]}"; do
             ATTEMPT=$((i + 1))
-            # Use internal URL if available, otherwise construct from container app name
-            RESPONSE=$(curl -sf --max-time 10 https://vvp-keri-agent.internal.rcnx.io/healthz 2>/dev/null || \
-                       az containerapp exec --name vvp-keri-agent --resource-group "${{ secrets.AZURE_RG }}" \
-                         --command "curl -sf http://localhost:8002/healthz" 2>/dev/null || echo '{}')
-            if echo "$RESPONSE" | grep -q '"status"'; then
-              echo "KERI Agent is healthy (attempt ${ATTEMPT}/${TOTAL})"
+            STATE=$(az containerapp revision show \
+              --name vvp-keri-agent \
+              --resource-group "$RG" \
+              --revision "$NEW_REV" \
+              --query "properties.runningState" -o tsv 2>/dev/null || echo "Unknown")
+            REPLICAS=$(az containerapp revision show \
+              --name vvp-keri-agent \
+              --resource-group "$RG" \
+              --revision "$NEW_REV" \
+              --query "properties.replicas" -o tsv 2>/dev/null || echo "0")
+
+            echo "Attempt ${ATTEMPT}/${TOTAL}: state=$STATE replicas=$REPLICAS"
+
+            if [ "$STATE" = "Running" ] && [ "$REPLICAS" -gt 0 ] 2>/dev/null; then
+              echo "KERI Agent revision $NEW_REV is running with $REPLICAS replica(s)"
               exit 0
             fi
-            echo "Attempt ${ATTEMPT}/${TOTAL}: waiting for KERI Agent..."
+
+            if [ "$STATE" = "Failed" ] || [ "$STATE" = "Degraded" ]; then
+              echo "::error::KERI Agent revision $NEW_REV is in $STATE state"
+              az containerapp revision show \
+                --name vvp-keri-agent \
+                --resource-group "$RG" \
+                --revision "$NEW_REV" -o json 2>/dev/null || true
+              exit 1
+            fi
+
             sleep "${INTERVALS[$i]}"
           done
-          echo "::error::KERI Agent health check failed after 7 minutes"
+          echo "::error::KERI Agent did not reach Running state within 5 minutes"
+          az containerapp revision show \
+            --name vvp-keri-agent \
+            --resource-group "$RG" \
+            --revision "$NEW_REV" -o json 2>/dev/null || true
           exit 1
 
   # =========================================================================
@@ -622,30 +706,57 @@ jobs:
 
       - name: Set issuer secrets
         run: |
-          az containerapp secret set \
-            --resource-group "${{ secrets.AZURE_RG }}" \
-            --name "vvp-issuer" \
-            --secrets "keri-agent-auth-token=${{ secrets.KERI_AGENT_AUTH_TOKEN }}"
+          TOKEN="${{ secrets.KERI_AGENT_AUTH_TOKEN }}"
+          if [ -n "$TOKEN" ]; then
+            az containerapp secret set \
+              --resource-group "${{ secrets.AZURE_RG }}" \
+              --name "vvp-issuer" \
+              --secrets "keri-agent-auth-token=$TOKEN"
+          else
+            echo "::warning::KERI_AGENT_AUTH_TOKEN secret not set — issuer will connect to keri-agent without auth"
+          fi
 
       - name: Deploy issuer
         run: |
+          RG="${{ secrets.AZURE_RG }}"
+
+          # Discover keri-agent internal FQDN from Azure (works regardless of custom DNS)
+          KERI_AGENT_FQDN=$(az containerapp show --name vvp-keri-agent --resource-group "$RG" \
+            --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || echo "")
+          if [ -n "$KERI_AGENT_FQDN" ]; then
+            KERI_AGENT_URL="https://$KERI_AGENT_FQDN"
+            echo "Discovered keri-agent URL: $KERI_AGENT_URL"
+          else
+            KERI_AGENT_URL="https://vvp-keri-agent.internal.rcnx.io"
+            echo "::warning::Could not discover keri-agent FQDN — using fallback: $KERI_AGENT_URL"
+          fi
+
+          # Build env-vars list
+          ENV_VARS=(
+            "GIT_SHA=${{ github.sha }}"
+            "GITHUB_REPOSITORY=${{ github.repository }}"
+            "VVP_WITNESS_CONFIG=/srv/config/witnesses-azure.json"
+            "VVP_POSTGRES_HOST=${{ secrets.POSTGRES_HOST }}"
+            "VVP_POSTGRES_USER=${{ secrets.POSTGRES_USER }}"
+            "VVP_POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}"
+            "VVP_POSTGRES_DB=${{ secrets.POSTGRES_DB }}"
+            "VVP_ISSUER_BASE_URL=https://vvp-issuer.rcnx.io"
+            "VVP_KERI_AGENT_URL=$KERI_AGENT_URL"
+          )
+
+          # Only reference secret if it was set
+          TOKEN="${{ secrets.KERI_AGENT_AUTH_TOKEN }}"
+          if [ -n "$TOKEN" ]; then
+            ENV_VARS+=("VVP_KERI_AGENT_AUTH_TOKEN=secretref:keri-agent-auth-token")
+          fi
+
           az containerapp update \
             --resource-group "${{ secrets.AZURE_RG }}" \
             --name "vvp-issuer" \
             --image "$IMAGE" \
             --min-replicas 1 \
             --max-replicas 3 \
-            --set-env-vars \
-              "GIT_SHA=${{ github.sha }}" \
-              "GITHUB_REPOSITORY=${{ github.repository }}" \
-              "VVP_WITNESS_CONFIG=/srv/config/witnesses-azure.json" \
-              "VVP_POSTGRES_HOST=${{ secrets.POSTGRES_HOST }}" \
-              "VVP_POSTGRES_USER=${{ secrets.POSTGRES_USER }}" \
-              "VVP_POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}" \
-              "VVP_POSTGRES_DB=${{ secrets.POSTGRES_DB }}" \
-              "VVP_ISSUER_BASE_URL=https://vvp-issuer.rcnx.io" \
-              "VVP_KERI_AGENT_URL=https://vvp-keri-agent.internal.rcnx.io" \
-              "VVP_KERI_AGENT_AUTH_TOKEN=secretref:keri-agent-auth-token"
+            --set-env-vars "${ENV_VARS[@]}"
 
       - name: Verify deployed version
         run: |
