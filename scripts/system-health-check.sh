@@ -945,21 +945,24 @@ _run_freeswitch_call_test() {
         VERIFY_LOGS=\$(journalctl -u vvp-sip-verify -n 50 --no-pager 2>/dev/null | grep -E 'Verification complete|Verifier response|Monitor event' | tail -10 || echo 'NO_LOGS')
 
         # Also check FreeSWITCH log file for VVP dialplan evidence
-        FS_LOGS=\$(tail -200 /var/log/freeswitch/freeswitch.log 2>/dev/null | grep -i 'VVP\|loopback\|signing\|verification\|verified' | tail -10 || echo '')
+        FS_LOGS=\$(tail -50 /var/log/freeswitch/freeswitch.log 2>/dev/null | grep -i 'VVP\|loopback\|signing\|verification\|verified' | tail -5 || echo '')
 
         # Hang up any test channels to clean up
         fs_cli -x 'hupall NORMAL_CLEARING' 2>/dev/null || true
 
-        # Output structured results
-        echo '=== CALL_TEST_RESULTS ==='
-        echo \"originate:\$ORIGINATE_RESULT\"
-        echo \"signing_delta:\$DELTA\"
-        echo \"verify_delta:\$VERIFY_DELTA\"
+        # Output structured results — IMPORTANT: structured block goes LAST
+        # because Azure run-command truncates output from the beginning when
+        # it exceeds ~4096 chars. Logs go first (informational, truncation OK),
+        # structured results go last (parsed by grep, must survive).
         echo '=== VVP_LOGS ==='
         echo \"\$SIP_LOGS\"
         echo '=== VERIFY_LOGS ==='
         echo \"\$VERIFY_LOGS\"
         echo \"\$FS_LOGS\"
+        echo '=== CALL_TEST_RESULTS ==='
+        echo \"originate:\$ORIGINATE_RESULT\"
+        echo \"signing_delta:\$DELTA\"
+        echo \"verify_delta:\$VERIFY_DELTA\"
         echo '=== END ==='
     " 2>/dev/null) || {
         log_fail "Could not run FreeSWITCH call test"
@@ -1020,7 +1023,7 @@ _run_freeswitch_call_test() {
 
         # Show relevant verification log lines
         if [ "$JSON_OUTPUT" = false ]; then
-            echo "$call_output" | sed -n '/=== VERIFY_LOGS ===/,/=== END ===/p' | grep -v "===" | while IFS= read -r line; do
+            echo "$call_output" | sed -n '/=== VERIFY_LOGS ===/,/=== CALL_TEST_RESULTS ===/p' | grep -v "===" | while IFS= read -r line; do
                 if [ -n "$line" ]; then
                     log_info "  $line"
                 fi

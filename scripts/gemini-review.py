@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Gemini-based code reviewer for VVP pair programming workflow.
+"""Gemini-based reviewer for VVP pair programming workflow.
 
-Reads changed files, builds a self-contained review prompt, calls Gemini API,
-and writes the review to REVIEW_Sprint<N>.md.
+Supports both plan and code reviews. For plan reviews, focuses on the PLAN file
+and project context. For code reviews, includes git diff changed files.
 
 Usage:
-    python3 scripts/gemini-review.py code 68c "Complete Issuer KERI Decoupling"
+    python3 scripts/gemini-review.py plan 69 "Ephemeral LMDB"
+    python3 scripts/gemini-review.py code 69 "Ephemeral LMDB"
 
 Requires: GOOGLE_API_KEY environment variable.
 """
@@ -45,8 +46,102 @@ def read_file_safe(path: str, max_lines: int = 500) -> str:
         return f"[Error reading {path}: {e}]"
 
 
-def build_prompt(review_type: str, sprint: str, title: str, round_num: int) -> str:
-    """Build the complete review prompt with file contents inline."""
+def build_plan_prompt(sprint: str, title: str, round_num: int) -> str:
+    """Build a plan review prompt focused on the PLAN file and project context."""
+    repo_root = Path(subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        capture_output=True, text=True,
+    ).stdout.strip())
+
+    plan_file = repo_root / f"PLAN_Sprint{sprint}.md"
+    changes_file = repo_root / "CHANGES.md"
+    plan_history = repo_root / "Documentation" / "PLAN_history.md"
+
+    file_sections = []
+
+    # Plan file is the PRIMARY review target
+    if plan_file.exists():
+        content = read_file_safe(str(plan_file), max_lines=1000)
+        file_sections.append(f"### {plan_file.name} (PRIMARY — this is what you are reviewing)\n```\n{content}\n```")
+    else:
+        return f"ERROR: Plan file not found: {plan_file}"
+
+    # CHANGES.md for project history context
+    if changes_file.exists():
+        content = read_file_safe(str(changes_file), max_lines=200)
+        file_sections.append(f"### CHANGES.md (project history)\n```\n{content}\n```")
+
+    # PLAN_history.md for prior architectural decisions (truncated)
+    if plan_history.exists():
+        content = read_file_safe(str(plan_history), max_lines=300)
+        file_sections.append(f"### Documentation/PLAN_history.md (prior decisions, truncated)\n```\n{content}\n```")
+
+    files_content = "\n\n".join(file_sections)
+
+    round_context = (
+        "This is the first review of this plan."
+        if round_num == 1
+        else f"This is round {round_num}. The plan has been revised to address findings from previous rounds. Check that prior issues are resolved and look for any new issues introduced."
+    )
+
+    prompt = f"""You are a senior code architect acting as Reviewer in a pair programming workflow.
+You are reviewing the PLAN for Sprint {sprint}: {title} — plan review round {round_num}.
+{round_context}
+
+IMPORTANT: This is a PLAN review, not a code review. You are evaluating the proposed design
+BEFORE implementation. There is no code to review yet — focus on the plan document.
+
+## Files
+
+{files_content}
+
+## Plan Review Instructions
+
+1. Read CHANGES.md and PLAN_history.md for project context and prior decisions
+2. Read PLAN_Sprint{sprint}.md — the plan under review
+3. Evaluate the plan against these criteria:
+   - Does it correctly interpret the spec requirements cited?
+   - Is the proposed approach sound and well-justified?
+   - Is it consistent with prior decisions, or does it justify departures?
+   - Are there gaps, ambiguities, or risks not addressed?
+   - Is the test strategy adequate?
+4. Answer any Open Questions listed in the plan
+
+Write your review in EXACTLY this format:
+
+## Plan Review: Sprint {sprint} - {title} (R{round_num})
+
+**Round:** {round_num}
+**Verdict:** APPROVED | CHANGES_REQUESTED | PLAN_REVISION_REQUIRED
+
+### Spec Compliance
+[Assessment of how well the plan addresses spec requirements]
+
+### Design Assessment
+[Evaluation of the proposed approach and alternatives]
+
+### Findings
+- [High]: Critical issues that block approval
+- [Medium]: Important issues that should be addressed
+- [Low]: Suggestions for improvement (optional)
+
+### Answers to Open Questions
+[Answer each open question from the plan]
+
+### Required Changes (if CHANGES_REQUESTED)
+1. [Specific change required]
+
+### Plan Revisions (if PLAN_REVISION_REQUIRED)
+[What needs to change in the plan]
+
+### Recommendations
+[Optional improvements or future considerations]
+"""
+    return prompt
+
+
+def build_code_prompt(sprint: str, title: str, round_num: int) -> str:
+    """Build a code review prompt with changed files inline."""
     repo_root = Path(subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
         capture_output=True, text=True,
@@ -91,13 +186,11 @@ def build_prompt(review_type: str, sprint: str, title: str, round_num: int) -> s
     round_context = (
         "This is the first review of this implementation."
         if round_num == 1
-        else f"This is round {round_num}. The plan has been revised to address findings from previous rounds. Check that prior issues are resolved and look for any new issues introduced."
+        else f"This is round {round_num}. The code has been revised to address findings from previous rounds. Check that prior issues are resolved and look for any new issues introduced."
     )
 
-    review_basename = f"REVIEW_Sprint{sprint}.md"
-
     prompt = f"""You are a senior code architect acting as Reviewer in a pair programming workflow.
-You are reviewing the implementation for Sprint {sprint}: {title} — review round {round_num}.
+You are reviewing the implementation for Sprint {sprint}: {title} — code review round {round_num}.
 {round_context}
 
 ## Changed Files
@@ -145,6 +238,14 @@ Write your review in EXACTLY this format:
     return prompt
 
 
+def build_prompt(review_type: str, sprint: str, title: str, round_num: int) -> str:
+    """Build the review prompt based on review type (plan or code)."""
+    if review_type == "plan":
+        return build_plan_prompt(sprint, title, round_num)
+    else:
+        return build_code_prompt(sprint, title, round_num)
+
+
 def main():
     if len(sys.argv) < 4:
         print("Usage: python3 scripts/gemini-review.py <plan|code> <sprint> <title>")
@@ -153,6 +254,10 @@ def main():
     review_type = sys.argv[1]
     sprint = sys.argv[2]
     title = " ".join(sys.argv[3:])
+
+    if review_type not in ("plan", "code"):
+        print(f"ERROR: review_type must be 'plan' or 'code', got '{review_type}'", file=sys.stderr)
+        sys.exit(1)
 
     api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GOOGLE_GENAI_API_KEY")
     if not api_key:

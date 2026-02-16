@@ -9,13 +9,13 @@
 # =============================================================================
 
 # Org API key for signing tests (issued by bootstrap-issuer.py)
-VVP_TEST_API_KEY=ZGSZ7m-5SElZZw41sM0-L5vY2stX7NuMJvWSIsibwQs
+VVP_TEST_API_KEY=xeQHEONTW2Gtx1nAUdZ1x7UGivoE9imbiNz8Yk4mW_M
 
 # Admin key for issuer admin endpoints (status, cache clear, etc.)
 VVP_ADMIN_KEY=sQO2aE-foISGVUYcY6aj3hhCiXnaE1sRqfaW87hMoeE
 
 # Organization ID for credential issuance (Sprint 67+: org context mandatory)
-VVP_TEST_ORG_ID=676ffeb3-cdf2-411c-b9fd-649dd33c4f23
+VVP_TEST_ORG_ID=9253578e-6a63-452b-a03a-909ef6646e9b
 
 # Test telephone numbers (must match TN allocations in issuer)
 VVP_TEST_FROM_TN=+441923311000
