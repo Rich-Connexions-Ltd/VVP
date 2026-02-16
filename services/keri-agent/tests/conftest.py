@@ -24,6 +24,7 @@ from app.keri.registry import (
     close_registry_manager,
 )
 from app.keri.witness import reset_witness_publisher
+from app.keri.seed_store import reset_seed_store
 from app.dossier.builder import reset_dossier_builder
 from app.mock_vlei import reset_mock_vlei_manager
 
@@ -56,7 +57,17 @@ async def temp_persistence(temp_dir: Path) -> PersistenceManager:
 @pytest.fixture
 async def temp_identity_manager(temp_dir: Path) -> AsyncGenerator[IssuerIdentityManager, None]:
     """Create identity manager with temporary storage."""
+    # Sprint 69: Set up seed DB for identity manager initialization
+    original_db_url = os.environ.get("VVP_KERI_AGENT_DATABASE_URL")
+    os.environ["VVP_KERI_AGENT_DATABASE_URL"] = f"sqlite:///{temp_dir}/keri_seeds.db"
+    import app.config as config_module
+    importlib.reload(config_module)
+    import app.db.session as db_session_module
+    importlib.reload(db_session_module)
+    db_session_module.init_database()
+
     reset_identity_manager()
+    reset_seed_store()
     manager = IssuerIdentityManager(
         name="test-issuer",
         base_dir=temp_dir,
@@ -66,6 +77,10 @@ async def temp_identity_manager(temp_dir: Path) -> AsyncGenerator[IssuerIdentity
     yield manager
     await manager.close()
     reset_identity_manager()
+    reset_seed_store()
+
+    _restore_env("VVP_KERI_AGENT_DATABASE_URL", original_db_url)
+    importlib.reload(config_module)
 
 
 def _reset_all_singletons():
@@ -75,6 +90,7 @@ def _reset_all_singletons():
     reset_credential_issuer()
     reset_persistence_manager()
     reset_witness_publisher()
+    reset_seed_store()
     reset_dossier_builder()
     reset_mock_vlei_manager()
 
@@ -87,20 +103,27 @@ async def client(temp_dir: Path) -> AsyncGenerator[AsyncClient, None]:
     the user's home directory or leak state between test runs.
 
     Bearer token auth is DISABLED by default (empty token = auth disabled).
+    Sprint 69: Also sets VVP_KERI_AGENT_DATABASE_URL to in-memory SQLite.
     """
     original_data_dir = os.environ.get("VVP_KERI_AGENT_DATA_DIR")
     original_auth_token = os.environ.get("VVP_KERI_AGENT_AUTH_TOKEN")
     original_mock_vlei = os.environ.get("VVP_MOCK_VLEI_ENABLED")
+    original_db_url = os.environ.get("VVP_KERI_AGENT_DATABASE_URL")
 
     os.environ["VVP_KERI_AGENT_DATA_DIR"] = str(temp_dir)
     os.environ["VVP_KERI_AGENT_AUTH_TOKEN"] = ""  # Disable auth for tests
     os.environ["VVP_MOCK_VLEI_ENABLED"] = "false"  # Don't auto-init mock vLEI
+    os.environ["VVP_KERI_AGENT_DATABASE_URL"] = f"sqlite:///{temp_dir}/keri_seeds.db"
 
     _reset_all_singletons()
 
-    # Reload config and main to pick up new env vars
+    # Reload config, db session, and main to pick up new env vars
     import app.config as config_module
     importlib.reload(config_module)
+
+    import app.db.session as db_session_module
+    importlib.reload(db_session_module)
+    db_session_module.init_database()
 
     import app.main as main_module
     importlib.reload(main_module)
@@ -122,6 +145,7 @@ async def client(temp_dir: Path) -> AsyncGenerator[AsyncClient, None]:
     _restore_env("VVP_KERI_AGENT_DATA_DIR", original_data_dir)
     _restore_env("VVP_KERI_AGENT_AUTH_TOKEN", original_auth_token)
     _restore_env("VVP_MOCK_VLEI_ENABLED", original_mock_vlei)
+    _restore_env("VVP_KERI_AGENT_DATABASE_URL", original_db_url)
 
     importlib.reload(config_module)
 
@@ -132,15 +156,21 @@ async def client_with_auth(temp_dir: Path) -> AsyncGenerator[AsyncClient, None]:
     original_data_dir = os.environ.get("VVP_KERI_AGENT_DATA_DIR")
     original_auth_token = os.environ.get("VVP_KERI_AGENT_AUTH_TOKEN")
     original_mock_vlei = os.environ.get("VVP_MOCK_VLEI_ENABLED")
+    original_db_url = os.environ.get("VVP_KERI_AGENT_DATABASE_URL")
 
     os.environ["VVP_KERI_AGENT_DATA_DIR"] = str(temp_dir)
     os.environ["VVP_KERI_AGENT_AUTH_TOKEN"] = "test-bearer-token-secret"
     os.environ["VVP_MOCK_VLEI_ENABLED"] = "false"
+    os.environ["VVP_KERI_AGENT_DATABASE_URL"] = f"sqlite:///{temp_dir}/keri_seeds.db"
 
     _reset_all_singletons()
 
     import app.config as config_module
     importlib.reload(config_module)
+
+    import app.db.session as db_session_module
+    importlib.reload(db_session_module)
+    db_session_module.init_database()
 
     import app.main as main_module
     importlib.reload(main_module)
@@ -160,6 +190,7 @@ async def client_with_auth(temp_dir: Path) -> AsyncGenerator[AsyncClient, None]:
     _restore_env("VVP_KERI_AGENT_DATA_DIR", original_data_dir)
     _restore_env("VVP_KERI_AGENT_AUTH_TOKEN", original_auth_token)
     _restore_env("VVP_MOCK_VLEI_ENABLED", original_mock_vlei)
+    _restore_env("VVP_KERI_AGENT_DATABASE_URL", original_db_url)
 
     importlib.reload(config_module)
 

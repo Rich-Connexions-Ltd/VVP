@@ -10,10 +10,6 @@ on:
         type: boolean
         required: false
         default: false
-      lock_wait_seconds:
-        description: 'Max seconds to poll for LMDB lock release (default: 120)'
-        required: false
-        default: '120'
       test_suite:
         description: 'Post-deployment integration test suite (auto=based on changes, all=everything, issuer=issuer-only, e2e=verifier+issuer)'
         type: choice
@@ -381,8 +377,9 @@ jobs:
   # =========================================================================
   # DEPLOY KERI AGENT
   # =========================================================================
-  # LMDB on Azure Files requires stop-before-deploy: the old revision must
-  # fully stop and release the LMDB file lock before the new revision starts.
+  # Sprint 69: LMDB is now ephemeral (local tmpfs). Key seeds are persisted
+  # to PostgreSQL and state is rebuilt deterministically on startup.
+  # No stop-before-deploy needed — standard rolling update.
   # Only redeploys when keripy, keri-agent code, or common changes.
   deploy-keri-agent:
     needs: [changes, test-keri-agent]
@@ -445,6 +442,7 @@ jobs:
             ACR_PASS=$(az acr credential show -n "${{ secrets.ACR_NAME }}" --query 'passwords[0].value' -o tsv)
 
             # Create with internal-only ingress, single replica, paused (min 0)
+            # Sprint 69: No Azure Files volume — LMDB is ephemeral on local tmpfs
             az containerapp create \
               --name vvp-keri-agent \
               --resource-group "$RG" \
@@ -463,115 +461,59 @@ jobs:
                 "GIT_SHA=${{ github.sha }}" \
                 "GITHUB_REPOSITORY=${{ github.repository }}" \
                 "VVP_WITNESS_CONFIG=/srv/config/witnesses-azure.json" \
-                "VVP_MOCK_VLEI_ENABLED=true"
+                "VVP_MOCK_VLEI_ENABLED=true" \
+                "VVP_KERI_AGENT_DATA_DIR=/tmp/vvp-keri-agent"
 
             echo "vvp-keri-agent created successfully"
             echo "created=true" >> $GITHUB_OUTPUT
           fi
 
-      - name: Stop old revision (release LMDB lock on shared volume)
-        if: steps.ensure_agent.outputs.created != 'true'
-        run: |
-          # The KERI Agent uses LMDB (via keripy) on an Azure Files volume mount.
-          # LMDB file locks prevent two revisions from running simultaneously.
-          # We must fully stop all old revisions and wait for the lock to release
-          # before deploying the new revision.
-
-          MAX_WAIT=${{ inputs.lock_wait_seconds || '120' }}
-          DEACTIVATE_RETRIES=3
-
-          # --- Phase 1: Deactivate all active revisions with retry ---
-          ACTIVE_REVS=$(az containerapp revision list \
-            --name vvp-keri-agent \
-            --resource-group "${{ secrets.AZURE_RG }}" \
-            --query "[?properties.active].name" -o tsv 2>/dev/null || echo "")
-
-          REV_COUNT=$(echo "$ACTIVE_REVS" | grep -c '[a-z]' || echo "0")
-          echo "Found $REV_COUNT active revision(s) to deactivate"
-          if [ "$REV_COUNT" -gt 3 ]; then
-            echo "::warning::Unusually high number of active revisions ($REV_COUNT)"
-          fi
-
-          if [ -n "$ACTIVE_REVS" ]; then
-            for REV in $ACTIVE_REVS; do
-              echo "Deactivating revision: $REV"
-              for ATTEMPT in $(seq 1 $DEACTIVATE_RETRIES); do
-                if az containerapp revision deactivate \
-                  --name vvp-keri-agent \
-                  --resource-group "${{ secrets.AZURE_RG }}" \
-                  --revision "$REV" 2>/dev/null; then
-                  echo "  Deactivated on attempt $ATTEMPT"
-                  break
-                fi
-                echo "  Deactivate attempt $ATTEMPT/$DEACTIVATE_RETRIES failed, retrying in 5s..."
-                sleep 5
-              done
-            done
-
-            # --- Phase 2: Poll until all revisions are fully stopped ---
-            ELAPSED=0
-            INTERVAL=5
-            while [ $ELAPSED -lt $MAX_WAIT ]; do
-              RUNNING=$(az containerapp revision list \
-                --name vvp-keri-agent \
-                --resource-group "${{ secrets.AZURE_RG }}" \
-                --query "[?properties.runningState=='Running' || properties.runningState=='Processing' || properties.runningState=='Activating'].name" -o tsv 2>/dev/null)
-              REPLICAS=$(az containerapp revision list \
-                --name vvp-keri-agent \
-                --resource-group "${{ secrets.AZURE_RG }}" \
-                --query "[?properties.active && properties.replicas > \`0\`].name" -o tsv 2>/dev/null)
-              if [ -z "$RUNNING" ] && [ -z "$REPLICAS" ]; then
-                echo "All revisions stopped after ${ELAPSED}s"
-                break
-              fi
-              echo "Waiting for LMDB lock release... (${ELAPSED}s elapsed, running: ${RUNNING:-none}, replicas: ${REPLICAS:-none})"
-              sleep $INTERVAL
-              ELAPSED=$((ELAPSED + INTERVAL))
-            done
-
-            if [ $ELAPSED -ge $MAX_WAIT ]; then
-              echo "::error::Revisions did not stop within ${MAX_WAIT}s — aborting to prevent LMDB lock conflict"
-              az containerapp revision list \
-                --name vvp-keri-agent \
-                --resource-group "${{ secrets.AZURE_RG }}" \
-                --query "[].{name:name, active:properties.active, state:properties.runningState, replicas:properties.replicas}" -o table 2>/dev/null || true
-              exit 1
-            fi
-          else
-            echo "No active revisions to deactivate (first deploy or already stopped)"
-          fi
-
-          # --- Phase 3: LMDB lock release buffer ---
-          echo "Waiting 10s for LMDB file lock release on Azure Files..."
-          sleep 10
-          echo "Ready for new revision deployment"
-
       - name: Set keri-agent secrets
         run: |
+          SECRETS=()
           TOKEN="${{ secrets.KERI_AGENT_AUTH_TOKEN }}"
           if [ -n "$TOKEN" ]; then
+            SECRETS+=("keri-agent-auth-token=$TOKEN")
+          else
+            echo "::warning::KERI_AGENT_AUTH_TOKEN secret not set — keri-agent running without inter-service auth"
+          fi
+
+          # Sprint 69: Database URL for seed persistence
+          DB_URL="${{ secrets.KERI_AGENT_DATABASE_URL }}"
+          if [ -n "$DB_URL" ]; then
+            SECRETS+=("keri-agent-db-url=$DB_URL")
+          else
+            echo "::warning::KERI_AGENT_DATABASE_URL secret not set — keri-agent will use local SQLite (ephemeral!)"
+          fi
+
+          if [ ${#SECRETS[@]} -gt 0 ]; then
             az containerapp secret set \
               --resource-group "${{ secrets.AZURE_RG }}" \
               --name "vvp-keri-agent" \
-              --secrets "keri-agent-auth-token=$TOKEN"
-          else
-            echo "::warning::KERI_AGENT_AUTH_TOKEN secret not set — keri-agent running without inter-service auth"
+              --secrets "${SECRETS[@]}"
           fi
 
       - name: Deploy keri-agent
         run: |
           # Build env-vars list
+          # Sprint 69: LMDB is ephemeral (local /tmp), seeds persisted to PG
           ENV_VARS=(
             "GIT_SHA=${{ github.sha }}"
             "GITHUB_REPOSITORY=${{ github.repository }}"
             "VVP_WITNESS_CONFIG=/srv/config/witnesses-azure.json"
             "VVP_MOCK_VLEI_ENABLED=true"
+            "VVP_KERI_AGENT_DATA_DIR=/tmp/vvp-keri-agent"
           )
 
-          # Only reference secret if it was set
+          # Only reference secrets if they were set
           TOKEN="${{ secrets.KERI_AGENT_AUTH_TOKEN }}"
           if [ -n "$TOKEN" ]; then
             ENV_VARS+=("VVP_KERI_AGENT_AUTH_TOKEN=secretref:keri-agent-auth-token")
+          fi
+
+          DB_URL="${{ secrets.KERI_AGENT_DATABASE_URL }}"
+          if [ -n "$DB_URL" ]; then
+            ENV_VARS+=("VVP_KERI_AGENT_DATABASE_URL=secretref:keri-agent-db-url")
           fi
 
           az containerapp update \
@@ -636,8 +578,7 @@ jobs:
         run: |
           # KERI Agent has internal-only ingress — not reachable from GitHub Actions.
           # Instead, poll the revision's running state via Azure CLI.
-          # LMDB/Habery initialization on Azure Files takes ~3 minutes.
-          # Poll for up to 5 minutes.
+          # Sprint 69: Ephemeral LMDB rebuild is fast (~10-30s). Poll for 2 minutes.
           RG="${{ secrets.AZURE_RG }}"
           NEW_REV=$(az containerapp show \
             --name vvp-keri-agent \
@@ -645,7 +586,7 @@ jobs:
             --query "properties.latestRevisionName" -o tsv)
           echo "Monitoring revision: $NEW_REV"
 
-          INTERVALS=(10 10 15 15 15 20 20 20 20 25 25 25 25 25)
+          INTERVALS=(10 10 10 10 15 15 15 15)
           TOTAL=${#INTERVALS[@]}
           for i in "${!INTERVALS[@]}"; do
             ATTEMPT=$((i + 1))
@@ -679,7 +620,7 @@ jobs:
 
             sleep "${INTERVALS[$i]}"
           done
-          echo "::error::KERI Agent did not reach Running state within 5 minutes"
+          echo "::error::KERI Agent did not reach Running state within 2 minutes"
           az containerapp revision show \
             --name vvp-keri-agent \
             --resource-group "$RG" \

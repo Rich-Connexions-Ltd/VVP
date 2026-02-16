@@ -14,18 +14,27 @@ The system consists of four services plus shared infrastructure:
        │                   │                      │
        │            ┌──────┴───────┐              │
        │            │ KERI Agent   │              │
-       │            │ (LMDB/crypto)│              │
-       │            └──────┬───────┘              │
-       │                   │                      │
-       │            ┌──────┴───────┐              │
-       └───────────▶│   Common     │◀─────────────┘
-                    │ (shared code) │
-                    └──────┬───────┘
-                           │
-                    ┌──────┴───────┐
-                    │ KERI Witnesses│
-                    │ (3-node pool) │
-                    └──────────────┘
+       │            │ (PG seeds +  │              │
+       │            │  ephemeral   │              │
+       │            │  LMDB)       │              │
+       │            └──┬───────┬──┘              │
+       │               │       │                  │
+       │         ┌─────┘       └─────┐            │
+       │         │                   │            │
+       │  ┌──────┴───────┐  ┌───────┴──────┐     │
+       │  │ PostgreSQL   │  │ LMDB (tmpfs) │     │
+       │  │ (seed store) │  │ (ephemeral)  │     │
+       │  └──────────────┘  └──────────────┘     │
+       │                                          │
+       │            ┌────────────────┐            │
+       └───────────▶│     Common     │◀───────────┘
+                    │ (shared code)  │
+                    └───────┬────────┘
+                            │
+                    ┌───────┴────────┐
+                    │ KERI Witnesses  │
+                    │ (3-node pool)   │
+                    └────────────────┘
 ```
 
 ---
@@ -88,26 +97,31 @@ The system consists of four services plus shared infrastructure:
 
 ### 2b. KERI Agent Service (`services/keri-agent/`)
 
-**Purpose**: Standalone FastAPI service owning all LMDB/keripy state. Manages KERI identities, credential registries, credential issuance/revocation, dossier building, and VVP attestation signing. Single replica. Internal-only ingress.
+**Purpose**: Standalone FastAPI service owning all KERI cryptographic state. Manages KERI identities, credential registries, credential issuance/revocation, dossier building, and VVP attestation signing. Single replica. Internal-only ingress.
 
-**Stack**: Python 3.12+, FastAPI, KERI (keripy), LMDB
+**Stack**: Python 3.12+, FastAPI, KERI (keripy), LMDB (ephemeral), SQLAlchemy (PostgreSQL)
+
+**Architecture (Sprint 69 - Ephemeral LMDB)**: LMDB is now ephemeral local storage (tmpfs in containers, `/tmp` by default). All state required to deterministically rebuild KERI identities, registries, and credentials is persisted as "seeds" in PostgreSQL. On each container startup, the agent initializes the seed database, loads the stored Habery salt, initializes KERI managers, and replays all seeds to rebuild identical LMDB state. This eliminates the Azure Files volume mount dependency and the LMDB lock contention that previously caused ~5-6min deploy downtimes. See "KERI Agent Startup Sequence" and "Seed Persistence Model" sections below for details.
 
 **Key Directories**:
 | Directory | Purpose |
 |-----------|---------|
-| `app/main.py` | Lifespan (KERI managers init), router mounting |
-| `app/config.py` | Agent-specific config (DATA_DIR, witnesses, auth token) |
+| `app/main.py` | Lifespan (seed DB init, KERI managers init, state rebuild), router mounting |
+| `app/config.py` | Agent-specific config (DATA_DIR, DATABASE_URL, witnesses, auth token) |
 | `app/auth.py` | Inter-service bearer token validation |
-| `app/api/` | API routers (identity, registry, credential, dossier, vvp, bootstrap, health) |
+| `app/db/` | SQLAlchemy models and session management for seed persistence (Sprint 69) |
+| `app/api/` | API routers (identity, registry, credential, dossier, vvp, bootstrap, health, seeds) |
 | `app/keri/` | KERI managers (identity, registry, issuer, witness, persistence) |
+| `app/keri/seed_store.py` | SeedStore class — persists seeds to PostgreSQL with idempotent upserts (Sprint 69) |
+| `app/keri/state_builder.py` | KeriStateBuilder — deterministic LMDB rebuild from PG seeds (Sprint 69) |
 | `app/dossier/` | DossierBuilder (DFS edge walk with direct KERI access) |
 | `app/vvp/` | VVP attestation (PASSporT signing, header creation, card claim) |
 | `app/mock_vlei.py` | Mock vLEI bootstrap (creates trust chain identities + credentials) |
 | `config/witnesses.json` | Witness pool configuration |
-| `tests/` | Test suite (real KERI managers with temp LMDB) |
+| `tests/` | Test suite (real KERI managers with temp LMDB + temp SQLite seed DB) |
 
 **Port**: 8002 (internal only)
-**Deployed at**: `vvp-keri-agent` (Azure Container Apps, internal ingress)
+**Deployed at**: `vvp-keri-agent` (Azure Container Apps, internal ingress, no Azure Files volume mount needed)
 
 ### 3. SIP Redirect Service (`services/sip-redirect/`)
 
@@ -205,7 +219,7 @@ Three witnesses run in Docker (or on PBX):
 ### Deployment
 - **CI/CD**: Push to `main` → GitHub Actions → Azure Container Apps
 - **Verifier**: Azure Container Apps (UK South)
-- **KERI Agent**: Azure Container Apps (UK South, internal-only, single replica)
+- **KERI Agent**: Azure Container Apps (UK South, internal-only, single replica, no volume mount — LMDB is ephemeral, seeds in PostgreSQL)
 - **Issuer**: Azure Container Apps (UK South, 1-3 replicas)
 - **SIP Redirect**: Deployed on PBX VM (`pbx.rcnx.io`) via Azure CLI
 - **PBX**: Azure VM running FusionPBX/FreeSWITCH on Debian
@@ -215,6 +229,75 @@ Three witnesses run in Docker (or on PBX):
 |---------|----------|
 | (default) | 3 witnesses |
 | `full` | witnesses + verifier + keri-agent + issuer |
+
+### KERI Agent Startup Sequence (Sprint 69)
+
+The KERI Agent uses a deterministic startup sequence to rebuild all KERI state from PostgreSQL seeds on each container start. LMDB is ephemeral (local tmpfs or `/tmp`) and is rebuilt from scratch every time.
+
+```
+Container starts
+  1. init_database()
+     → Create seed tables (keri_habery_salt, keri_identity_seeds,
+        keri_registry_seeds, keri_rotation_seeds, keri_credential_seeds)
+     → Idempotent: CREATE TABLE IF NOT EXISTS
+
+  2. Initialize KERI managers
+     → IssuerIdentityManager.initialize()
+        → Check PostgreSQL for stored Habery salt
+        → If found: use stored salt (deterministic key derivation)
+        → If not found: generate new salt, persist to keri_habery_salt
+        → Create Habery with salt (LMDB initialized fresh)
+     → RegistryManager.initialize()
+     → CredentialIssuer.initialize()
+
+  3. Rebuild from seeds (if seed_store.has_seeds())
+     → KeriStateBuilder.rebuild()
+        → _rebuild_identities(): replay makeHab() for each KeriIdentitySeed
+           → Verify AID matches expected_aid (deterministic from salt + params)
+        → _replay_rotations(): replay hab.rotate() in sequence_number order
+        → _rebuild_registries(): replay makeRegistry() with stored nonce
+           → Anchor TEL inception in KEL
+           → Verify registry key matches expected_registry_key
+        → _rebuild_credentials(): replay credential issuance in topological order
+           → Create ACDC, TEL issuance event, KEL anchor
+           → Verify SAID matches expected_said
+        → _verify_state(): count check (identities, registries, credentials)
+     → Returns RebuildReport with timing, counts, and any errors
+
+  4. Mock vLEI init (if MOCK_VLEI_ENABLED)
+     → Creates trust chain identities + credentials
+     → Seeds are persisted automatically via SeedStore hooks in managers
+
+  5. Server accepts requests
+```
+
+**Key invariant**: The same Habery salt + same seed parameters = same AIDs, registry keys, and credential SAIDs. This is guaranteed by KERI's deterministic key derivation from the salt.
+
+**Timing**: Full rebuild of a typical deployment (3 trust chain identities, 3 registries, ~10 credentials) takes <2 seconds.
+
+### Seed Persistence Model (Sprint 69)
+
+All KERI state is persisted as "seeds" in PostgreSQL — the minimal parameters needed to deterministically rebuild LMDB state. Seeds are written inline with normal KERI operations (create identity, create registry, issue credential, rotate key) and are idempotent (upsert on unique key).
+
+**Database tables** (`app/db/models.py`):
+
+| Table | Unique Key | Purpose |
+|-------|------------|---------|
+| `keri_habery_salt` | `id=1` (single row) | Master Habery salt (qb64-encoded). Crown jewel — deterministically derives all signing keys. |
+| `keri_identity_seeds` | `name` | Parameters for `makeHab()`: name, transferable, icount/isith/ncount/nsith, witness_aids, toad, expected_aid |
+| `keri_registry_seeds` | `name` | Parameters for `makeRegistry()`: identity_name, no_backers, nonce, expected_registry_key |
+| `keri_rotation_seeds` | `(identity_name, sequence_number)` | Parameters for `hab.rotate()`: ncount, nsith. Replayed in sequence_number order. |
+| `keri_credential_seeds` | `expected_said` | Parameters for credential issuance: schema_said, issuer_identity_name, recipient_aid, attributes_json, edges_json, rules_json, rebuild_order |
+
+**Topological ordering**: Credentials reference other credentials via edges. `rebuild_order` stores the topological sort position so credentials are rebuilt in dependency order. `edge_saids` stores the list of credential SAIDs that a credential depends on. `compute_rebuild_order()` computes `max(dependency rebuild_orders) + 1`.
+
+**Seed export** (`app/api/seeds.py`): `GET /admin/seeds/export?passphrase=...` exports all seed data as AES-256-GCM encrypted JSON (PBKDF2-SHA256, 600K iterations) for disaster recovery. The passphrase is not stored.
+
+**Configuration**:
+- `VVP_KERI_AGENT_DATABASE_URL`: PostgreSQL connection string (default: SQLite for local development)
+- `VVP_KERI_AGENT_DATA_DIR`: LMDB directory (default: `/tmp/vvp-keri-agent` in containers, `~/.vvp-issuer` for local dev if it exists)
+
+**SeedStore** (`app/keri/seed_store.py`): Module-level singleton. All save operations are idempotent upserts. Uses synchronous SQLAlchemy sessions (keripy operations are sync/CPU-bound; async DB adds complexity without benefit for this single-replica service).
 
 ### Mock Trust Infrastructure (Issuer)
 

@@ -94,6 +94,12 @@ class CredentialIssuer:
             if hab is None:
                 raise ValueError(f"Registry {registry_name} has no associated identity")
 
+            # Sprint 69: Pre-compute topological rebuild order
+            from app.keri.seed_store import get_seed_store, extract_edge_saids
+            seed_store = get_seed_store()
+            edge_saids = extract_edge_saids(edges)
+            rebuild_order = seed_store.compute_rebuild_order(edge_saids)
+
             # 3. Create ACDC
             if "dt" not in attributes:
                 attributes["dt"] = helping.nowIso8601()
@@ -148,6 +154,23 @@ class CredentialIssuer:
             reger.cancs.pin(keys=(creder.said,), val=[prefixer, seqner, saider])
 
             log.info(f"Stored credential {creder.said[:16]}... in reger")
+
+            # Sprint 69: Persist credential seed to PostgreSQL (LMDB-first, then PG).
+            # If PG write fails, the ephemeral LMDB credential is lost on restart —
+            # no orphan state accumulates. Caller should retry on next boot.
+            seed_store.save_credential_seed(
+                expected_said=creder.said,
+                registry_name=registry_name,
+                schema_said=schema_said,
+                issuer_identity_name=hab.name,
+                recipient_aid=recipient_aid,
+                attributes=attributes,
+                edges=edges,
+                rules=rules,
+                private=private,
+                rebuild_order=rebuild_order,
+                edge_saids=edge_saids,
+            )
 
             # 8. Serialize credential with SealSourceTriples
             acdc_bytes = signing.serialize(creder, prefixer, seqner, saider)

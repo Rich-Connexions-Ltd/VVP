@@ -70,9 +70,10 @@ services:
       - full
 
   # ===========================================================================
-  # KERI Agent (Sprint 68 — LMDB/keripy state management)
+  # KERI Agent (Sprint 68+69 — LMDB/keripy state management)
   # ===========================================================================
   # Owns all KERI cryptographic state. Single replica. Internal-only.
+  # Sprint 69: LMDB is ephemeral (rebuilt from PG seeds on startup).
   # Start with: docker-compose --profile full up
 
   keri-agent:
@@ -82,11 +83,13 @@ services:
     container_name: vvp-keri-agent
     ports:
       - "8002:8002"  # Exposed in dev for debugging
+    tmpfs:
+      - /tmp/vvp-keri-agent  # Ephemeral LMDB (Sprint 69)
     volumes:
-      - keri-agent-data:/data/vvp-keri-agent
       - ./services/keri-agent/config:/srv/config:ro
     environment:
-      - VVP_KERI_AGENT_DATA_DIR=/data/vvp-keri-agent
+      - VVP_KERI_AGENT_DATA_DIR=/tmp/vvp-keri-agent
+      - VVP_KERI_AGENT_DATABASE_URL=sqlite:////tmp/keri_seeds.db  # Local dev
       - VVP_KERI_AGENT_AUTH_TOKEN=dev-token
       - VVP_MOCK_VLEI_ENABLED=true
       - VVP_WITNESS_CONFIG=/srv/config/witnesses.json
@@ -144,4 +147,3 @@ networks:
 
 volumes:
   witness-data:
-  keri-agent-data:

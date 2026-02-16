@@ -1,5 +1,67 @@
 # VVP Verifier Change Log
 
+## Sprint 69: Ephemeral LMDB & Zero-Downtime KERI Deploys
+
+**Date:** 2026-02-16
+**Status:** Complete
+
+### Summary
+
+Eliminates LMDB lock contention during Azure Container Apps deployments by making LMDB ephemeral (local `/tmp`) and storing all key material seeds in PostgreSQL. On startup, the KERI Agent deterministically rebuilds Habery, identities, registries, and credentials from stored seeds — same salt + same params = same AIDs. Removes the 3-phase stop sequence from CI/CD (5-7 min downtime → ~30-60s rolling update). Adds encrypted seed export endpoint for disaster recovery.
+
+125 keri-agent tests + 820 issuer tests + 1844 verifier tests pass, 0 failures.
+
+### Key Changes
+
+- **Seed persistence model** — 5 SQLAlchemy tables (`keri_habery_salt`, `keri_identity_seeds`, `keri_registry_seeds`, `keri_rotation_seeds`, `keri_credential_seeds`) storing deterministic rebuild parameters
+- **SeedStore** — Synchronous store class with `save_*()` / `get_*()` / `get_all_*()` methods for each seed type; deliberately sync (keripy is CPU-bound, single-replica)
+- **StateBuilder** — `rebuild_all()` orchestrates full state reconstruction: Habery → identities (with rotations) → registries → credentials (topological DAG order)
+- **Ephemeral LMDB** — Default data dir changed from Azure Files to `/tmp/vvp-keri-agent`; LMDB rebuilt on every container start
+- **Simplified CI/CD** — Removed entire 3-phase LMDB stop sequence (~75 lines); reduced health check timeout from 5 min to 2 min
+- **DB URL secret** — `KERI_AGENT_DATABASE_URL` secret added to deploy pipeline for PostgreSQL connection
+- **Seed export endpoint** — `GET /admin/seeds/export?passphrase=...` returns AES-256-GCM encrypted JSON with all seeds (PBKDF2-SHA256, 600K iterations)
+- **Dockerfile** — Added `cryptography` dependency, ephemeral data dir at `/tmp/vvp-keri-agent`
+- **Docker Compose** — Local dev uses named volume `keri-agent-data` instead of Azure Files mount
+
+### Review Rounds
+
+| Round | Reviewer | Verdict | Key Findings |
+|-------|----------|---------|--------------|
+| R1 (plan) | Gemini 2.5 Pro | CHANGES_REQUESTED | Missing registry nonce, rotation history gaps, SAID validation |
+| R2 (plan) | Gemini 2.5 Pro | CHANGES_REQUESTED | Edge SAID extraction, rotation sequencing, test coverage |
+| R3 (plan) | Gemini 2.5 Pro | CHANGES_REQUESTED | bootstrap_identity clarification, README doc |
+| R4 (plan) | Gemini 2.5 Pro | CHANGES_REQUESTED | Nonce format, multi-sig, idempotency |
+| R5 (plan) | Gemini 2.5 Pro | APPROVED | — |
+| R1 (code) | Gemini 2.5 Pro | CHANGES_REQUESTED | Sync DB operations [High, false positive], default data dir [Medium] |
+| R2 (code) | Gemini 2.5 Pro | CHANGES_REQUESTED | Same sync false positive; extract_edge_saids naming [Low] |
+| R3 (code) | Gemini 2.5 Pro | CHANGES_REQUESTED | Same sync false positive (persistent); no new valid findings |
+
+### Files Changed
+
+| File | Action | Summary |
+|------|--------|---------|
+| `services/keri-agent/app/db/models.py` | Created | 5 SQLAlchemy seed tables |
+| `services/keri-agent/app/db/session.py` | Created | DB engine, session factory, init_db() |
+| `services/keri-agent/app/keri/seed_store.py` | Created | SeedStore with save/get methods for all seed types |
+| `services/keri-agent/app/keri/state_builder.py` | Created | StateBuilder.rebuild_all() — full deterministic reconstruction |
+| `services/keri-agent/app/api/seeds.py` | Created | GET /admin/seeds/export (AES-256-GCM encrypted) |
+| `services/keri-agent/app/config.py` | Modified | Ephemeral data dir, DATABASE_URL config |
+| `services/keri-agent/app/main.py` | Modified | Added seeds router, DB init on startup |
+| `services/keri-agent/app/keri/issuer.py` | Modified | Updated extract_edge_saids import |
+| `services/keri-agent/pyproject.toml` | Modified | Added sqlalchemy, cryptography dependencies |
+| `services/keri-agent/Dockerfile` | Modified | Ephemeral data dir, cryptography dep |
+| `services/keri-agent/tests/test_seed_store.py` | Created | 48 seed store unit tests |
+| `services/keri-agent/tests/test_state_builder.py` | Created | 34 state builder tests |
+| `services/keri-agent/tests/test_seed_export.py` | Created | 9 seed export endpoint tests |
+| `services/keri-agent/tests/conftest.py` | Modified | DB fixtures, test client setup |
+| `.github/workflows/deploy.yml` | Modified | Removed 3-phase stop, added DB URL secret, ephemeral env vars |
+| `docker-compose.yml` | Modified | Named volume for keri-agent data |
+| `knowledge/deployment.md` | Modified | Sprint 69 deployment changes |
+| `knowledge/architecture.md` | Modified | Seed persistence model, startup sequence |
+| `knowledge/api-reference.md` | Modified | Added seed export endpoint |
+
+---
+
 ## Sprint 68c: Complete Issuer KERI Decoupling
 
 **Date:** 2026-02-16

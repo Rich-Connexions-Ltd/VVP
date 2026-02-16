@@ -207,6 +207,18 @@ class CredentialRegistryManager:
 
             log.info(f"Created registry: {name} ({registry.regk[:16]}...) for issuer {issuer_aid[:16]}...")
 
+            # Sprint 69: Capture and persist registry nonce for deterministic rebuild
+            nonce = registry.vcp.ked.get("n", "")
+            from app.keri.seed_store import get_seed_store
+            seed_store = get_seed_store()
+            seed_store.save_registry_seed(
+                name=name,
+                identity_name=issuer_info.name,
+                expected_registry_key=registry.regk,
+                no_backers=no_backers,
+                nonce=nonce if nonce else None,
+            )
+
             try:
                 seq_num = registry.regi
             except (KeyError, AttributeError):

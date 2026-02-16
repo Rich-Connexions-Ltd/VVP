@@ -1,8 +1,9 @@
 FROM python:3.12-slim
 
-# Install system dependencies
+# Install system dependencies (libpq-dev for psycopg2)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libsodium23 libsodium-dev \
+    libpq-dev \
     ca-certificates \
     curl \
   && rm -rf /var/lib/apt/lists/*
@@ -25,12 +26,14 @@ RUN pip install --no-cache-dir -U pip && pip install --no-cache-dir .
 # Copy config (will be overridden by volume mount in docker-compose)
 COPY services/keri-agent/config /srv/config
 
-# Data volume for LMDB persistence
-VOLUME /data/vvp-keri-agent
+# Sprint 69: LMDB is now ephemeral (rebuilt from PG seeds on startup).
+# No VOLUME directive — LMDB lives on local container filesystem.
+# Data directory defaults to /tmp/vvp-keri-agent.
 
 # Environment
 ENV PYTHONUNBUFFERED=1
 ENV VVP_WITNESS_CONFIG=/srv/config/witnesses.json
+ENV VVP_KERI_AGENT_DATA_DIR=/tmp/vvp-keri-agent
 
 # Health check — uses /livez (liveness probe, always 200)
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \

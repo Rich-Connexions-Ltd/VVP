@@ -9,7 +9,7 @@
 
 **Workflow dispatch inputs:**
 - `force_all` (boolean) — Deploy ALL services regardless of changed paths
-- `lock_wait_seconds` (string, default `120`) — Max seconds to poll for LMDB lock release
+- `lock_wait_seconds` (string, default `120`) — *Deprecated (Sprint 69)*: Retained for backwards compatibility but no longer used. KERI Agent now uses ephemeral LMDB with standard rolling updates.
 - `test_suite` (choice: `auto`/`all`/`issuer`/`e2e`, default `auto`) — Post-deployment integration test suite
 
 ### Deployment Flow
@@ -29,7 +29,7 @@ The pipeline has separate jobs triggered by path filters:
 | Job | Trigger Paths | Target |
 |-----|---------------|--------|
 | `deploy-verifier` | `services/verifier/**`, `common/**` | Azure Container Apps |
-| `deploy-keri-agent` | `services/keri-agent/**`, `keripy/**`, `common/**` | Azure Container Apps (LMDB single-revision, internal-only) |
+| `deploy-keri-agent` | `services/keri-agent/**`, `keripy/**`, `common/**` | Azure Container Apps (ephemeral LMDB on tmpfs, internal-only) |
 | `deploy-issuer` | `services/issuer/**`, `common/**` | Azure Container Apps (no LMDB, fast ~30s deploy) |
 | `deploy-sip-redirect` | `services/sip-redirect/**`, `common/**` | PBX VM via `az vm run-command` |
 | `deploy-sip-verify` | `services/sip-verify/**`, `common/**` | PBX VM via `az vm run-command` |
@@ -40,20 +40,33 @@ The pipeline has separate jobs triggered by path filters:
 
 All path filters are bypassed when `force_all=true` is passed via workflow dispatch.
 
-### KERI Agent LMDB Constraint (Sprint 68c)
+### KERI Agent Deployment (Sprint 69)
 
-The KERI Agent (not the issuer) uses LMDB (keripy) on a shared Azure Files volume. **Two KERI Agent revisions CANNOT run simultaneously** — the LMDB lock blocks the new revision's startup. CI/CD uses a 3-phase stop-before-deploy sequence with self-healing activation:
+The KERI Agent uses **ephemeral LMDB on local tmpfs** (`/tmp/vvp-keri-agent`), not a shared Azure Files volume. Key seeds are persisted to **PostgreSQL** (`VVP_KERI_AGENT_DATABASE_URL`), and all KERI state (Habery, registries, credentials) is **rebuilt deterministically on startup** from those seeds.
 
-1. **Deactivate revisions** — with up to 3 retries per revision to handle transient Azure API failures. (We do NOT use `az containerapp update --min-replicas 0` because that creates a phantom intermediate revision as a side effect, which can leave the new revision `active=false`.)
-2. **Poll until stopped** — checks both `runningState` and `replicas` count, with 120s timeout (configurable via `lock_wait_seconds` workflow input). **Fails hard** on timeout instead of proceeding.
-3. **Lock release buffer** — 10s sleep after all revisions report stopped, to allow the Azure Files mount to release the LMDB file lock.
+This eliminates the LMDB lock contention that previously prevented concurrent revisions. KERI Agent now uses **standard rolling updates** — no 3-phase stop sequence, no lock release buffer, no revision deactivation dance.
 
-After the deploy step (`az containerapp update --min-replicas 1 --max-replicas 1`), two self-healing checks run:
+**Deployment characteristics:**
+- **Deploy time**: ~30-60 seconds (previously 5-7 minutes)
+- **Health check timeout**: 2 minutes (previously 5-7 minutes, since LMDB init on Azure Files took ~3 min)
+- **Rolling update**: Standard blue-green — new revision starts, passes health check, old revision drains
+- **No downtime**: New revision rebuilds state from PostgreSQL seeds while old revision continues serving
+- **No `lock_wait_seconds`**: The workflow dispatch input is retained for backwards compatibility but is no longer used by the keri-agent deploy job
 
-- **Ensure new revision is active** — queries `latestRevisionName`, checks `active` state. If `active=false`, explicitly calls `az containerapp revision activate`. Fails the pipeline if activation cannot be achieved.
-- **Verify KERI Agent health** — polls `/healthz` (readiness) for up to 7 minutes (LMDB/Habery initialization on Azure Files takes ~3 minutes). Fails if health check never succeeds.
+**Startup sequence:**
+1. Container starts with empty LMDB at `VVP_KERI_AGENT_DATA_DIR` (tmpfs)
+2. Reads key seeds from PostgreSQL (`VVP_KERI_AGENT_DATABASE_URL`)
+3. Deterministically rebuilds Habery, registries, and credential state from seeds
+4. Passes `/healthz` readiness check
+5. Old revision is drained and stopped
 
-KERI Agent downtime during redeploy is ~5-6 minutes (stop old revision ~60s + LMDB init ~3-4 min + verification). The issuer continues serving KERI-free routes (auth, users, schemas, dashboard) during this window; KERI-dependent routes return 503.
+**Seed management:**
+- Key seeds are generated once (on first identity creation) and persisted to PostgreSQL
+- Seeds are sufficient to reconstruct all derived KERI state (AIDs, key pairs, KELs, TELs)
+- Export via `GET /admin/seeds/export` — AES-256-GCM encrypted, requires passphrase query parameter
+- PostgreSQL is the single source of truth; LMDB is a disposable runtime cache
+
+**Self-healing** still applies: after the deploy step, CI/CD verifies the new revision is active and healthy (polling `/healthz` for up to 2 minutes). Fails the pipeline if health check never succeeds.
 
 **Issuer probe contract** (Sprint 68c): Three-endpoint probe model:
 - `GET /livez` — Always 200. Liveness probe. ACA should never kill the container due to dependency failures.
@@ -62,7 +75,10 @@ KERI Agent downtime during redeploy is ~5-6 minutes (stop old revision ~60s + LM
 
 The issuer intentionally stays in ACA rotation (`/healthz` returns 200) when only the KERI Agent is down, since KERI-free routes (auth, users, schemas, dashboard, UI) remain available. KERI-dependent routes return 503 via the circuit breaker in `KeriAgentClient`.
 
-**Issuer deploys** (when only issuer code changes) are fast (~30s) with no LMDB handling — standard blue-green deployment. Version check polls for 2 minutes.
+**Issuer deploys** (when only issuer code changes) are fast (~30s) — standard blue-green deployment. Version check polls for 2 minutes.
+
+**KERI Agent admin endpoints:**
+- `GET /admin/seeds/export?passphrase=<passphrase>` — Export all key seeds encrypted with AES-256-GCM. The passphrase is used as the encryption key (derived via standard KDF). Response is a JSON blob of encrypted seed material for backup/disaster recovery.
 
 ### SIP Redirect Deploy
 
@@ -294,6 +310,16 @@ az vm run-command invoke --resource-group VVP --name vvp-pbx \
 | `VVP_KERI_AGENT_TIMEOUT` | `30` | Read timeout (seconds) |
 | `VVP_KERI_AGENT_WRITE_TIMEOUT` | `120` | Write timeout for mutations (seconds) |
 
+### KERI Agent (`services/keri-agent/`)
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `VVP_KERI_AGENT_DATABASE_URL` | *(required)* | PostgreSQL connection string for seed persistence |
+| `VVP_KERI_AGENT_DATA_DIR` | `/tmp/vvp-keri-agent` | Local directory for ephemeral LMDB (tmpfs in production) |
+| `VVP_KERI_AGENT_PORT` | `8002` | HTTP listen port |
+| `VVP_KERI_AGENT_AUTH_TOKEN` | *(empty)* | Bearer token for inter-service auth |
+| `ADMIN_ENDPOINT_ENABLED` | `true` | Enable `/admin/*` endpoints (including seed export) |
+
 #### KERI/Witness
 | Variable | Default | Purpose |
 |----------|---------|---------|
@@ -429,9 +455,15 @@ cd services/issuer && pip install -e . && uvicorn app.main:app --port 8001
 
 ### Issuer Recovery (Postgres/KERI Agent Wipe)
 
-After a KERI Agent LMDB corruption or issuer database reset:
+After an issuer database reset or KERI Agent PostgreSQL seed loss:
 ```bash
 # Re-provision the complete credential chain
 python3 scripts/bootstrap-issuer.py --url https://vvp-issuer.rcnx.io --admin-key <key>
 ```
 This creates: mock GLEIF/QVI infrastructure → test org → org API key → TN allocation credentials → TN mappings.
+
+**Note (Sprint 69):** LMDB corruption is no longer a concern — LMDB is ephemeral (local tmpfs) and rebuilt on every container start from PostgreSQL seeds. Recovery is only needed if the PostgreSQL seed database is lost. To back up seeds proactively:
+```bash
+# Export encrypted seeds for disaster recovery
+curl -s "https://vvp-keri-agent-internal:8002/admin/seeds/export?passphrase=<backup-passphrase>" > seeds-backup.json
+```

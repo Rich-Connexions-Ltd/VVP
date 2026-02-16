@@ -19,32 +19,28 @@ from typing import Any
 def _get_data_dir() -> Path:
     """Determine data directory based on environment.
 
+    Sprint 69: LMDB is ephemeral. Default to /tmp for containers,
+    ~/.vvp-issuer for local development convenience.
+
     Priority:
     1. VVP_KERI_AGENT_DATA_DIR env var (explicit override)
-    2. VVP_ISSUER_DATA_DIR env var (backwards compat during migration)
-    3. /data/vvp-issuer if it exists (Docker volume mount)
-    4. ~/.vvp-issuer (local development)
-    5. /tmp/vvp-issuer (container fallback when home unavailable)
+    2. ~/.vvp-issuer if it already exists (local development)
+    3. /tmp/vvp-keri-agent (container default — ephemeral)
     """
     env_path = os.getenv("VVP_KERI_AGENT_DATA_DIR")
     if env_path:
         return Path(env_path)
 
-    # Backwards compat: fall back to issuer data dir
-    env_path = os.getenv("VVP_ISSUER_DATA_DIR")
-    if env_path:
-        return Path(env_path)
-
-    docker_path = Path("/data/vvp-issuer")
-    if docker_path.exists():
-        return docker_path
-
+    # Local development: use persistent dir if it already exists
     try:
         home_path = Path.home() / ".vvp-issuer"
-        home_path.mkdir(parents=True, exist_ok=True)
-        return home_path
-    except (OSError, PermissionError):
-        return Path("/tmp/vvp-issuer")
+        if home_path.exists():
+            return home_path
+    except (OSError, RuntimeError):
+        pass
+
+    # Container default: ephemeral storage (rebuilt from PG seeds on startup)
+    return Path("/tmp/vvp-keri-agent")
 
 
 DATA_DIR: Path = _get_data_dir()
@@ -118,6 +114,16 @@ VVP_ISSUER_BASE_URL: str = os.getenv("VVP_ISSUER_BASE_URL", "http://localhost:80
 # =============================================================================
 # AGENT OPERATIONAL SETTINGS
 # =============================================================================
+
+# =============================================================================
+# DATABASE CONFIGURATION (Sprint 69: Seed Persistence)
+# =============================================================================
+
+DATABASE_URL: str = os.getenv(
+    "VVP_KERI_AGENT_DATABASE_URL",
+    f"sqlite:///{DATA_DIR}/keri_seeds.db"
+)
+
 
 SERVICE_PORT: int = int(os.getenv("VVP_KERI_AGENT_PORT", "8002"))
 

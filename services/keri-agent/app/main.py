@@ -30,10 +30,23 @@ async def lifespan(app: FastAPI):
     log.info("Starting VVP KERI Agent service...")
 
     try:
-        # Initialize KERI managers (Habery, Regery, CredentialIssuer)
+        # Sprint 69: Initialize seed database (create tables if needed)
+        from app.db.session import init_database
+        init_database()
+
+        # Initialize KERI managers (Habery uses stored salt from PG)
         await get_identity_manager()
         await get_registry_manager()
         await get_credential_issuer()
+
+        # Sprint 69: Rebuild KERI state from PG seeds if they exist
+        from app.keri.seed_store import get_seed_store
+        seed_store = get_seed_store()
+        if seed_store.has_seeds():
+            from app.keri.state_builder import KeriStateBuilder
+            builder = KeriStateBuilder()
+            report = await builder.rebuild()
+            log.info(f"State rebuild complete: {report}")
 
         # Initialize mock vLEI infrastructure if enabled
         if MOCK_VLEI_ENABLED:
@@ -78,7 +91,7 @@ app.add_middleware(BearerTokenMiddleware)
 # API Routers
 # -----------------------------------------------------------------------------
 
-from app.api import health, identity, registry, credential, dossier, vvp, bootstrap  # noqa: E402
+from app.api import health, identity, registry, credential, dossier, vvp, bootstrap, seeds  # noqa: E402
 
 app.include_router(health.router)
 app.include_router(identity.router)
@@ -87,6 +100,7 @@ app.include_router(credential.router)
 app.include_router(dossier.router)
 app.include_router(vvp.router)
 app.include_router(bootstrap.router)
+app.include_router(seeds.router)
 
 
 # -----------------------------------------------------------------------------

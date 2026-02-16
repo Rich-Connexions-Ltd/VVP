@@ -567,6 +567,47 @@ Base URL: `http://keri-agent.internal:8002` (internal only)
 | `GET` | `/healthz` | Readiness probe (KERI managers initialized) |
 | `GET` | `/bootstrap/status` | Mock vLEI bootstrap status |
 
+### Admin
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/admin/seeds/export?passphrase=<passphrase>` | Export encrypted KERI seed backup |
+
+#### GET /admin/seeds/export (Sprint 69)
+
+Disaster recovery endpoint that exports all KERI key material as an AES-256-GCM encrypted JSON payload. The passphrase is used to derive the encryption key via PBKDF2-SHA256.
+
+**Auth:** Bearer token (`Authorization: Bearer <VVP_KERI_AGENT_AUTH_TOKEN>`)
+
+**Query Parameters:**
+- `passphrase` (required): Minimum 8 characters. Used as input to PBKDF2-SHA256 key derivation.
+
+**Response** (200):
+```json
+{
+  "v": 1,
+  "alg": "AES-256-GCM",
+  "kdf": "PBKDF2-SHA256",
+  "iterations": 600000,
+  "salt": "<base64-encoded>",
+  "iv": "<base64-encoded>",
+  "ciphertext": "<base64-encoded>",
+  "tag": "<base64-encoded>"
+}
+```
+
+**Decrypted payload contains:**
+- `habery_salt` — Habery-level salt for key derivation
+- `identity_seeds` — Signing key seeds for all identities
+- `registry_seeds` — Registry inception key seeds
+- `rotation_seeds` — Pre-rotated next-key seeds
+- `credential_seeds` — Credential-specific key material
+- `counts` — Summary counts of exported items
+
+**Error Responses:**
+- `400 Bad Request`: Passphrase missing or shorter than 8 characters
+- `401 Unauthorized`: Missing or invalid bearer token
+
 ### Identity
 
 | Method | Path | Purpose |

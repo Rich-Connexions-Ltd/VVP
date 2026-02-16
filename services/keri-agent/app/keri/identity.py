@@ -89,13 +89,28 @@ class IssuerIdentityManager:
         self._lock = asyncio.Lock()
 
     async def initialize(self) -> None:
-        """Initialize the Habery and load existing identities."""
+        """Initialize the Habery and load existing identities.
+
+        Sprint 69: Uses stored salt from PostgreSQL if available,
+        otherwise generates a new one and persists it.
+        """
         async with self._lock:
             if self._hby is not None:
                 return
 
-            # Generate salt for new Habery (will be stored in keystore)
-            salt = core.Salter().qb64
+            from app.keri.seed_store import get_seed_store
+            seed_store = get_seed_store()
+
+            # Try to load existing Habery salt from PostgreSQL
+            stored_salt = seed_store.get_habery_salt(self._name)
+
+            if stored_salt is not None:
+                salt = stored_salt
+                log.info(f"Using stored Habery salt for {self._name}")
+            else:
+                salt = core.Salter().qb64
+                seed_store.save_habery_salt(salt, self._name)
+                log.info(f"Generated and stored new Habery salt for {self._name}")
 
             # Create Habery with persistence
             self._hby = habbing.Habery(
@@ -188,6 +203,21 @@ class IssuerIdentityManager:
             )
 
             log.info(f"Created identity: {name} ({hab.pre[:16]}...)")
+
+            # Sprint 69: Persist identity seed for deterministic rebuild
+            from app.keri.seed_store import get_seed_store
+            seed_store = get_seed_store()
+            seed_store.save_identity_seed(
+                name=name,
+                expected_aid=hab.pre,
+                transferable=transferable,
+                icount=icount,
+                isith=str(isith),
+                ncount=ncount,
+                nsith=str(nsith),
+                witness_aids=wits,
+                toad=toad,
+            )
 
             return IdentityInfo(
                 aid=hab.pre,
@@ -375,6 +405,16 @@ class IssuerIdentityManager:
             log.info(
                 f"Rotated identity: {hab.name} ({aid[:16]}...) "
                 f"sn: {previous_sn} -> {new_sn}"
+            )
+
+            # Sprint 69: Persist rotation seed for deterministic rebuild
+            from app.keri.seed_store import get_seed_store
+            seed_store = get_seed_store()
+            seed_store.save_rotation_seed(
+                identity_name=hab.name,
+                sequence_number=new_sn,
+                ncount=next_key_count,
+                nsith=next_threshold,
             )
 
             return RotationResult(

@@ -5177,8 +5177,9 @@ Update GitHub Actions to deploy the services independently.
 
 ---
 
-## Sprint 69: Ephemeral LMDB & Zero-Downtime KERI Deploys
+## Sprint 69: Ephemeral LMDB & Zero-Downtime KERI Deploys ✅
 
+**Status:** Complete
 **Goal:** Eliminate LMDB corruption during deployments by moving LMDB to local ephemeral storage and rebuilding KERI state deterministically on startup from PostgreSQL-persisted key seeds.
 
 ### Why This Matters
@@ -5223,7 +5224,7 @@ KERI Agent Container
 
 Store the cryptographic seeds needed to deterministically regenerate KERI identities.
 
-- [ ] **`keri_seeds` database table** — New SQLAlchemy model:
+- [x] **`keri_seeds` database table** — New SQLAlchemy model:
   ```
   id:             UUID (PK)
   identity_name:  str (unique) — e.g., "mock-gleif", "org-00c4aee2"
@@ -5241,28 +5242,28 @@ Store the cryptographic seeds needed to deterministically regenerate KERI identi
   metadata:       JSON — additional config (org_id linkage, trust anchor type, etc.)
   ```
 
-- [ ] **Seed capture on identity creation** — When `Habery.makeHab()` is called, capture the salt/seed and persist to `keri_seeds`. The existing `IssuerIdentityManager.create_identity()` already accepts `salt` — intercept and store it before passing to keripy.
+- [x] **Seed capture on identity creation** — When `Habery.makeHab()` is called, capture the salt/seed and persist to `keri_seeds`. The existing `IssuerIdentityManager.create_identity()` already accepts `salt` — intercept and store it before passing to keripy.
 
-- [ ] **Seed capture for mock vLEI identities** — `MockVLEIManager.initialize()` creates GLEIF, QVI, GSMA identities. Capture their salts and persist to `keri_seeds` with appropriate metadata (trust anchor type, expected AID).
+- [x] **Seed capture for mock vLEI identities** — `MockVLEIManager.initialize()` creates GLEIF, QVI, GSMA identities. Capture their salts and persist to `keri_seeds` with appropriate metadata (trust anchor type, expected AID).
 
-- [ ] **Database migration** — `sprint69_keri_seeds.py` migration to add the table.
+- [x] **Database migration** — `sprint69_keri_seeds.py` migration to add the table.
 
-- [ ] **Tests** — CRUD tests for `keri_seeds`, verify seed capture during identity creation.
+- [x] **Tests** — CRUD tests for `keri_seeds`, verify seed capture during identity creation.
 
 #### Phase 2: Deterministic State Rebuild
 
 Implement the startup sequence that rebuilds all KERI state from persisted seeds.
 
-- [ ] **`KeriStateBuilder` class** — New module `services/keri-agent/app/keri/state_builder.py`:
+- [x] **`KeriStateBuilder` class** — New module `services/keri-agent/app/keri/state_builder.py`:
   1. Read all entries from `keri_seeds` table (ordered by creation time)
   2. For each entry, call `hby.makeHab(name, salt=stored_salt, ...)` to regenerate the identity
   3. Verify the generated AID matches `expected_aid` — if mismatch, log error and skip (indicates seed corruption)
   4. Rebuild registries for identities that had them (metadata stores registry config)
   5. Re-issue credentials from stored credential metadata (schema, attributes, edges, registry)
 
-- [ ] **Registry seed persistence** — Extend `keri_seeds` or add a `keri_registries` table to store registry configuration (name, identity_name, nonce) so registries can be rebuilt deterministically.
+- [x] **Registry seed persistence** — Extend `keri_seeds` or add a `keri_registries` table to store registry configuration (name, identity_name, nonce) so registries can be rebuilt deterministically.
 
-- [ ] **Credential rebuild metadata** — Extend `managed_credentials` table (already exists in PostgreSQL) with sufficient metadata to re-issue each credential:
+- [x] **Credential rebuild metadata** — Extend `managed_credentials` table (already exists in PostgreSQL) with sufficient metadata to re-issue each credential:
   - Schema SAID
   - Attribute values (JSON)
   - Edge references (JSON — referencing other credential SAIDs by identity name)
@@ -5270,13 +5271,13 @@ Implement the startup sequence that rebuilds all KERI state from persisted seeds
   - Issuer identity name
   - Original SAID (for verification after rebuild)
 
-- [ ] **Mock vLEI rebuild** — `MockVLEIManager.initialize()` updated to:
+- [x] **Mock vLEI rebuild** — `MockVLEIManager.initialize()` updated to:
   1. Check `keri_seeds` for existing mock vLEI seeds
   2. If found: rebuild from seeds (deterministic AIDs) — fast path
   3. If not found: create fresh (new AIDs) and persist seeds — first-boot path
   4. In both cases, verify credential chain integrity
 
-- [ ] **Startup sequence** — KERI Agent lifespan:
+- [x] **Startup sequence** — KERI Agent lifespan:
   1. Create fresh LMDB at `/tmp/vvp-issuer` (local ephemeral)
   2. Connect to PostgreSQL
   3. Run `KeriStateBuilder.rebuild()` — regenerate all identities, registries, credentials from seeds
@@ -5284,51 +5285,51 @@ Implement the startup sequence that rebuilds all KERI state from persisted seeds
   5. Verify identity count matches expected (from `keri_seeds` table)
   6. Ready to serve requests
 
-- [ ] **Tests** — Rebuild round-trip test: create identities → persist seeds → close LMDB → fresh LMDB → rebuild → verify AIDs match.
+- [x] **Tests** — Rebuild round-trip test: create identities → persist seeds → close LMDB → fresh LMDB → rebuild → verify AIDs match.
 
 #### Phase 3: Local Ephemeral Storage
 
 Switch the KERI Agent from Azure Files to local ephemeral storage.
 
-- [ ] **Config change** — `VVP_ISSUER_DATA_DIR` defaults to `/tmp/vvp-issuer` instead of `/data/vvp-issuer`. The env var override remains available for backward compatibility.
+- [x] **Config change** — `VVP_ISSUER_DATA_DIR` defaults to `/tmp/vvp-issuer` instead of `/data/vvp-issuer`. The env var override remains available for backward compatibility.
 
-- [ ] **Remove Azure Files mount** from KERI Agent Container App:
+- [x] **Remove Azure Files mount** from KERI Agent Container App:
   - Remove volume mount from `deploy.yml`
   - Remove `issuerdata` storage reference
   - Keep Azure Files storage account for now (other services may use it)
 
-- [ ] **Startup performance validation** — Measure and log rebuild time. Target: <15s for the full mock vLEI chain + all org identities (local LMDB I/O is ~100x faster than Azure Files SMB).
+- [x] **Startup performance validation** — Measure and log rebuild time. Target: <15s for the full mock vLEI chain + all org identities (local LMDB I/O is ~100x faster than Azure Files SMB).
 
-- [ ] **Docker Compose update** — Remove LMDB volume mount from `keri-agent` service. Add `tmpfs` or local volume for development.
+- [x] **Docker Compose update** — Remove LMDB volume mount from `keri-agent` service. Add `tmpfs` or local volume for development.
 
-- [ ] **Tests** — Integration test: start KERI Agent with empty `/tmp/`, verify full state rebuild, verify identity operations work.
+- [x] **Tests** — Integration test: start KERI Agent with empty `/tmp/`, verify full state rebuild, verify identity operations work.
 
 #### Phase 4: Simplified CI/CD
 
 Remove the 3-phase LMDB stop sequence from the KERI Agent deploy.
 
-- [ ] **Remove 3-phase stop** from `deploy.yml` for the KERI Agent deploy job:
+- [x] **Remove 3-phase stop** from `deploy.yml` for the KERI Agent deploy job:
   - Remove "Deactivate old revisions" step
   - Remove "Wait for old revisions to stop" step
   - Remove "10s LMDB lock release buffer" step
   - Replace with standard `az containerapp update --image NEW_IMAGE --min-replicas 1 --max-replicas 1`
   - Old and new containers can briefly overlap because they use independent local LMDB instances
 
-- [ ] **Health check update** — KERI Agent `/healthz` returns unhealthy until state rebuild is complete. Azure Container Apps probes prevent traffic routing until ready.
+- [x] **Health check update** — KERI Agent `/healthz` returns unhealthy until state rebuild is complete. Azure Container Apps probes prevent traffic routing until ready.
 
-- [ ] **Self-healing simplification** — Remove the complex revision activation/deactivation logic. Standard Azure Container Apps rolling update handles lifecycle.
+- [x] **Self-healing simplification** — Remove the complex revision activation/deactivation logic. Standard Azure Container Apps rolling update handles lifecycle.
 
-- [ ] **Deploy verification** — Keep the `/version` check to confirm the correct image is running. Remove LMDB-specific error handling.
+- [x] **Deploy verification** — Keep the `/version` check to confirm the correct image is running. Remove LMDB-specific error handling.
 
-- [ ] **`max_replicas` safety** — Keep `max_replicas=1` for the KERI Agent. While local LMDB eliminates the shared-state problem, the KERI Agent is still logically a single-writer service (credential issuance, key management). Multiple replicas would create divergent LMDB state. This could be relaxed in future with a shared-nothing read-replica pattern.
+- [x] **`max_replicas` safety** — Keep `max_replicas=1` for the KERI Agent. While local LMDB eliminates the shared-state problem, the KERI Agent is still logically a single-writer service (credential issuance, key management). Multiple replicas would create divergent LMDB state. This could be relaxed in future with a shared-nothing read-replica pattern.
 
-- [ ] **Tests** — CI/CD dry-run: verify deploy job generates the correct `az` commands without the 3-phase stop.
+- [x] **Tests** — CI/CD dry-run: verify deploy job generates the correct `az` commands without the 3-phase stop.
 
 #### Phase 5: Operational Hardening
 
-- [ ] **Seed backup/export** — Admin endpoint `GET /admin/seeds` (KERI Agent, admin auth only) that exports all seed data as encrypted JSON. This is a disaster recovery mechanism — if PostgreSQL is lost, seeds can be re-imported.
+- [x] **Seed backup/export** — Admin endpoint `GET /admin/seeds` (KERI Agent, admin auth only) that exports all seed data as encrypted JSON. This is a disaster recovery mechanism — if PostgreSQL is lost, seeds can be re-imported.
 
-- [ ] **Startup telemetry** — Log rebuild timing breakdown:
+- [x] **Startup telemetry** — Log rebuild timing breakdown:
   ```
   KERI Agent startup: 12.3s total
     PostgreSQL connect: 0.2s
@@ -5338,7 +5339,7 @@ Remove the 3-phase LMDB stop sequence from the KERI Agent deploy.
     Mock vLEI verify: 0.2s
   ```
 
-- [ ] **Graceful degradation** — If seed rebuild fails for a specific identity (e.g., seed mismatch), log the error and continue with remaining identities. The KERI Agent reports partial state in `/healthz` so operators can investigate.
+- [x] **Graceful degradation** — If seed rebuild fails for a specific identity (e.g., seed mismatch), log the error and continue with remaining identities. The KERI Agent reports partial state in `/healthz` so operators can investigate.
 
 - [ ] **Remove Azure Files infrastructure** — Once ephemeral LMDB is proven stable:
   - Delete `issuerdata` storage mount from Container Apps Environment
@@ -5347,7 +5348,7 @@ Remove the 3-phase LMDB stop sequence from the KERI Agent deploy.
 
 - [ ] **Update bootstrap-issuer.py** — The bootstrap script should no longer need to wipe LMDB files. It should work identically whether the KERI Agent has just started fresh or has been running for weeks (since seeds ensure deterministic state).
 
-- [ ] **Knowledge updates** — Update `knowledge/deployment.md`, `knowledge/architecture.md`, `CLAUDE.md` to reflect:
+- [x] **Knowledge updates** — Update `knowledge/deployment.md`, `knowledge/architecture.md`, `CLAUDE.md` to reflect:
   - No more Azure Files for LMDB
   - No more 3-phase stop sequence
   - No more LMDB corruption gotchas
