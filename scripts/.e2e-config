@@ -15,7 +15,7 @@ VVP_TEST_API_KEY=HVxomzDC5rcEhedv_gBiHemzqmX9ALR0_QniRnh0BbQ
 VVP_ADMIN_KEY=sQO2aE-foISGVUYcY6aj3hhCiXnaE1sRqfaW87hMoeE
 
 # Organization ID for credential issuance (Sprint 67+: org context mandatory)
-VVP_TEST_ORG_ID=365dee3c-ff62-4fc8-90e6-eb16f1bffd43
+VVP_TEST_ORG_ID=365dee3c-6813-4306-bd6e-bd1e7cc48134
 
 # Test telephone numbers (must match TN allocations in issuer)
 VVP_TEST_FROM_TN=+441923311000
