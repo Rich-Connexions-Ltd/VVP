@@ -77,8 +77,9 @@ def wait_for_health(base_url, timeout=120):
     while time.time() < deadline:
         try:
             status, body = api_call("GET", f"{base_url}/healthz")
-            if status == 200 and body.get("ok"):
-                print(f"  Issuer healthy (identities_loaded={body.get('identities_loaded', '?')})")
+            if status == 200 and (body.get("ok") or body.get("status") == "ok"):
+                keri = body.get("keri_agent", "?")
+                print(f"  Issuer healthy (database={body.get('database', '?')}, keri_agent={keri})")
                 return True
         except Exception:
             pass

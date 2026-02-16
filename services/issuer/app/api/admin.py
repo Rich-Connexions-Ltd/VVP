@@ -1435,6 +1435,9 @@ async def reinitialize_mock_vlei(
         OrgAPIKeyRole,
         ManagedCredential,
         TNMapping,
+        User,
+        UserOrgRole,
+        DossierOspAssociation,
     )
     import app.org.mock_vlei as mock_vlei_module
     from app.org.mock_vlei import get_mock_vlei_manager
@@ -1442,9 +1445,12 @@ async def reinitialize_mock_vlei(
     audit = get_audit_logger()
     tables_cleared = []
 
-    # 1. Clear Postgres tables in dependency order
+    # 1. Clear Postgres tables in dependency order (children before parents)
     try:
         with get_db_session() as db:
+            count = db.query(DossierOspAssociation).delete()
+            tables_cleared.append(f"dossier_osp_associations ({count})")
+
             count = db.query(TNMapping).delete()
             tables_cleared.append(f"tn_mappings ({count})")
 
@@ -1456,6 +1462,12 @@ async def reinitialize_mock_vlei(
 
             count = db.query(OrgAPIKey).delete()
             tables_cleared.append(f"org_api_keys ({count})")
+
+            count = db.query(UserOrgRole).delete()
+            tables_cleared.append(f"user_org_roles ({count})")
+
+            count = db.query(User).delete()
+            tables_cleared.append(f"users ({count})")
 
             count = db.query(Organization).delete()
             tables_cleared.append(f"organizations ({count})")
