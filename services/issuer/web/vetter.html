@@ -445,7 +445,7 @@
     async function loadOrganizations() {
       const select = document.getElementById('vetterOrg');
       try {
-        const res = await authFetch('/organizations/names');
+        const res = await authFetch('/organizations/names?purpose=vetter');
         if (!res.ok) throw new Error('Failed to load');
         const data = await res.json();
 

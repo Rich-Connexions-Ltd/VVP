@@ -251,7 +251,7 @@ async def list_organizations(
 
 @router.get("/names", response_model=OrganizationNameListResponse)
 async def list_organization_names(
-    purpose: str = Query("ap", description="Purpose: 'ap' for AP selection, 'osp' for OSP selection"),
+    purpose: str = Query("ap", description="Purpose: 'ap' for AP selection, 'osp' for OSP selection, 'vetter' for vetter cert recipient"),
     principal: Principal = require_auth,
     db: Session = Depends(get_db),
 ) -> OrganizationNameListResponse:
@@ -264,13 +264,15 @@ async def list_organization_names(
     - ``purpose=ap`` (default): Admin sees all enabled orgs; non-admin sees own org only.
     - ``purpose=osp``: All authenticated users see all enabled orgs (org names are not
       sensitive; server-side validation enforces association consistency).
+    - ``purpose=vetter``: All authenticated users see all enabled orgs with AIDs
+      (needed for vetter certification recipient selection).
 
     **Authentication:** Any authenticated user.
     """
-    if purpose not in ("ap", "osp"):
-        raise HTTPException(status_code=400, detail=f"Invalid purpose: {purpose}. Use 'ap' or 'osp'.")
+    if purpose not in ("ap", "osp", "vetter"):
+        raise HTTPException(status_code=400, detail=f"Invalid purpose: {purpose}. Use 'ap', 'osp', or 'vetter'.")
 
-    if purpose == "osp" or principal.is_system_admin:
+    if purpose in ("osp", "vetter") or principal.is_system_admin:
         orgs = (
             db.query(Organization.id, Organization.name, Organization.aid)
             .filter(Organization.enabled == True)  # noqa: E712
@@ -287,9 +289,9 @@ async def list_organization_names(
             .all()
         )
 
-    # AID is only exposed for 'ap' purpose (needed for recipient-org selection
-    # in credential edge UI). OSP purpose returns id + name only.
-    include_aid = purpose == "ap"
+    # AID is exposed for 'ap' and 'vetter' purposes (needed for recipient-org
+    # selection in credential edge UI and vetter cert UI). OSP returns id + name only.
+    include_aid = purpose in ("ap", "vetter")
     return OrganizationNameListResponse(
         organizations=[
             OrganizationNameResponse(
