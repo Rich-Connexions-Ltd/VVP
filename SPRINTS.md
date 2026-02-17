@@ -58,7 +58,8 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 68 | KERI Agent Service Extraction | COMPLETE | Sprint 33, 67 |
 | 68b | Issuer KERI Agent Client Migration | COMPLETE | Sprint 68 |
 | 68c | Complete Issuer KERI Decoupling & CI/CD Split | COMPLETE | Sprint 68b |
-| 69 | Ephemeral LMDB & Zero-Downtime KERI Deploys | TODO | Sprint 68c |
+| 69 | Ephemeral LMDB & Zero-Downtime KERI Deploys | COMPLETE | Sprint 68c |
+| 70 | Automatic Witness Re-Publishing on Startup | COMPLETE | Sprint 69 |
 
 ---
 
@@ -5405,7 +5406,7 @@ Remove the 3-phase LMDB stop sequence from the KERI Agent deploy.
 
 ## Sprint 70: Automatic Witness Re-Publishing on Startup
 
-**Status:** Implementation Complete — Pending Deploy
+**Status:** COMPLETE ✅
 **Goal:** Make the system fully self-healing after any redeploy by automatically re-publishing all identity KELs to witnesses at the end of StateBuilder's rebuild phase.
 
 ### Why This Matters
@@ -5415,34 +5416,38 @@ After Sprint 69 (ephemeral LMDB) and the ephemeral witness storage fix, all pers
 - Witnesses start with fresh LMDB (only their own inception event) ✅
 - But witnesses don't have the events they need to serve OOBIs for existing identities ❌
 
-This means OOBI resolution for previously-created identities fails until someone explicitly publishes to witnesses. Currently this requires a manual re-bootstrap. Sprint 70 closes this gap by adding automatic witness re-publishing to the StateBuilder's rebuild lifecycle.
+Sprint 70 closes this gap by adding automatic witness re-publishing to the StateBuilder's rebuild lifecycle.
 
 ### Deliverables
 
-- [x] **Phase 6 in StateBuilder** — Added `_publish_to_witnesses()` method with concurrent `asyncio.gather`, seed-based identity filtering
-- [x] **RebuildReport extension** — Added `witnesses_published` count and `witness_publish_seconds` timing
+- [x] **Phase 6 in StateBuilder** — `_publish_to_witnesses()` with concurrent `asyncio.gather`, seed-based identity filtering
+- [x] **RebuildReport extension** — `witnesses_published` count and `witness_publish_seconds` timing
+- [x] **Phase 2 receipt distribution** — keripy-proven rct event approach with -B WitnessIdxSigs for `fullyWitnessed()`
+- [x] **Inception cache** — Uses `hab.iserder.saidb` to bypass LMDB sn=0 corruption after registry/credential anchoring
 - [x] **Graceful degradation** — Failures logged as warnings, startup continues regardless
-- [x] **Tests** — 6 new tests: report formatting, no-witness skip, publish success, failure resilience, concurrency (131 total)
-- [ ] **Knowledge updates** — Update architecture.md, deployment.md to document the self-healing flow
+- [x] **Tests** — 8 new tests (133 total): witness receipt distribution, HTTP simulation, report formatting, publish success/failure
+- [x] **Knowledge updates** — architecture.md, deployment.md updated
 
 ### Technical Notes
 
-- Uses existing `WitnessPublisher.publish_oobi()` — no new witness interaction code needed
-- Uses existing `IssuerIdentityManager.get_kel_bytes()` to serialize KEL for each identity
+- Two-phase witness publishing: Phase 1 sends inception to `/receipts`, Phase 2 distributes receipt event with all witness indexed sigs to root `/` endpoint
+- Phase 2 uses the keripy-proven `eventing.receipt()` + `eventing.messagize(serder, wigers)` approach from `test_witness.py`
+- `/publish` endpoint uses `get_inception_msg()` (not `get_kel_bytes()`) to avoid LMDB sn=0 corruption
+- Inception cache in StateBuilder captured right after `makeHab()`, before registry/credential ops modify LMDB
 - Publishing is idempotent — witnesses accept or ignore duplicate events
-- Threshold check (2/3 witnesses) logged but not enforced during startup (witnesses may be starting concurrently)
-- Only publishes identities that have witness AIDs configured (skip internal/mock identities that don't need witnesses)
+- Only publishes identities from seed store (skip keripy internals like Habery signator)
+- Verified: 69/69 identities published in 2.1s, all 3 witnesses return OOBI 200
 
 ### Dependencies
 
 - Sprint 69 (Ephemeral LMDB & Zero-Downtime KERI Deploys)
 
-### Exit Criteria
+### Exit Criteria — All Met
 
-- After full redeploy (KERI Agent + witnesses), all previously-created identities are discoverable via witness OOBI resolution without manual intervention
-- StateBuilder logs show witness publishing phase with timing
-- No startup failures if witnesses are temporarily unreachable
-- All existing tests pass (no regressions)
-- New tests cover the witness publishing phase
+- [x] After full redeploy, all identities discoverable via witness OOBI resolution without manual intervention
+- [x] StateBuilder logs show witness publishing phase with timing (69/69, 2.1s)
+- [x] No startup failures if witnesses are temporarily unreachable
+- [x] All existing tests pass (133 keri-agent + 820 issuer + 1844 verifier)
+- [x] New tests cover Phase 2 receipt distribution and HTTP simulation
 
 

@@ -1,5 +1,61 @@
 # VVP Verifier Change Log
 
+## Sprint 70: Automatic Witness Re-Publishing on Startup
+
+**Date:** 2026-02-17
+**Status:** Complete
+
+### Summary
+
+Makes the system fully self-healing after any redeploy. After Sprint 69 made LMDB ephemeral, witnesses would lose identity events on restart, causing OOBI resolution failures. Sprint 70 adds automatic witness re-publishing as the final phase of `StateBuilder.rebuild()`, so all identity inception events are pushed to witnesses with full Phase 2 receipt distribution (fullyWitnessed) on every container start.
+
+133 keri-agent tests + 820 issuer tests + 1844 verifier tests pass. Verified: 69/69 identities published to 3 witnesses in 2.1s, all OOBI endpoints return 200.
+
+### Key Changes
+
+- **Witness re-publishing in StateBuilder** — `_publish_to_witnesses()` phase added after `_verify_state()`, concurrent via `asyncio.gather`, filters to seeded identities with witnesses
+- **Phase 2 receipt distribution** — Rewrote from duplicate inception approach to keripy-proven rct event with -B WitnessIdxSigs (eventing.receipt + messagize), POSTs to root `/` endpoint (not `/receipts` which rejects rct events)
+- **Inception cache** — StateBuilder caches inception bytes right after `makeHab()` using `hab.iserder.saidb` (always icp SAID), before registry/credential operations corrupt LMDB sn=0
+- **`/publish` endpoint fix** — Changed from `get_kel_bytes()` to `get_inception_msg()` to avoid LMDB sn=0 corruption (ixn at fn=0 after registry anchoring)
+- **RebuildReport extension** — Added `witnesses_published` count and `witness_publish_seconds` timing
+- **Integration tests** — Two new tests proving Phase 2 receipt distribution stores all 3 wigers on each witness and fullyWitnessed() passes
+
+### Bug Fixes During Deploy Verification
+
+| Issue | Root Cause | Fix | Commit |
+|-------|-----------|-----|--------|
+| Witness escrow (not receipted) | Full KEL sent instead of inception | Use `get_inception_msg()` | 4f6a066 |
+| Receipt 502 (PUT not supported) | Azure proxy rejects PUT | POST CESR+JSON | 930b9ed |
+| Siger import error | Moved from `keri.core.coring` to `keri.core.indexing` | Fix import | a0f14e9 |
+| LMDB sn=0 corruption | `getKeLast(snKey(pre,0))` returns ixn after anchoring | Cache inception with `hab.iserder.saidb` | fdba4ff |
+| Phase 2 not firing | `_build_witness_receipt` receives ixn (no "b" field) | `/publish` uses `get_inception_msg()` | dd6fc4a |
+
+### Review Rounds
+
+| Round | Reviewer | Verdict | Key Findings |
+|-------|----------|---------|--------------|
+| R1 (plan) | Gemini 2.5 Pro | APPROVED | — |
+| R1 (code) | Gemini 2.5 Pro | CHANGES_REQUESTED | Deviation documentation [Low] |
+| R2 (code) | Gemini 2.5 Pro | APPROVED | Seed-based identity filtering noted as improvement |
+
+### Files Changed
+
+| File | Action | Summary |
+|------|--------|---------|
+| `services/keri-agent/app/keri/state_builder.py` | Modified | Added `_publish_to_witnesses()`, inception cache with `hab.iserder.saidb` |
+| `services/keri-agent/app/keri/witness.py` | Modified | Phase 2: rct event approach, `_build_witness_receipt()`, `_distribute_receipt()` |
+| `services/keri-agent/app/api/identity.py` | Modified | `/publish` uses `get_inception_msg()` not `get_kel_bytes()` |
+| `services/keri-agent/tests/test_witness_receipt_distribution.py` | Created | 2 integration tests (receipt approach + HTTP simulation) |
+| `services/keri-agent/tests/test_state_builder.py` | Modified | 6 new witness publishing tests |
+| `services/keri-agent/tests/conftest.py` | Modified | WitnessPublisher singleton reset in fixtures |
+| `SPRINTS.md` | Modified | Sprint 70 status, deliverables, exit criteria |
+| `knowledge/architecture.md` | Modified | Witness re-publishing in startup sequence |
+| `knowledge/deployment.md` | Modified | Step 4 in startup sequence |
+
+**Commits:** 5086c3e → dd6fc4a
+
+---
+
 ## Sprint 69: Ephemeral LMDB & Zero-Downtime KERI Deploys
 
 **Date:** 2026-02-16
