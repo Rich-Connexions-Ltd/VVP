@@ -476,12 +476,11 @@
     async function loadCertifications() {
       const container = document.getElementById('certList');
       try {
-        const res = await authFetch('/credential');
+        const res = await authFetch('/vetter-certifications');
         if (!res.ok) throw new Error('Failed to load');
         const data = await res.json();
 
-        // Filter for vetter certifications
-        const certs = data.credentials.filter(c => c.schema_said === VETTER_SCHEMA_SAID);
+        const certs = data.certifications || [];
 
         if (certs.length === 0) {
           container.innerHTML = '<p class="hint">No vetter certifications issued yet.</p>';
@@ -490,34 +489,24 @@
 
         let html = '';
         for (const cert of certs) {
-          // Fetch full details to get attributes
-          try {
-            const detailRes = await authFetch(`/credential/${cert.said}`);
-            if (detailRes.ok) {
-              const detail = await detailRes.json();
-              const attrs = detail.attributes || {};
-
-              html += `
-                <div class="cert-item">
-                  <h4>${attrs.name || 'Vetter Certification'}</h4>
-                  <div class="cert-meta">
-                    <span><strong>SAID:</strong> ${cert.said.substring(0, 16)}...</span>
-                    <span><strong>Status:</strong> ${cert.status}</span>
-                    <span><strong>Issued:</strong> ${new Date(cert.issuance_dt).toLocaleDateString()}</span>
-                  </div>
-                  <div class="cert-targets">
-                    ${(attrs.ecc_targets || []).map(t => `<span class="target-badge ecc">+${t}</span>`).join('')}
-                    ${(attrs.jurisdiction_targets || []).map(t => `<span class="target-badge jurisdiction">${t}</span>`).join('')}
-                  </div>
-                </div>
-              `;
-            }
-          } catch (e) {
-            console.error('Failed to load cert details:', e);
-          }
+          html += `
+            <div class="cert-item">
+              <h4>${cert.name || 'Vetter Certification'}</h4>
+              <div class="cert-meta">
+                <span><strong>SAID:</strong> ${cert.said.substring(0, 16)}...</span>
+                <span><strong>Org:</strong> ${cert.organization_name || cert.organization_id.substring(0, 8) + '...'}</span>
+                <span><strong>Status:</strong> ${cert.status}</span>
+                <span><strong>Issued:</strong> ${new Date(cert.created_at).toLocaleDateString()}</span>
+              </div>
+              <div class="cert-targets">
+                ${(cert.ecc_targets || []).map(t => `<span class="target-badge ecc">+${t}</span>`).join('')}
+                ${(cert.jurisdiction_targets || []).map(t => `<span class="target-badge jurisdiction">${t}</span>`).join('')}
+              </div>
+            </div>
+          `;
         }
 
-        container.innerHTML = html || '<p class="hint">No vetter certifications found.</p>';
+        container.innerHTML = html;
       } catch (e) {
         container.innerHTML = '<p class="hint">Unable to load certifications.</p>';
         console.error(e);
