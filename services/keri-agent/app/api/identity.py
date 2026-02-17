@@ -180,12 +180,15 @@ async def publish_identity(name: str):
         raise HTTPException(status_code=404, detail=f"Identity not found: {name}")
 
     try:
-        kel_bytes = await mgr.get_kel_bytes(info.aid)
+        # Use inception msg (not full KEL) — after registry/credential anchoring,
+        # getKelIter can return ixn at fn=0 instead of icp, which breaks Phase 2
+        # receipt distribution (ixn events have no witness list in "b" field).
+        inception_bytes = await mgr.get_inception_msg(info.aid)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
     publisher = get_witness_publisher()
-    result = await publisher.publish_oobi(info.aid, kel_bytes)
+    result = await publisher.publish_oobi(info.aid, inception_bytes)
 
     return {
         "aid": info.aid,

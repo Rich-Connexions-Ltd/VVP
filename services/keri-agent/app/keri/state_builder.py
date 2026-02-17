@@ -110,13 +110,12 @@ class KeriStateBuilder:
                 )
 
                 # Cache inception event bytes NOW, before registry/credential
-                # operations add interaction events that corrupt getKeLast(sn=0)
+                # operations add interaction events that corrupt getKeLast(sn=0).
+                # Use hab.iserder.saidb (always the icp SAID) instead of
+                # getKeLast(snKey) which is vulnerable to LMDB sn=0 corruption.
                 try:
-                    from keri.db import dbing
                     pre_bytes = hab.pre.encode("utf-8")
-                    dig = bytes(identity_mgr.hby.db.getKeLast(
-                        dbing.snKey(pre_bytes, 0)
-                    ))
+                    dig = hab.iserder.saidb
                     inception_msg = bytes(identity_mgr.hby.db.cloneEvtMsg(
                         pre=pre_bytes, fn=0, dig=dig
                     ))
