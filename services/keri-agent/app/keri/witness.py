@@ -20,6 +20,7 @@ import httpx
 from keri import kering
 from keri.core import coring, serdering
 from keri.core.counting import Counter, Codens
+from keri.core.indexing import Siger
 
 from app.config import (
     WITNESS_IURLS,
@@ -275,7 +276,7 @@ class WitnessPublisher:
                     wit_pre = verfer.qb64
                     if wit_pre in wits:
                         index = wits.index(wit_pre)
-                        wiger = coring.Siger(
+                        wiger = Siger(
                             raw=cigar.raw, index=index, verfer=verfer
                         )
                         wigers.append(wiger)
