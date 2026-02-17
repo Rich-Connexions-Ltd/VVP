@@ -113,7 +113,7 @@ The system consists of four services plus shared infrastructure:
 | `app/api/` | API routers (identity, registry, credential, dossier, vvp, bootstrap, health, seeds) |
 | `app/keri/` | KERI managers (identity, registry, issuer, witness, persistence) |
 | `app/keri/seed_store.py` | SeedStore class — persists seeds to PostgreSQL with idempotent upserts (Sprint 69) |
-| `app/keri/state_builder.py` | KeriStateBuilder — deterministic LMDB rebuild from PG seeds (Sprint 69) |
+| `app/keri/state_builder.py` | KeriStateBuilder — deterministic LMDB rebuild from PG seeds (Sprint 69) + witness re-publishing (Sprint 70) |
 | `app/dossier/` | DossierBuilder (DFS edge walk with direct KERI access) |
 | `app/vvp/` | VVP attestation (PASSporT signing, header creation, card claim) |
 | `app/mock_vlei.py` | Mock vLEI bootstrap (creates trust chain identities + credentials) |
@@ -262,7 +262,11 @@ Container starts
            → Create ACDC, TEL issuance event, KEL anchor
            → Verify SAID matches expected_said
         → _verify_state(): count check (identities, registries, credentials)
-     → Returns RebuildReport with timing, counts, and any errors
+        → _publish_to_witnesses(): re-publish all identity KELs (Sprint 70)
+           → Filter seeded identities with witnesses (skip signator/internal)
+           → Concurrent publish via asyncio.gather
+           → Non-fatal: log failures, continue startup
+     → Returns RebuildReport with timing, counts, witness stats, and any errors
 
   4. Mock vLEI init (if MOCK_VLEI_ENABLED)
      → Creates trust chain identities + credentials

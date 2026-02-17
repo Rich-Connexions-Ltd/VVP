@@ -5,7 +5,9 @@ data stored in PostgreSQL. Each container starts with fresh local LMDB
 and replays all operations to recreate identical cryptographic state.
 
 Sprint 69: Ephemeral LMDB & Zero-Downtime KERI Deploys.
+Sprint 70: Automatic witness re-publishing on startup.
 """
+import asyncio
 import json
 import logging
 import time
@@ -25,6 +27,8 @@ class RebuildReport:
     rotations_replayed: int = 0
     registries_rebuilt: int = 0
     credentials_rebuilt: int = 0
+    witnesses_published: int = 0
+    witness_publish_seconds: float = 0.0
     errors: list[str] = field(default_factory=list)
 
     def __str__(self) -> str:
@@ -34,6 +38,7 @@ class RebuildReport:
             f"{self.rotations_replayed} rotations",
             f"{self.registries_rebuilt} registries",
             f"{self.credentials_rebuilt} credentials",
+            f"{self.witnesses_published} witness publications ({self.witness_publish_seconds:.1f}s)",
         ]
         if self.errors:
             parts.append(f"{len(self.errors)} errors")
@@ -54,6 +59,7 @@ class KeriStateBuilder:
             report.registries_rebuilt = await self._rebuild_registries(report)
             report.credentials_rebuilt = await self._rebuild_credentials(report)
             await self._verify_state(report)
+            report.witnesses_published = await self._publish_to_witnesses(report)
         except Exception as e:
             report.errors.append(f"Rebuild failed: {e}")
             log.error(f"State rebuild failed: {e}")
@@ -401,3 +407,96 @@ class KeriStateBuilder:
             f"{report.credentials_rebuilt} credentials, "
             f"{len(report.errors)} errors"
         )
+
+    async def _publish_to_witnesses(self, report: RebuildReport) -> int:
+        """Publish all rebuilt identity KELs to witnesses.
+
+        Iterates in-memory hby.habs, filters to identities with witnesses,
+        and publishes their KELs concurrently via asyncio.gather. Failures
+        are logged but do not prevent startup.
+        """
+        from app.keri.identity import get_identity_manager
+        from app.keri.witness import get_witness_publisher
+
+        start = time.monotonic()
+        identity_mgr = await get_identity_manager()
+        publisher = get_witness_publisher()
+
+        # Only publish identities created from seeds (skip keripy internals
+        # like the Habery signator which also has witnesses configured)
+        seed_store = get_seed_store()
+        seeded_aids = {s.expected_aid for s in seed_store.get_all_identity_seeds()}
+
+        habs_with_witnesses = []
+        for pre, hab in identity_mgr.hby.habs.items():
+            if pre not in seeded_aids:
+                continue
+            if hab.kever and hab.kever.wits:
+                habs_with_witnesses.append(hab)
+
+        if not habs_with_witnesses:
+            log.info("No identities with witnesses to publish")
+            report.witness_publish_seconds = time.monotonic() - start
+            return 0
+
+        log.info(
+            f"Publishing {len(habs_with_witnesses)} identities to witnesses..."
+        )
+
+        async def _publish_one(hab):
+            """Publish a single identity's KEL to witnesses."""
+            aid = hab.pre
+            try:
+                kel_bytes = await identity_mgr.get_kel_bytes(aid)
+                result = await publisher.publish_oobi(aid, kel_bytes)
+                if result.threshold_met:
+                    log.info(
+                        f"Published {hab.name} ({aid[:16]}...) to "
+                        f"{result.success_count}/{result.total_count} witnesses"
+                    )
+                    return True
+                else:
+                    log.warning(
+                        f"Witness publish below threshold for {hab.name} "
+                        f"({aid[:16]}...): {result.success_count}/{result.total_count}"
+                    )
+                    for wr in result.witnesses:
+                        if not wr.success:
+                            log.warning(
+                                f"  Witness {wr.url} failed: {wr.error}"
+                            )
+                    return result.success_count > 0
+            except Exception as e:
+                log.warning(
+                    f"Failed to publish {hab.name} ({aid[:16]}...) "
+                    f"to witnesses: {e}"
+                )
+                report.errors.append(
+                    f"Witness publish failed for {hab.name}: {e}"
+                )
+                return False
+
+        results = await asyncio.gather(
+            *[_publish_one(hab) for hab in habs_with_witnesses],
+            return_exceptions=True,
+        )
+
+        count = 0
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                hab = habs_with_witnesses[i]
+                log.warning(
+                    f"Witness publish exception for {hab.name}: {result}"
+                )
+                report.errors.append(
+                    f"Witness publish exception for {hab.name}: {result}"
+                )
+            elif result:
+                count += 1
+
+        report.witness_publish_seconds = time.monotonic() - start
+        log.info(
+            f"Witness publishing complete: {count}/{len(habs_with_witnesses)} "
+            f"identities in {report.witness_publish_seconds:.1f}s"
+        )
+        return count

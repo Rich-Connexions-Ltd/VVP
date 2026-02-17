@@ -57,8 +57,9 @@ This eliminates the LMDB lock contention that previously prevented concurrent re
 1. Container starts with empty LMDB at `VVP_KERI_AGENT_DATA_DIR` (tmpfs)
 2. Reads key seeds from PostgreSQL (`VVP_KERI_AGENT_DATABASE_URL`)
 3. Deterministically rebuilds Habery, registries, and credential state from seeds
-4. Passes `/healthz` readiness check
-5. Old revision is drained and stopped
+4. **Re-publishes all identity KELs to witnesses** (Sprint 70) — concurrently via `asyncio.gather`, non-fatal if witnesses are still starting
+5. Passes `/healthz` readiness check
+6. Old revision is drained and stopped
 
 **Seed management:**
 - Key seeds are generated once (on first identity creation) and persisted to PostgreSQL

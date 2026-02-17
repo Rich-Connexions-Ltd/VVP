@@ -327,3 +327,196 @@ class TestCredentialRebuild:
 
         assert report.credentials_rebuilt >= 1
         assert len(report.errors) == 0, f"Errors: {report.errors}"
+
+
+class TestWitnessPublishing:
+    """Tests for witness re-publishing during rebuild (Sprint 70)."""
+
+    def test_report_includes_witness_fields(self):
+        """RebuildReport should include witness publishing stats."""
+        report = RebuildReport(
+            witnesses_published=2,
+            witness_publish_seconds=1.5,
+        )
+        s = str(report)
+        assert "2 witness publications" in s
+        assert "1.5s" in s
+
+    def test_report_zero_witnesses(self):
+        """RebuildReport with no witness publishing should show 0."""
+        report = RebuildReport()
+        assert report.witnesses_published == 0
+        assert report.witness_publish_seconds == 0.0
+        s = str(report)
+        assert "0 witness publications" in s
+
+    @pytest.mark.asyncio
+    async def test_publish_skips_identities_without_witnesses(self, rebuild_env):
+        """Identities created without witnesses should not trigger publishing."""
+        from app.keri.identity import get_identity_manager
+        from unittest.mock import AsyncMock, patch
+
+        identity_mgr = await get_identity_manager()
+
+        # Create identity directly via makeHab with wits=[] to bypass
+        # create_identity's default witness fallback ([] is falsy)
+        hab = identity_mgr.hby.makeHab(
+            name="no-witness-id",
+            transferable=True,
+            icount=1,
+            isith="1",
+            ncount=1,
+            nsith="1",
+            wits=[],
+            toad=0,
+        )
+        seed_store = get_seed_store()
+        seed_store.save_identity_seed(
+            name="no-witness-id",
+            expected_aid=hab.pre,
+            transferable=True,
+            icount=1,
+            isith="1",
+            ncount=1,
+            nsith="1",
+            witness_aids=[],
+            toad=0,
+        )
+
+        mock_publisher = AsyncMock()
+        with patch(
+            "app.keri.witness.get_witness_publisher",
+            return_value=mock_publisher,
+        ):
+            builder = KeriStateBuilder()
+            report = await builder.rebuild()
+
+        # publish_oobi should never be called — no habs have witnesses
+        mock_publisher.publish_oobi.assert_not_called()
+        assert report.witnesses_published == 0
+
+    @pytest.mark.asyncio
+    async def test_publish_called_for_identities_with_witnesses(self, rebuild_env):
+        """Identities with witnesses should be published after rebuild."""
+        from app.keri.identity import get_identity_manager
+        from app.keri.witness import PublishResult, WitnessResult
+        from unittest.mock import AsyncMock, patch
+
+        identity_mgr = await get_identity_manager()
+
+        # Create identity with fake witness AIDs
+        fake_witness_aids = ["BIKKuvBwpmDVA4Ds-EpL5bt9OqPzWPja2LigFYZN2YfX"]
+        await identity_mgr.create_identity(
+            name="witnessed-id",
+            transferable=True,
+            icount=1,
+            isith="1",
+            ncount=1,
+            nsith="1",
+            witness_aids=fake_witness_aids,
+        )
+
+        mock_publisher = AsyncMock()
+        mock_publisher.publish_oobi.return_value = PublishResult(
+            aid="test",
+            success_count=1,
+            total_count=1,
+            threshold_met=True,
+            witnesses=[WitnessResult(url="http://witness:5642", success=True)],
+        )
+
+        with patch(
+            "app.keri.witness.get_witness_publisher",
+            return_value=mock_publisher,
+        ):
+            builder = KeriStateBuilder()
+            report = await builder.rebuild()
+
+        # publish_oobi should be called for the witnessed identity
+        assert mock_publisher.publish_oobi.call_count >= 1
+        assert report.witnesses_published >= 1
+        assert report.witness_publish_seconds > 0
+
+    @pytest.mark.asyncio
+    async def test_publish_failure_does_not_block_startup(self, rebuild_env):
+        """Witness publish failures should not prevent rebuild from completing."""
+        from app.keri.identity import get_identity_manager
+        from unittest.mock import AsyncMock, patch
+
+        identity_mgr = await get_identity_manager()
+
+        fake_witness_aids = ["BIKKuvBwpmDVA4Ds-EpL5bt9OqPzWPja2LigFYZN2YfX"]
+        await identity_mgr.create_identity(
+            name="fail-witness-id",
+            transferable=True,
+            icount=1,
+            isith="1",
+            ncount=1,
+            nsith="1",
+            witness_aids=fake_witness_aids,
+        )
+
+        mock_publisher = AsyncMock()
+        mock_publisher.publish_oobi.side_effect = Exception("Connection refused")
+
+        with patch(
+            "app.keri.witness.get_witness_publisher",
+            return_value=mock_publisher,
+        ):
+            builder = KeriStateBuilder()
+            report = await builder.rebuild()
+
+        # Rebuild should complete despite witness failure
+        assert report.identities_rebuilt >= 1
+        assert report.witnesses_published == 0
+        # Error should be logged in report
+        witness_errors = [e for e in report.errors if "Witness publish" in e]
+        assert len(witness_errors) >= 1
+
+    @pytest.mark.asyncio
+    async def test_publish_concurrent_multiple_identities(self, rebuild_env):
+        """Multiple identities with witnesses should be published concurrently."""
+        from app.keri.identity import get_identity_manager
+        from app.keri.witness import PublishResult, WitnessResult
+        from unittest.mock import AsyncMock, patch
+
+        identity_mgr = await get_identity_manager()
+
+        fake_witness_aids = ["BIKKuvBwpmDVA4Ds-EpL5bt9OqPzWPja2LigFYZN2YfX"]
+        for name in ["concurrent-a", "concurrent-b"]:
+            await identity_mgr.create_identity(
+                name=name,
+                transferable=True,
+                icount=1,
+                isith="1",
+                ncount=1,
+                nsith="1",
+                witness_aids=fake_witness_aids,
+            )
+
+        call_count = 0
+
+        async def mock_publish(aid, kel_bytes):
+            nonlocal call_count
+            call_count += 1
+            return PublishResult(
+                aid=aid,
+                success_count=1,
+                total_count=1,
+                threshold_met=True,
+                witnesses=[WitnessResult(url="http://witness:5642", success=True)],
+            )
+
+        mock_publisher = AsyncMock()
+        mock_publisher.publish_oobi = mock_publish
+
+        with patch(
+            "app.keri.witness.get_witness_publisher",
+            return_value=mock_publisher,
+        ):
+            builder = KeriStateBuilder()
+            report = await builder.rebuild()
+
+        # Both witnessed identities should be published
+        assert call_count >= 2
+        assert report.witnesses_published >= 2
