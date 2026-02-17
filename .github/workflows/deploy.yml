@@ -578,7 +578,8 @@ jobs:
         run: |
           # KERI Agent has internal-only ingress — not reachable from GitHub Actions.
           # Instead, poll the revision's running state via Azure CLI.
-          # Sprint 69: Ephemeral LMDB rebuild is fast (~10-30s). Poll for 2 minutes.
+          # Sprint 70: Rebuild includes 69+ identities, registries, credentials,
+          # and witness publishing (~53s rebuild + ~30s startup). Poll for 4 minutes.
           RG="${{ secrets.AZURE_RG }}"
           NEW_REV=$(az containerapp show \
             --name vvp-keri-agent \
@@ -586,7 +587,7 @@ jobs:
             --query "properties.latestRevisionName" -o tsv)
           echo "Monitoring revision: $NEW_REV"
 
-          INTERVALS=(10 10 10 10 15 15 15 15)
+          INTERVALS=(15 15 15 15 20 20 20 20 30 30)
           TOTAL=${#INTERVALS[@]}
           for i in "${!INTERVALS[@]}"; do
             ATTEMPT=$((i + 1))
@@ -620,7 +621,7 @@ jobs:
 
             sleep "${INTERVALS[$i]}"
           done
-          echo "::error::KERI Agent did not reach Running state within 2 minutes"
+          echo "::error::KERI Agent did not reach Running state within 4 minutes"
           az containerapp revision show \
             --name vvp-keri-agent \
             --resource-group "$RG" \
