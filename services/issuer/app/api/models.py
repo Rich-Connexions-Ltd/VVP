@@ -280,7 +280,7 @@ class WebOfTrustRegistryResponse(BaseModel):
 class IssueCredentialRequest(BaseModel):
     """Request to issue a new credential."""
 
-    registry_name: str = Field(..., description="Registry name to track credential")
+    registry_name: Optional[str] = Field(None, description="Registry name (auto-resolved from org if omitted)")
     schema_said: str = Field(..., description="Schema SAID for validation")
     attributes: dict = Field(..., description="Credential attributes (a section)")
     recipient_aid: Optional[str] = Field(None, description="Recipient AID if targeted")

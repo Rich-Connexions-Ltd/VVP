@@ -294,10 +294,13 @@ async def issue_credential(
                        "KERI Agent may not have this identity.",
             )
 
+        # Auto-resolve registry name from identity if not explicitly provided
+        effective_registry = registry_name or f"{identity.name}-registry"
+
         # Issue credential via KERI Agent
         agent_cred = await client.issue_credential(AgentIssueCredentialRequest(
             identity_name=identity.name,
-            registry_name=registry_name or "",
+            registry_name=effective_registry,
             schema_said=request.schema_said,
             attributes=request.attributes,
             recipient_aid=request.recipient_aid,
