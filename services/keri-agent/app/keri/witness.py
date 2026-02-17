@@ -108,19 +108,20 @@ class WitnessPublisher:
                 else:
                     results.append(result)
 
-            # Phase 2: Distribute all receipts to all witnesses
+            # Phase 2: Distribute each witness's receipt to the OTHER witnesses
+            # so each witness accumulates enough receipts to satisfy TOAD.
             if len(receipts) > 1:
-                log.info(f"Distributing {len(receipts)} receipts ({sum(len(r) for r in receipts.values())} bytes) to witnesses")
-                all_receipts = bytearray()
-                for rct in receipts.values():
-                    all_receipts.extend(rct)
+                total_bytes = sum(len(r) for r in receipts.values())
+                log.info(f"Distributing {len(receipts)} receipts ({total_bytes} bytes) to witnesses")
 
-                for url in receipts:
-                    try:
-                        await self._send_receipts(client, url, bytes(all_receipts))
-                        log.info(f"Distributed receipts to {url}")
-                    except Exception as e:
-                        log.warning(f"Failed to distribute receipts to {url}: {e}")
+                for source_url, receipt in receipts.items():
+                    for target_url in self._witness_urls:
+                        if target_url == source_url:
+                            continue  # Don't send receipt back to originator
+                        try:
+                            await self._send_receipt(client, target_url, receipt)
+                        except Exception as e:
+                            log.warning(f"Failed to distribute receipt to {target_url}: {e}")
 
         success_count = sum(1 for r in results if r.success)
 
@@ -208,19 +209,32 @@ class WitnessPublisher:
             log.error(f"Failed to publish to {url}: {e}")
             return (WitnessResult(url=url, success=False, error=str(e)), None)
 
-    async def _send_receipts(
+    async def _send_receipt(
         self,
         client: httpx.AsyncClient,
         url: str,
         receipt_bytes: bytes,
     ) -> None:
-        """Send receipts to a witness."""
-        root_url = f"{url.rstrip('/')}"
-        headers = {"Content-Type": "application/cesr"}
+        """Send a single receipt to a witness via POST in CESR+JSON format.
 
-        response = await client.put(root_url, content=receipt_bytes, headers=headers)
+        The witness's HttpEnd.on_post expects application/cesr+json body
+        with a CESR-ATTACHMENT header. We split the receipt into its
+        serder (JSON body) and CESR signature attachment.
+        """
+        receipt_msg = bytearray(receipt_bytes)
+        rct_serder = serdering.SerderKERI(raw=receipt_msg)
+        rct_json = bytes(rct_serder.raw)
+        rct_attachment = bytes(receipt_msg[rct_serder.size:])
+
+        root_url = f"{url.rstrip('/')}/"
+        headers = {
+            "Content-Type": CESR_CONTENT_TYPE,
+            CESR_ATTACHMENT_HEADER: rct_attachment.decode("utf-8"),
+        }
+
+        response = await client.post(root_url, content=rct_json, headers=headers)
         if response.status_code not in (200, 202, 204):
-            log.warning(f"Failed to distribute receipts to {url}: HTTP {response.status_code}")
+            log.warning(f"Failed to distribute receipt to {url}: HTTP {response.status_code}")
 
 
 # Module-level singleton
