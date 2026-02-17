@@ -246,14 +246,11 @@ class WitnessPublisher:
         msg = bytearray(inception_msg)
         serder = serdering.SerderKERI(raw=msg)
         wits = serder.ked.get("b", [])
-        log.info(
-            f"Enhanced inception: ilk={serder.ked.get('t')}, "
-            f"pre={serder.ked.get('i', '')[:16]}..., "
-            f"b_field_len={len(wits)}, bt={serder.ked.get('bt')}, "
-            f"msg_size={len(inception_msg)}"
-        )
         if not wits:
-            log.warning("Inception event has no witnesses (b field)")
+            log.warning(
+                f"Inception event has no witnesses (b field), "
+                f"ilk={serder.ked.get('t')}"
+            )
             return None
 
         # Original controller signature attachment
@@ -263,10 +260,6 @@ class WitnessPublisher:
         wigers = []
         for url, receipt_bytes in receipts.items():
             try:
-                log.info(
-                    f"Parsing receipt from {url}: {len(receipt_bytes)} bytes, "
-                    f"first 80: {receipt_bytes[:80]}"
-                )
                 rct_msg = bytearray(receipt_bytes)
                 rct_serder = serdering.SerderKERI(raw=rct_msg)
                 rct_atc = bytearray(rct_msg[rct_serder.size:])

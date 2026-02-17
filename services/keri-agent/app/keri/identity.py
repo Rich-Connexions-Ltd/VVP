@@ -325,7 +325,7 @@ class IssuerIdentityManager:
     async def get_inception_msg(self, aid: str) -> bytes:
         """Get only the inception event message for an identity.
 
-        Returns the inception event (fn=0) with its controller signature
+        Returns the inception event (sn=0) with its controller signature
         in CESR format. This is the minimum needed for witness receipting
         and OOBI resolution. Unlike get_kel_bytes(), this excludes
         subsequent interaction/rotation events that would confuse the
@@ -338,14 +338,15 @@ class IssuerIdentityManager:
 
             pre = aid.encode() if isinstance(aid, str) else aid
 
-            # Get only the first event (inception, fn=0)
-            kel_iter = self.hby.db.getKelIter(pre)
-            try:
-                dig = next(kel_iter)
-            except StopIteration:
+            # Get the inception event digest directly at sn=0 using snKey
+            # (getKelIter may not return sn=0 first after full state rebuild)
+            from keri.db.dbing import snKey
+            sn0_key = snKey(pre=pre, sn=0)
+            dig = self.hby.db.getKeLast(key=sn0_key)
+            if dig is None:
                 raise ValueError(f"No inception event for {aid}")
 
-            evt_msg = self.hby.db.cloneEvtMsg(pre=pre, fn=0, dig=dig)
+            evt_msg = self.hby.db.cloneEvtMsg(pre=pre, fn=0, dig=bytes(dig))
             log.info(f"Inception msg for {aid[:16]}...: {len(evt_msg)} bytes")
             return bytes(evt_msg)
 
