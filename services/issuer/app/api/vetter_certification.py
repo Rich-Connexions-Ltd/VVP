@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.auth.api_key import Principal
-from app.auth.roles import require_admin, require_auth
+from app.auth.roles import require_auth, check_credential_admin_role
 from app.db.session import get_db
 from app.db.models import ManagedCredential, Organization
 from app.api.models import (
@@ -33,13 +33,14 @@ router = APIRouter(tags=["vetter-certifications"])
 @router.post("/vetter-certifications", response_model=VetterCertificationResponse)
 async def create_vetter_certification(
     body: VetterCertificationCreateRequest,
-    principal: Principal = require_admin,
+    principal: Principal = require_auth,
     db: Session = Depends(get_db),
 ) -> VetterCertificationResponse:
     """Issue a VetterCertification credential for an organization.
 
-    **Authentication:** Requires `issuer:admin` role.
+    **Authentication:** Requires `issuer:admin` or `org:administrator` role.
     """
+    check_credential_admin_role(principal)
     result = await issue_vetter_certification(
         db=db,
         organization_id=body.organization_id,
@@ -54,13 +55,14 @@ async def create_vetter_certification(
 @router.get("/vetter-certifications", response_model=VetterCertificationListResponse)
 async def list_vetter_certifications(
     organization_id: str = Query(None, description="Filter by organization ID"),
-    principal: Principal = require_admin,
+    principal: Principal = require_auth,
     db: Session = Depends(get_db),
 ) -> VetterCertificationListResponse:
     """List VetterCertification credentials.
 
-    **Authentication:** Requires `issuer:admin` role.
+    **Authentication:** Requires `issuer:admin` or `org:administrator` role.
     """
+    check_credential_admin_role(principal)
     query = db.query(ManagedCredential).filter(
         ManagedCredential.schema_said == VETTER_CERT_SCHEMA_SAID
     )
@@ -157,13 +159,14 @@ async def get_vetter_certification(
 )
 async def delete_vetter_certification(
     said: str,
-    principal: Principal = require_admin,
+    principal: Principal = require_auth,
     db: Session = Depends(get_db),
 ) -> VetterCertificationResponse:
     """Revoke a VetterCertification.
 
-    **Authentication:** Requires `issuer:admin` role.
+    **Authentication:** Requires `issuer:admin` or `org:administrator` role.
     """
+    check_credential_admin_role(principal)
     result = await revoke_vetter_certification(db=db, said=said)
     return VetterCertificationResponse(**result)
 
