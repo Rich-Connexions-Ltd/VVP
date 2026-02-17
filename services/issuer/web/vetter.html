@@ -155,13 +155,6 @@
 
       <form id="issueForm">
         <div class="form-group">
-          <label for="registry">Registry</label>
-          <select id="registry" required>
-            <option value="">Loading registries...</option>
-          </select>
-        </div>
-
-        <div class="form-group">
           <label for="vetterOrg">Vetter Organization (recipient)</label>
           <select id="vetterOrg" required>
             <option value="">Loading organizations...</option>
@@ -421,26 +414,6 @@
       return Array.from(selector.querySelectorAll('input:checked')).map(cb => cb.value);
     }
 
-    // Load registries
-    async function loadRegistries() {
-      const select = document.getElementById('registry');
-      try {
-        const res = await authFetch('/registry');
-        if (!res.ok) throw new Error('Failed to load');
-        const data = await res.json();
-
-        select.innerHTML = '<option value="">Select a registry...</option>';
-        for (const reg of data.registries) {
-          const option = document.createElement('option');
-          option.value = reg.name;
-          option.textContent = `${reg.name} (${reg.registry_key.substring(0, 12)}...)`;
-          select.appendChild(option);
-        }
-      } catch (e) {
-        select.innerHTML = '<option value="">Unable to load registries</option>';
-      }
-    }
-
     // Load organizations for the recipient picker
     async function loadOrganizations() {
       const select = document.getElementById('vetterOrg');
@@ -606,7 +579,6 @@
     // Initialize
     buildSelector(document.getElementById('eccSelector'), E164_CODES, 'ecc');
     buildSelector(document.getElementById('jurisdictionSelector'), ISO_CODES, 'jurisdiction');
-    loadRegistries();
     loadOrganizations();
     loadCertifications();
   </script>
