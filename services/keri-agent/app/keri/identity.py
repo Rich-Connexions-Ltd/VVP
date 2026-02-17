@@ -322,6 +322,33 @@ class IssuerIdentityManager:
             log.info(f"KEL for {aid}: {fn + 1} events, {len(msg)} bytes")
             return bytes(msg)
 
+    async def get_inception_msg(self, aid: str) -> bytes:
+        """Get only the inception event message for an identity.
+
+        Returns the inception event (fn=0) with its controller signature
+        in CESR format. This is the minimum needed for witness receipting
+        and OOBI resolution. Unlike get_kel_bytes(), this excludes
+        subsequent interaction/rotation events that would confuse the
+        witness's framed parser.
+        """
+        async with self._lock:
+            hab = self.hby.habByPre(aid)
+            if hab is None:
+                raise ValueError(f"Identity not found: {aid}")
+
+            pre = aid.encode() if isinstance(aid, str) else aid
+
+            # Get only the first event (inception, fn=0)
+            kel_iter = self.hby.db.getKelIter(pre)
+            try:
+                dig = next(kel_iter)
+            except StopIteration:
+                raise ValueError(f"No inception event for {aid}")
+
+            evt_msg = self.hby.db.cloneEvtMsg(pre=pre, fn=0, dig=dig)
+            log.info(f"Inception msg for {aid[:16]}...: {len(evt_msg)} bytes")
+            return bytes(evt_msg)
+
     def _validate_rotation_threshold(
         self, next_key_count: int, next_threshold: str
     ) -> None:

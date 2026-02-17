@@ -444,11 +444,14 @@ class KeriStateBuilder:
         )
 
         async def _publish_one(hab):
-            """Publish a single identity's KEL to witnesses."""
+            """Publish a single identity's inception event to witnesses."""
             aid = hab.pre
             try:
-                kel_bytes = await identity_mgr.get_kel_bytes(aid)
-                result = await publisher.publish_oobi(aid, kel_bytes)
+                # Send only the inception event (not full KEL) to avoid
+                # confusing the witness's framed parser with subsequent
+                # interaction/rotation events after the controller signature.
+                inception_msg = await identity_mgr.get_inception_msg(aid)
+                result = await publisher.publish_oobi(aid, inception_msg)
                 if result.threshold_met:
                     log.info(
                         f"Published {hab.name} ({aid[:16]}...) to "
