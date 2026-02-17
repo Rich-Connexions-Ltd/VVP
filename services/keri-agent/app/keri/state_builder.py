@@ -48,6 +48,12 @@ class RebuildReport:
 class KeriStateBuilder:
     """Deterministically rebuilds all KERI state from PostgreSQL seeds."""
 
+    def __init__(self):
+        # Cache inception event bytes captured right after makeHab(),
+        # before registry/credential operations modify LMDB state.
+        # Maps AID prefix -> inception event bytes (CESR with sigs).
+        self._inception_cache: dict[str, bytes] = {}
+
     async def rebuild(self) -> RebuildReport:
         """Full rebuild sequence. Returns timing and count report."""
         report = RebuildReport()
@@ -102,6 +108,21 @@ class KeriStateBuilder:
                     wits=witness_aids,
                     toad=seed.toad,
                 )
+
+                # Cache inception event bytes NOW, before registry/credential
+                # operations add interaction events that corrupt getKeLast(sn=0)
+                try:
+                    from keri.db import dbing
+                    pre_bytes = hab.pre.encode("utf-8")
+                    dig = bytes(identity_mgr.hby.db.getKeLast(
+                        dbing.snKey(pre_bytes, 0)
+                    ))
+                    inception_msg = bytes(identity_mgr.hby.db.cloneEvtMsg(
+                        pre=pre_bytes, fn=0, dig=dig
+                    ))
+                    self._inception_cache[hab.pre] = inception_msg
+                except Exception as e:
+                    log.warning(f"Failed to cache inception for {seed.name}: {e}")
 
                 if hab.pre != seed.expected_aid:
                     report.errors.append(
@@ -447,10 +468,15 @@ class KeriStateBuilder:
             """Publish a single identity's inception event to witnesses."""
             aid = hab.pre
             try:
-                # Send only the inception event (not full KEL) to avoid
-                # confusing the witness's framed parser with subsequent
-                # interaction/rotation events after the controller signature.
-                inception_msg = await identity_mgr.get_inception_msg(aid)
+                # Use cached inception event captured during _rebuild_identities
+                # (before registry/credential ops modify LMDB sn=0 entries).
+                inception_msg = self._inception_cache.get(aid)
+                if inception_msg is None:
+                    log.warning(
+                        f"No cached inception for {aid[:16]}..., "
+                        f"falling back to LMDB lookup"
+                    )
+                    inception_msg = await identity_mgr.get_inception_msg(aid)
                 result = await publisher.publish_oobi(aid, inception_msg)
                 if result.threshold_met:
                     log.info(
