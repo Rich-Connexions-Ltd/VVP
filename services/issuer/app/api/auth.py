@@ -722,6 +722,7 @@ async def oauth_m365_callback(
     # Get state_id from cookie
     state_id = request.cookies.get(OAUTH_STATE_COOKIE_NAME)
     if not state_id:
+        log.warning("OAuth callback: state cookie missing from request")
         audit.log_access(
             action="oauth.m365.callback",
             principal_id="anonymous",
@@ -733,9 +734,11 @@ async def oauth_m365_callback(
 
     # Retrieve and delete state from server-side store (one-time use)
     oauth_state_store = get_oauth_state_store()
+    log.info(f"OAuth callback: looking up state_id={state_id[:8]}... (store has {oauth_state_store.state_count} entries)")
     oauth_state = await oauth_state_store.get_and_delete(state_id)
 
     if oauth_state is None:
+        log.warning(f"OAuth callback: state not found for state_id={state_id[:8]}... (store has {oauth_state_store.state_count} entries remaining)")
         audit.log_access(
             action="oauth.m365.callback",
             principal_id="anonymous",
