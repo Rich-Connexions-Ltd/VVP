@@ -41,9 +41,9 @@ This document describes how to deploy the VVP services (Issuer, Verifier, and Wi
 |-----------|---------------|---------|---------------|
 | Verifier | Container App | - | vvp-verifier.rcnx.io |
 | Issuer | Container App | Azure Files (issuerstorage) | vvp-issuer.rcnx.io |
-| Witness 1 (wan) | Container App | Azure Files (witness1storage) | vvp-witness1.rcnx.io |
-| Witness 2 (wil) | Container App | Azure Files (witness2storage) | vvp-witness2.rcnx.io |
-| Witness 3 (wes) | Container App | Azure Files (witness3storage) | vvp-witness3.rcnx.io |
+| Witness 1 (wan) | Container App | Ephemeral (deterministic salt) | vvp-witness1.rcnx.io |
+| Witness 2 (wil) | Container App | Ephemeral (deterministic salt) | vvp-witness2.rcnx.io |
+| Witness 3 (wes) | Container App | Ephemeral (deterministic salt) | vvp-witness3.rcnx.io |
 | API Keys | Key Vault (vvp-issuer-kv) | - | - |
 
 ---
@@ -207,8 +207,7 @@ az containerapp create --name vvp-witness3 --resource-group VVP --environment vv
 
 Then configure each via YAML with:
 - Command: `kli witness demo --name <wan|wil|wes> --tcp <port> --http <port>`
-- Environment: `KERI_DB_PATH=/data/witness`
-- Volume mount: `/data/witness` → witnessNstorage
+- Environment: `KERI_DB_PATH=/tmp/witness` (ephemeral — deterministic salts recreate same AID on restart)
 
 **Deterministic Witness AIDs:**
 - wan: `BBilc4-L3tFUnfM_wJr4S4OJanAv_VmF_dJNN6vkf2Ha`
@@ -286,7 +285,7 @@ az containerapp update --name vvp-issuer --resource-group VVP --min-replicas 0 -
 az containerapp update --name vvp-verifier --resource-group VVP --min-replicas 0
 ```
 
-**Note**: Witnesses and issuer must use `maxReplicas=1` due to LMDB single-writer requirement on SMB storage.
+**Note**: Witnesses and KERI Agent must use `maxReplicas=1`. Witnesses use ephemeral LMDB (deterministic salts recreate the same AID on restart). KERI Agent persists seeds to PostgreSQL and rebuilds LMDB state on startup.
 
 ### Admin API for Scaling
 

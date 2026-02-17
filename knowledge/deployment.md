@@ -409,7 +409,7 @@ az vm run-command invoke --resource-group VVP --name vvp-pbx \
 | `WITNESS_NAME` | *(set per container)* | Witness identity name |
 | `HTTP_PORT` | *(set per container)* | Witness HTTP port |
 | `TCP_PORT` | *(set per container)* | Witness TCP port |
-| `KERI_DB_PATH` | `/data/keri` | KERI database path |
+| `KERI_DB_PATH` | `/tmp/witness` | KERI database path (ephemeral — deterministic salts recreate same AID) |
 | `LOG_LEVEL` | `info` | Witness log level |
 
 ---

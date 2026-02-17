@@ -818,11 +818,30 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Deactivate old revisions
+        run: |
+          echo "Deactivating old revisions for ${{ matrix.witness.name }}..."
+          # List all active revisions and deactivate them before deploying.
+          # This prevents LMDB lock conflicts between old and new revisions.
+          REVISIONS=$(az containerapp revision list \
+            --name ${{ matrix.witness.name }} \
+            --resource-group ${{ secrets.AZURE_RG }} \
+            --query "[?properties.active].name" -o tsv)
+          for REV in $REVISIONS; do
+            echo "Deactivating revision: $REV"
+            az containerapp revision deactivate \
+              --name ${{ matrix.witness.name }} \
+              --resource-group ${{ secrets.AZURE_RG }} \
+              --revision "$REV" || true
+          done
+
       - name: Deploy witness
         run: |
           echo "Deploying ${{ matrix.witness.name }} with image: $WITNESS_IMAGE"
 
-          # Update the container app with the new image and environment variables
+          # Update the container app with the new image and environment variables.
+          # KERI_DB_PATH=/tmp/witness uses ephemeral container storage — witnesses
+          # use deterministic salts so they recreate the same AID on every restart.
           az containerapp update \
             --name ${{ matrix.witness.name }} \
             --resource-group ${{ secrets.AZURE_RG }} \
@@ -831,7 +850,7 @@ jobs:
               "WITNESS_NAME=${{ matrix.witness.witness_name }}" \
               "HTTP_PORT=${{ matrix.witness.http_port }}" \
               "TCP_PORT=${{ matrix.witness.tcp_port }}" \
-              "KERI_DB_PATH=/data/witness" \
+              "KERI_DB_PATH=/tmp/witness" \
               "GIT_SHA=${{ github.sha }}"
 
       - name: Wait for witness to be ready

@@ -61,7 +61,10 @@ def main():
     salt_qb64 = Salter(raw=salt_raw).qb64
     expected_aid = EXPECTED_AIDS[name]
 
-    # Persistent storage path: KERI_DB_PATH env var or default
+    # Storage path: KERI_DB_PATH env var or default (~/.keri).
+    # Production uses /tmp/witness (ephemeral) — deterministic salts ensure
+    # the same AID is recreated on every restart. Witnessed events are
+    # re-published by the KERI Agent's StateBuilder after bootstrap.
     db_path = os.environ.get("KERI_DB_PATH", "")
 
     logger.info("=== VVP Witness Startup ===")
