@@ -33,6 +33,7 @@ class EnvironmentConfig:
     issuer_url: str
     verifier_url: str
     api_key: str
+    admin_key: str | None = None
     azure_storage_connection_string: str | None = None
     org_id: str | None = None
 
@@ -54,14 +55,17 @@ def environment_config() -> EnvironmentConfig:
         VVP_ISSUER_URL: Issuer service URL. Default: http://localhost:8001
         VVP_VERIFIER_URL: Verifier service URL. Default: http://localhost:8000
         VVP_TEST_API_KEY: API key for authentication. Default: test-admin-key-12345
+        VVP_TEST_ADMIN_KEY: System admin API key (issuer:admin role). Default: VVP_TEST_API_KEY
         VVP_AZURE_STORAGE_CONNECTION_STRING: Azure Storage connection string (Azure mode only)
         VVP_TEST_ORG_ID: Organization ID for credential issuance (Sprint 67+)
     """
+    api_key = os.getenv("VVP_TEST_API_KEY", "test-admin-key-12345")
     return EnvironmentConfig(
         mode=os.getenv("VVP_TEST_MODE", "local"),
         issuer_url=os.getenv("VVP_ISSUER_URL", "http://localhost:8001"),
         verifier_url=os.getenv("VVP_VERIFIER_URL", "http://localhost:8000"),
-        api_key=os.getenv("VVP_TEST_API_KEY", "test-admin-key-12345"),
+        api_key=api_key,
+        admin_key=os.getenv("VVP_TEST_ADMIN_KEY", api_key),
         azure_storage_connection_string=os.getenv("VVP_AZURE_STORAGE_CONNECTION_STRING"),
         org_id=os.getenv("VVP_TEST_ORG_ID"),
     )
@@ -80,6 +84,24 @@ async def issuer_client(
         base_url=environment_config.issuer_url,
         api_key=environment_config.api_key,
         default_organization_id=environment_config.org_id,
+    )
+    yield client
+    await client.close()
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def admin_issuer_client(
+    environment_config: EnvironmentConfig,
+) -> AsyncGenerator[IssuerClient, None]:
+    """Create issuer API client with system admin key (issuer:admin role).
+
+    Used by tests that need to create/rotate identities, which require
+    issuer:admin permissions not available on org-scoped API keys.
+    """
+    admin_key = environment_config.admin_key or environment_config.api_key
+    client = IssuerClient(
+        base_url=environment_config.issuer_url,
+        api_key=admin_key,
     )
     yield client
     await client.close()

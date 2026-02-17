@@ -10,7 +10,6 @@ Run with:
 import uuid
 
 import pytest
-import pytest_asyncio
 
 from .helpers import IssuerClient
 
@@ -23,7 +22,7 @@ def unique_name(prefix: str = "rotate") -> str:
 
 
 @pytest.mark.asyncio
-async def test_rotation_via_api(issuer_client: IssuerClient):
+async def test_rotation_via_api(admin_issuer_client: IssuerClient):
     """Test key rotation through the API.
 
     Verifies:
@@ -33,13 +32,13 @@ async def test_rotation_via_api(issuer_client: IssuerClient):
     """
     # Create identity
     name = unique_name("api-rotate")
-    create_result = await issuer_client.create_identity(name, publish_to_witnesses=False)
+    create_result = await admin_issuer_client.create_identity(name, publish_to_witnesses=False)
     identity = create_result["identity"]
     aid = identity["aid"]
     assert identity["sequence_number"] == 0
 
     # Rotate keys
-    rotate_result = await issuer_client.rotate_identity(
+    rotate_result = await admin_issuer_client.rotate_identity(
         aid, publish_to_witnesses=False
     )
 
@@ -49,12 +48,12 @@ async def test_rotation_via_api(issuer_client: IssuerClient):
     assert rotate_result["identity"]["aid"] == aid
 
     # Verify state is persisted
-    updated = await issuer_client.get_identity(aid)
+    updated = await admin_issuer_client.get_identity(aid)
     assert updated["sequence_number"] == 1
 
 
 @pytest.mark.asyncio
-async def test_multiple_rotations(issuer_client: IssuerClient):
+async def test_multiple_rotations(admin_issuer_client: IssuerClient):
     """Test multiple consecutive key rotations.
 
     Verifies:
@@ -63,25 +62,25 @@ async def test_multiple_rotations(issuer_client: IssuerClient):
     """
     # Create identity
     name = unique_name("multi-rotate")
-    create_result = await issuer_client.create_identity(name, publish_to_witnesses=False)
+    create_result = await admin_issuer_client.create_identity(name, publish_to_witnesses=False)
     identity = create_result["identity"]
     aid = identity["aid"]
 
     # Perform multiple rotations
     for expected_sn in range(1, 4):
-        rotate_result = await issuer_client.rotate_identity(
+        rotate_result = await admin_issuer_client.rotate_identity(
             aid, publish_to_witnesses=False
         )
         assert rotate_result["identity"]["sequence_number"] == expected_sn
         assert rotate_result["previous_sequence_number"] == expected_sn - 1
 
     # Verify final state
-    final = await issuer_client.get_identity(aid)
+    final = await admin_issuer_client.get_identity(aid)
     assert final["sequence_number"] == 3
 
 
 @pytest.mark.asyncio
-async def test_rotation_with_witness_publishing(issuer_client: IssuerClient):
+async def test_rotation_with_witness_publishing(admin_issuer_client: IssuerClient):
     """Test key rotation with witness publishing enabled.
 
     Verifies:
@@ -90,12 +89,12 @@ async def test_rotation_with_witness_publishing(issuer_client: IssuerClient):
     """
     # Create identity with witness publishing
     name = unique_name("witness-rotate")
-    create_result = await issuer_client.create_identity(name, publish_to_witnesses=True)
+    create_result = await admin_issuer_client.create_identity(name, publish_to_witnesses=True)
     identity = create_result["identity"]
     aid = identity["aid"]
 
     # Rotate keys with witness publishing
-    rotate_result = await issuer_client.rotate_identity(
+    rotate_result = await admin_issuer_client.rotate_identity(
         aid, publish_to_witnesses=True
     )
 
@@ -111,7 +110,7 @@ async def test_rotation_with_witness_publishing(issuer_client: IssuerClient):
 
 
 @pytest.mark.asyncio
-async def test_rotation_with_custom_key_config(issuer_client: IssuerClient):
+async def test_rotation_with_custom_key_config(admin_issuer_client: IssuerClient):
     """Test rotation with custom next key configuration.
 
     Verifies:
@@ -120,12 +119,12 @@ async def test_rotation_with_custom_key_config(issuer_client: IssuerClient):
     """
     # Create identity
     name = unique_name("custom-rotate")
-    create_result = await issuer_client.create_identity(name, publish_to_witnesses=False)
+    create_result = await admin_issuer_client.create_identity(name, publish_to_witnesses=False)
     identity = create_result["identity"]
     aid = identity["aid"]
 
     # Rotate with custom configuration
-    rotate_result = await issuer_client.rotate_identity(
+    rotate_result = await admin_issuer_client.rotate_identity(
         aid,
         next_key_count=2,
         next_threshold="1",
@@ -137,7 +136,7 @@ async def test_rotation_with_custom_key_config(issuer_client: IssuerClient):
 
 
 @pytest.mark.asyncio
-async def test_rotation_invalid_threshold_rejected(issuer_client: IssuerClient):
+async def test_rotation_invalid_threshold_rejected(admin_issuer_client: IssuerClient):
     """Test that invalid threshold configuration is rejected.
 
     Verifies:
@@ -147,13 +146,13 @@ async def test_rotation_invalid_threshold_rejected(issuer_client: IssuerClient):
 
     # Create identity
     name = unique_name("invalid-rotate")
-    create_result = await issuer_client.create_identity(name, publish_to_witnesses=False)
+    create_result = await admin_issuer_client.create_identity(name, publish_to_witnesses=False)
     identity = create_result["identity"]
     aid = identity["aid"]
 
     # Try to rotate with invalid threshold
     with pytest.raises(httpx.HTTPStatusError) as exc_info:
-        await issuer_client.rotate_identity(
+        await admin_issuer_client.rotate_identity(
             aid,
             next_key_count=1,
             next_threshold="5",  # Invalid: threshold > key count
@@ -165,14 +164,14 @@ async def test_rotation_invalid_threshold_rejected(issuer_client: IssuerClient):
 
 
 @pytest.mark.asyncio
-async def test_rotation_not_found(issuer_client: IssuerClient):
+async def test_rotation_not_found(admin_issuer_client: IssuerClient):
     """Test rotation of non-existent identity returns 404."""
     import httpx
 
     fake_aid = "Enonexistent12345678901234567890123456789012"
 
     with pytest.raises(httpx.HTTPStatusError) as exc_info:
-        await issuer_client.rotate_identity(fake_aid, publish_to_witnesses=False)
+        await admin_issuer_client.rotate_identity(fake_aid, publish_to_witnesses=False)
 
     assert exc_info.value.response.status_code == 404
     assert "not found" in exc_info.value.response.json()["detail"].lower()
@@ -181,6 +180,7 @@ async def test_rotation_not_found(issuer_client: IssuerClient):
 @pytest.mark.asyncio
 async def test_credential_still_valid_after_rotation(
     issuer_client: IssuerClient,
+    admin_issuer_client: IssuerClient,
     test_identity: dict,
     test_registry: dict,
     tn_allocation_schema: str,
@@ -199,7 +199,7 @@ async def test_credential_still_valid_after_rotation(
     """
     aid = test_identity["aid"]
 
-    # Issue credential before rotation
+    # Issue credential before rotation (org-scoped client)
     cred_result = await issuer_client.issue_credential(
         registry_name=test_registry["name"],
         schema_said=tn_allocation_schema,
@@ -215,8 +215,8 @@ async def test_credential_still_valid_after_rotation(
     )
     cred_said = cred_result["credential"]["said"]
 
-    # Rotate issuer keys (sequence_number increases by 1 from whatever it was)
-    rotate_result = await issuer_client.rotate_identity(aid, publish_to_witnesses=False)
+    # Rotate issuer keys (admin client required for rotation)
+    rotate_result = await admin_issuer_client.rotate_identity(aid, publish_to_witnesses=False)
     assert "identity" in rotate_result
     assert rotate_result["identity"]["aid"] == aid
 
