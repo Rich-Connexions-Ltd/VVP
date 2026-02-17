@@ -1,6 +1,14 @@
 """Witness interaction for VVP KERI Agent.
 
 Handles OOBI publishing to KERI witnesses for identity discovery.
+
+Phase 2 (receipt distribution) uses keripy's duplicate inception handler
+(eventing.py:3801-3819) which is explicitly designed for "late arriving
+witness receipts". We extract witness couple signatures from Phase 1
+receipts, convert them to indexed witness signatures (wigers), and
+re-POST the inception event to /receipts. The Kevery's duplicate handler
+verifies the wigers and stores them in db.wigs via logEvent/putWigs,
+satisfying the fullyWitnessed() check required for OOBI resolution.
 """
 import asyncio
 import logging
@@ -9,7 +17,9 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
-from keri.core import serdering
+from keri import kering
+from keri.core import coring, serdering
+from keri.core.counting import Counter, Codens
 
 from app.config import (
     WITNESS_IURLS,
@@ -108,20 +118,28 @@ class WitnessPublisher:
                 else:
                     results.append(result)
 
-            # Phase 2: Distribute each witness's receipt to the OTHER witnesses
-            # so each witness accumulates enough receipts to satisfy TOAD.
+            # Phase 2: Re-POST inception event with collected witness indexed
+            # signatures so each witness stores them in db.wigs via the
+            # duplicate inception handler (eventing.py:3801-3819).
             if len(receipts) > 1:
-                total_bytes = sum(len(r) for r in receipts.values())
-                log.info(f"Distributing {len(receipts)} receipts ({total_bytes} bytes) to witnesses")
-
-                for source_url, receipt in receipts.items():
-                    for target_url in self._witness_urls:
-                        if target_url == source_url:
-                            continue  # Don't send receipt back to originator
-                        try:
-                            await self._send_receipt(client, target_url, receipt)
-                        except Exception as e:
-                            log.warning(f"Failed to distribute receipt to {target_url}: {e}")
+                try:
+                    enhanced_msg = self._build_enhanced_inception(
+                        kel_bytes, receipts
+                    )
+                    if enhanced_msg:
+                        log.info(
+                            f"Re-posting inception with {len(receipts)} witness "
+                            f"sigs to {len(self._witness_urls)} witnesses"
+                        )
+                        repost_tasks = [
+                            self._repost_enhanced(client, url, enhanced_msg)
+                            for url in self._witness_urls
+                        ]
+                        await asyncio.gather(
+                            *repost_tasks, return_exceptions=True
+                        )
+                except Exception as e:
+                    log.warning(f"Failed to build/send enhanced inception: {e}")
 
         success_count = sum(1 for r in results if r.success)
 
@@ -209,32 +227,133 @@ class WitnessPublisher:
             log.error(f"Failed to publish to {url}: {e}")
             return (WitnessResult(url=url, success=False, error=str(e)), None)
 
-    async def _send_receipt(
+    def _build_enhanced_inception(
+        self,
+        inception_msg: bytes,
+        receipts: dict[str, bytes],
+    ) -> Optional[bytes]:
+        """Build inception message with witness indexed signatures from receipts.
+
+        Parses each witness receipt (couple signature format) to extract the
+        witness prefix and raw signature, converts to indexed witness
+        signatures (Sigers), and appends a -B (WitnessIdxSigs) CESR
+        attachment to the original inception message.
+
+        The duplicate inception handler in keripy's Kevery verifies these
+        against eserder.berfers and stores them via kever.logEvent/putWigs.
+        """
+        # Extract witness list from inception event to determine indices
+        msg = bytearray(inception_msg)
+        serder = serdering.SerderKERI(raw=msg)
+        wits = serder.ked.get("b", [])
+        if not wits:
+            log.warning("Inception event has no witnesses (b field)")
+            return None
+
+        # Original controller signature attachment
+        ctrl_attachment = bytes(msg[serder.size:])
+
+        # Parse each receipt to extract witness prefix and signature
+        wigers = []
+        for url, receipt_bytes in receipts.items():
+            try:
+                rct_msg = bytearray(receipt_bytes)
+                rct_serder = serdering.SerderKERI(raw=rct_msg)
+                rct_atc = bytearray(rct_msg[rct_serder.size:])
+
+                # Parse CESR: Counter(-C, N) + [Verfer + Cigar] * N
+                ctr = Counter(qb64b=rct_atc, strip=True)
+
+                for _i in range(ctr.count):
+                    verfer = coring.Verfer(qb64b=rct_atc, strip=True)
+                    cigar = coring.Cigar(qb64b=rct_atc, strip=True)
+                    cigar.verfer = verfer
+
+                    wit_pre = verfer.qb64
+                    if wit_pre in wits:
+                        index = wits.index(wit_pre)
+                        wiger = coring.Siger(
+                            raw=cigar.raw, index=index, verfer=verfer
+                        )
+                        wigers.append(wiger)
+                        log.debug(
+                            f"Extracted witness sig: {wit_pre[:16]}... "
+                            f"index={index}"
+                        )
+                    else:
+                        log.warning(
+                            f"Receipt signer {wit_pre[:16]}... not in "
+                            f"witness list"
+                        )
+            except Exception as e:
+                log.warning(f"Failed to parse receipt from {url}: {e}")
+
+        if not wigers:
+            log.warning("No witness signatures extracted from receipts")
+            return None
+
+        # Build witness indexed signature CESR attachment (-B count code)
+        wit_atc = bytearray()
+        wit_atc.extend(
+            Counter(
+                Codens.WitnessIdxSigs,
+                count=len(wigers),
+                gvrsn=kering.Vrsn_1_0,
+            ).qb64b
+        )
+        for wiger in wigers:
+            wit_atc.extend(wiger.qb64b)
+
+        # Combine: inception_json + controller_sigs + witness_indexed_sigs
+        enhanced = bytearray(serder.raw)
+        enhanced.extend(ctrl_attachment)
+        enhanced.extend(wit_atc)
+
+        log.info(
+            f"Built enhanced inception: {len(wigers)} witness sigs, "
+            f"{len(enhanced)} total bytes"
+        )
+        return bytes(enhanced)
+
+    async def _repost_enhanced(
         self,
         client: httpx.AsyncClient,
         url: str,
-        receipt_bytes: bytes,
+        enhanced_msg: bytes,
     ) -> None:
-        """Send a single receipt to a witness via POST in CESR+JSON format.
+        """Re-POST enhanced inception event with witness sigs to /receipts.
 
-        The witness's HttpEnd.on_post expects application/cesr+json body
-        with a CESR-ATTACHMENT header. We split the receipt into its
-        serder (JSON body) and CESR signature attachment.
+        The witness's ReceiptEnd.on_post calls parseOne(local=True) which
+        triggers the Kevery's duplicate inception handler. This handler
+        verifies the new witness indexed signatures and stores them in
+        db.wigs via logEvent/putWigs.
         """
-        receipt_msg = bytearray(receipt_bytes)
-        rct_serder = serdering.SerderKERI(raw=receipt_msg)
-        rct_json = bytes(rct_serder.raw)
-        rct_attachment = bytes(receipt_msg[rct_serder.size:])
+        msg = bytearray(enhanced_msg)
+        serder = serdering.SerderKERI(raw=msg)
+        event_json = bytes(serder.raw)
+        attachments = bytes(msg[serder.size:])
 
-        root_url = f"{url.rstrip('/')}/"
+        receipts_url = f"{url.rstrip('/')}/receipts"
         headers = {
             "Content-Type": CESR_CONTENT_TYPE,
-            CESR_ATTACHMENT_HEADER: rct_attachment.decode("utf-8"),
+            CESR_ATTACHMENT_HEADER: attachments.decode("utf-8"),
         }
 
-        response = await client.post(root_url, content=rct_json, headers=headers)
-        if response.status_code not in (200, 202, 204):
-            log.warning(f"Failed to distribute receipt to {url}: HTTP {response.status_code}")
+        response = await client.post(
+            receipts_url, content=event_json, headers=headers
+        )
+        if response.status_code == 200:
+            log.info(f"Re-posted enhanced inception to {receipts_url}: OK")
+        elif response.status_code == 202:
+            log.warning(
+                f"Re-posted enhanced inception to {receipts_url}: "
+                f"202 (escrowed — unexpected)"
+            )
+        else:
+            log.warning(
+                f"Re-posted enhanced inception to {receipts_url}: "
+                f"HTTP {response.status_code}"
+            )
 
 
 # Module-level singleton
