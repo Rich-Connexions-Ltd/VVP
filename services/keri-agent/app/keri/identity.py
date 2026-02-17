@@ -338,15 +338,12 @@ class IssuerIdentityManager:
 
             pre = aid.encode() if isinstance(aid, str) else aid
 
-            # Get the inception event digest directly at sn=0 using snKey
-            # (getKelIter may not return sn=0 first after full state rebuild)
-            from keri.db.dbing import snKey
-            sn0_key = snKey(pre=pre, sn=0)
-            dig = self.hby.db.getKeLast(key=sn0_key)
-            if dig is None:
-                raise ValueError(f"No inception event for {aid}")
-
-            evt_msg = self.hby.db.cloneEvtMsg(pre=pre, fn=0, dig=bytes(dig))
+            # Use hab.iserder.saidb (inception event SAID) to directly
+            # look up the inception event, bypassing any database iteration
+            # ordering issues that can return ixn instead of icp after
+            # full state rebuild with registry/credential anchoring.
+            dig = hab.iserder.saidb
+            evt_msg = self.hby.db.cloneEvtMsg(pre=pre, fn=0, dig=dig)
             log.info(f"Inception msg for {aid[:16]}...: {len(evt_msg)} bytes")
             return bytes(evt_msg)
 
