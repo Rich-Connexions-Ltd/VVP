@@ -211,12 +211,18 @@
 
     async function loadDossiers() {
       try {
-        const response = await authFetch('/dossier', {
+        // Dossiers are credentials with the dossier schema SAID
+        const DOSSIER_SCHEMA = 'EH1jN4U4LMYHmPVI4FYdZ10bIPR7YWKp8TDdZ9Y9Al-P';
+        const response = await authFetch(`/credential?schema_said=${DOSSIER_SCHEMA}&status=issued`, {
           headers: { 'X-Requested-With': 'XMLHttpRequest' }
         });
         if (response.ok) {
           const data = await response.json();
-          dossiers = data.dossiers || [];
+          // Map credential response to dossier shape expected by dropdown
+          dossiers = (data.credentials || []).map(c => ({
+            root_said: c.said,
+            name: c.attributes?.name || c.said.substring(0, 16) + '...',
+          }));
         }
       } catch (err) {
         console.error('Failed to load dossiers:', err);
@@ -225,13 +231,26 @@
 
     async function loadIdentities() {
       try {
-        const response = await authFetch('/identity', {
-          headers: { 'X-Requested-With': 'XMLHttpRequest' }
-        });
-        if (response.ok) {
-          const data = await response.json();
-          identities = data.identities || [];
+        // Load identities and org AIDs in parallel to filter properly
+        const [idRes, orgRes] = await Promise.all([
+          authFetch('/identity', { headers: { 'X-Requested-With': 'XMLHttpRequest' } }),
+          authFetch('/organizations/names?purpose=vetter', { headers: { 'X-Requested-With': 'XMLHttpRequest' } }),
+        ]);
+        if (!idRes.ok) return;
+        const data = await idRes.json();
+
+        // Collect org main AIDs to exclude
+        let orgAids = [];
+        if (orgRes.ok) {
+          const orgData = await orgRes.json();
+          orgAids = (orgData.organizations || []).map(o => o.aid).filter(Boolean);
         }
+
+        // Filter out mock infrastructure identities and org main identities
+        identities = (data.identities || []).filter(id =>
+          !id.name.startsWith('mock-gleif') && !id.name.startsWith('mock-qvi') && !id.name.startsWith('mock-gsma') &&
+          !orgAids.includes(id.aid)
+        );
       } catch (err) {
         console.error('Failed to load identities:', err);
       }
