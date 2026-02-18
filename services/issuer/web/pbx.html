@@ -426,7 +426,7 @@
         if (!resp.ok) throw new Error('Failed to load API keys');
         const data = await resp.json();
         keySelect.innerHTML = '<option value="">-- Select API key --</option>';
-        for (const key of data.keys) {
+        for (const key of data.api_keys) {
           if (key.revoked) continue;
           const opt = document.createElement('option');
           opt.value = key.id;
