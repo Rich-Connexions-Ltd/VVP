@@ -246,6 +246,37 @@ async def lookup_tn_with_validation(
                 error=f"TN {tn} not covered by organization's TN Allocation credentials",
             )
 
+    # Check dossier revocation status via cache (defense in depth).
+    # First call: cache miss → TRUSTED (starts background TEL check).
+    # Subsequent calls: if revoked → found=false.
+    try:
+        from app.vvp.dossier_service import check_dossier_revocation
+        from app.vvp.oobi import build_dossier_url
+        from app.config import VVP_ISSUER_BASE_URL
+        from common.vvp.dossier.trust import TrustDecision
+
+        dossier_url = build_dossier_url(mapping.dossier_said, VVP_ISSUER_BASE_URL)
+        trust, warning = await check_dossier_revocation(dossier_url, mapping.dossier_said)
+
+        if trust == TrustDecision.UNTRUSTED:
+            log.warning(
+                f"TN {tn} mapped to revoked dossier {mapping.dossier_said[:16]}..."
+            )
+            return TNLookupResult(
+                found=False,
+                tn=tn,
+                error=f"Dossier {mapping.dossier_said[:16]}... contains revoked credentials",
+            )
+        if warning:
+            log.info(f"TN {tn} revocation check: {warning}")
+    except KeriAgentUnavailableError:
+        log.warning(
+            f"KERI Agent unavailable for revocation check, "
+            f"allowing TN {tn} lookup to proceed"
+        )
+    except Exception as e:
+        log.warning(f"Revocation check failed for TN {tn}: {e}")
+
     # Get organization name (of the owner org that holds the TN mapping)
     org = db.query(Organization).filter(Organization.id == mapping.organization_id).first()
     org_name = org.name if org else None

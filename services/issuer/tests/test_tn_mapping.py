@@ -808,3 +808,246 @@ class TestOSPDelegationLookup:
 
             assert result.found is False
             assert "No mapping found" in result.error
+
+
+# =============================================================================
+# Revocation Check in TN Lookup Tests
+# =============================================================================
+
+# Patch target for the revocation check (lazy import in lookup_tn_with_validation)
+CHECK_REVOCATION_PATCH = "app.vvp.dossier_service.check_dossier_revocation"
+
+
+class TestRevocationInLookup:
+    """Test dossier revocation filtering in TN lookup.
+
+    When a dossier is revoked, subsequent TN lookups should return found=false.
+    Uses the DossierCache for async background TEL checks:
+    - First call (cache miss): TRUSTED (optimistic, starts background check)
+    - Subsequent calls: UNTRUSTED if revoked -> found=false
+    """
+
+    @pytest.fixture
+    def revoc_org(self, in_memory_db):
+        """Create a test organization for revocation tests."""
+        org = Organization(
+            id=str(uuid.uuid4()),
+            name="Revocation Test Org",
+            pseudo_lei="5493009999999999ZZ99",
+            enabled=True,
+        )
+        in_memory_db.add(org)
+        in_memory_db.commit()
+        in_memory_db.refresh(org)
+        return org
+
+    @pytest.fixture
+    def revoc_mapping(self, in_memory_db, revoc_org):
+        """Create a TN mapping for revocation tests."""
+        mapping = TNMapping(
+            id=str(uuid.uuid4()),
+            tn="+15559990001",
+            organization_id=revoc_org.id,
+            dossier_said="E" + "r" * 43,
+            identity_name="revoc-identity",
+            brand_name="Revoc Brand",
+            brand_logo_url="https://example.com/revoc-logo.png",
+            enabled=True,
+        )
+        in_memory_db.add(mapping)
+        in_memory_db.commit()
+        in_memory_db.refresh(mapping)
+        return mapping
+
+    def _make_principal(self, org):
+        return Principal(
+            key_id=f"key-{org.id[:8]}",
+            name=f"{org.name} Key",
+            roles={"org:dossier_manager"},
+            organization_id=org.id,
+        )
+
+    @pytest.mark.asyncio
+    async def test_lookup_revoked_dossier_not_found(
+        self, in_memory_db, revoc_org, revoc_mapping
+    ):
+        """Revoked dossier should return found=false."""
+        from common.vvp.dossier.trust import TrustDecision
+
+        mock_principal = self._make_principal(revoc_org)
+        mock_store = MagicMock()
+        mock_store.verify.return_value = (mock_principal, None)
+
+        with patch(GET_API_KEY_STORE_PATCH, return_value=mock_store), \
+             patch(CHECK_REVOCATION_PATCH, new_callable=AsyncMock) as mock_revoc:
+            mock_revoc.return_value = (
+                TrustDecision.UNTRUSTED,
+                "Credential chain contains revoked credentials",
+            )
+
+            result = await lookup_tn_with_validation(
+                db=in_memory_db,
+                tn="+15559990001",
+                api_key="test-key",
+                validate_ownership=False,
+            )
+
+            assert result.found is False
+            assert "revoked" in result.error.lower()
+            mock_revoc.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_lookup_trusted_dossier_found(
+        self, in_memory_db, revoc_org, revoc_mapping
+    ):
+        """Trusted dossier should return found=true."""
+        from common.vvp.dossier.trust import TrustDecision
+
+        mock_principal = self._make_principal(revoc_org)
+        mock_store = MagicMock()
+        mock_store.verify.return_value = (mock_principal, None)
+
+        with patch(GET_API_KEY_STORE_PATCH, return_value=mock_store), \
+             patch(CHECK_REVOCATION_PATCH, new_callable=AsyncMock) as mock_revoc:
+            mock_revoc.return_value = (TrustDecision.TRUSTED, None)
+
+            result = await lookup_tn_with_validation(
+                db=in_memory_db,
+                tn="+15559990001",
+                api_key="test-key",
+                validate_ownership=False,
+            )
+
+            assert result.found is True
+            assert result.dossier_said == revoc_mapping.dossier_said
+
+    @pytest.mark.asyncio
+    async def test_lookup_revocation_pending_still_found(
+        self, in_memory_db, revoc_org, revoc_mapping
+    ):
+        """First call with pending revocation check should still return found=true."""
+        from common.vvp.dossier.trust import TrustDecision
+
+        mock_principal = self._make_principal(revoc_org)
+        mock_store = MagicMock()
+        mock_store.verify.return_value = (mock_principal, None)
+
+        with patch(GET_API_KEY_STORE_PATCH, return_value=mock_store), \
+             patch(CHECK_REVOCATION_PATCH, new_callable=AsyncMock) as mock_revoc:
+            mock_revoc.return_value = (
+                TrustDecision.TRUSTED,
+                "First request - revocation check started in background",
+            )
+
+            result = await lookup_tn_with_validation(
+                db=in_memory_db,
+                tn="+15559990001",
+                api_key="test-key",
+                validate_ownership=False,
+            )
+
+            assert result.found is True
+
+    @pytest.mark.asyncio
+    async def test_osp_delegation_revoked_not_found(self, in_memory_db):
+        """OSP delegation with revoked dossier should return found=false."""
+        from common.vvp.dossier.trust import TrustDecision
+
+        # Create owner and OSP orgs
+        owner_org = Organization(
+            id=str(uuid.uuid4()), name="Owner Corp",
+            pseudo_lei="5493001111111111AB12", enabled=True,
+        )
+        osp_org = Organization(
+            id=str(uuid.uuid4()), name="OSP Corp",
+            pseudo_lei="5493002222222222CD34", enabled=True,
+        )
+        in_memory_db.add_all([owner_org, osp_org])
+        in_memory_db.commit()
+
+        # Create TN mapping owned by owner
+        mapping = TNMapping(
+            id=str(uuid.uuid4()), tn="+15559990002",
+            organization_id=owner_org.id, dossier_said="E" + "x" * 43,
+            identity_name="owner-id", brand_name="Owner Brand", enabled=True,
+        )
+        in_memory_db.add(mapping)
+
+        # Create delegation to OSP
+        assoc = DossierOspAssociation(
+            dossier_said=mapping.dossier_said,
+            owner_org_id=owner_org.id, osp_org_id=osp_org.id,
+        )
+        in_memory_db.add(assoc)
+        in_memory_db.commit()
+
+        mock_principal = Principal(
+            key_id="osp-key", name="OSP Key",
+            roles={"org:dossier_manager"}, organization_id=osp_org.id,
+        )
+        mock_store = MagicMock()
+        mock_store.verify.return_value = (mock_principal, None)
+
+        with patch(GET_API_KEY_STORE_PATCH, return_value=mock_store), \
+             patch(CHECK_REVOCATION_PATCH, new_callable=AsyncMock) as mock_revoc:
+            mock_revoc.return_value = (
+                TrustDecision.UNTRUSTED, "Revoked",
+            )
+
+            result = await lookup_tn_with_validation(
+                db=in_memory_db,
+                tn="+15559990002",
+                api_key="osp-key",
+                validate_ownership=False,
+            )
+
+            assert result.found is False
+            assert "revoked" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_keri_agent_unavailable_degrades_gracefully(
+        self, in_memory_db, revoc_org, revoc_mapping
+    ):
+        """KERI Agent outage should degrade gracefully -- return found=true."""
+        from app.keri_client import KeriAgentUnavailableError
+
+        mock_principal = self._make_principal(revoc_org)
+        mock_store = MagicMock()
+        mock_store.verify.return_value = (mock_principal, None)
+
+        with patch(GET_API_KEY_STORE_PATCH, return_value=mock_store), \
+             patch(CHECK_REVOCATION_PATCH, new_callable=AsyncMock) as mock_revoc:
+            mock_revoc.side_effect = KeriAgentUnavailableError("Agent down")
+
+            result = await lookup_tn_with_validation(
+                db=in_memory_db,
+                tn="+15559990001",
+                api_key="test-key",
+                validate_ownership=False,
+            )
+
+            assert result.found is True
+            assert result.dossier_said == revoc_mapping.dossier_said
+
+    @pytest.mark.asyncio
+    async def test_revocation_exception_degrades_gracefully(
+        self, in_memory_db, revoc_org, revoc_mapping
+    ):
+        """Unexpected revocation check error should degrade gracefully."""
+        mock_principal = self._make_principal(revoc_org)
+        mock_store = MagicMock()
+        mock_store.verify.return_value = (mock_principal, None)
+
+        with patch(GET_API_KEY_STORE_PATCH, return_value=mock_store), \
+             patch(CHECK_REVOCATION_PATCH, new_callable=AsyncMock) as mock_revoc:
+            mock_revoc.side_effect = RuntimeError("Unexpected failure")
+
+            result = await lookup_tn_with_validation(
+                db=in_memory_db,
+                tn="+15559990001",
+                api_key="test-key",
+                validate_ownership=False,
+            )
+
+            assert result.found is True
+            assert result.dossier_said == revoc_mapping.dossier_said
