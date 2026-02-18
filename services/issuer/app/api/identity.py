@@ -20,7 +20,7 @@ from app.api.models import (
     RotateIdentityResponse,
 )
 from app.auth.api_key import Principal
-from app.auth.roles import require_admin, require_readonly
+from app.auth.roles import require_admin, require_auth, require_readonly, check_credential_admin_role
 from app.audit import get_audit_logger
 from app.keri_client import get_keri_client, KeriAgentUnavailableError
 from common.vvp.models.keri_agent import (
@@ -57,15 +57,16 @@ async def _resolve_aid(client, aid: str):
 async def create_identity(
     request: CreateIdentityRequest,
     http_request: Request,
-    principal: Principal = require_admin,
+    principal: Principal = require_auth,
 ) -> CreateIdentityResponse:
     """Create a new KERI identity.
 
     Creates an identity with the specified parameters. The KERI Agent
     handles witness publishing internally during creation.
 
-    Requires: issuer:admin role
+    Requires: issuer:admin OR org:administrator role
     """
+    check_credential_admin_role(principal)
     audit = get_audit_logger()
 
     try:

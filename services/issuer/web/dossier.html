@@ -492,8 +492,8 @@
 
       // Edge slot definitions matching server-side DOSSIER_EDGE_DEFS
       const EDGE_SLOTS = [
-        { name: 'vetting',  label: 'Organisation Verification',       desc: 'Legal Entity credential verifying the AP', required: true,  schema: null,               i2i: false, access: 'ap_org' },
-        { name: 'alloc',    label: 'Service Provider Authorisation',   desc: 'Delegation credential authorising the AP to allocate telephone numbers', required: true,  schema: GCD_SCHEMA_SAID,    i2i: true,  access: 'ap_org' },
+        { name: 'vetting',  label: 'Organisation Verification',       desc: 'Brand or identity credential verifying the AP', required: true,  schema: null,               schemaExclude: [GCD_SCHEMA_SAID, TNALLOC_SCHEMA_SAID, LE_SCHEMA_SAID, DOSSIER_SCHEMA_SAID], i2i: false, access: 'ap_org' },
+        { name: 'alloc',    label: 'Service Provider Authorisation',   desc: 'Delegation credential authorising the AP to act as a service provider', required: true,  schema: GCD_SCHEMA_SAID,    i2i: true,  access: 'ap_org' },
         { name: 'tnalloc',  label: 'Phone Number Allocation',         desc: 'Telephone number allocation credential', required: true,  schema: TNALLOC_SCHEMA_SAID, i2i: true,  access: 'ap_org' },
         { name: 'delsig',   label: 'Signing Authorisation',           desc: 'Delegation from AP to signing identity', required: true,  schema: GCD_SCHEMA_SAID,    i2i: false, access: 'ap_org' },
         { name: 'bownr',    label: 'Brand Ownership',                 desc: 'Brand ownership credential (optional)', required: false, schema: null,               i2i: false, access: 'ap_org' },
@@ -687,6 +687,13 @@
               edgeCredentials[slot.name] = data.credentials || [];
             }
 
+            // Sprint 72b: Apply schema exclusion filter (e.g., exclude GCDs from vetting)
+            if (slot.schemaExclude && slot.schemaExclude.length > 0) {
+              edgeCredentials[slot.name] = edgeCredentials[slot.name].filter(
+                c => !slot.schemaExclude.includes(c.schema_said)
+              );
+            }
+
             renderEdgeCredentialPicker(slot);
           } catch (err) {
             container.innerHTML =
@@ -713,17 +720,21 @@
           return;
         }
 
-        // For I2I edges, strictly filter to credentials issued TO the AP org
+        // For I2I edges, filter to credentials issued TO the AP org (or self-issued)
         let filteredCreds = creds;
         let i2iNotice = '';
         if (slot.i2i) {
-          filteredCreds = creds.filter(c => c.relationship === 'subject');
+          // Sprint 72b: Accept subject creds AND self-issued creds (issuer === recipient)
+          filteredCreds = creds.filter(c =>
+            c.relationship === 'subject' ||
+            (c.issuer_aid && c.recipient_aid && c.issuer_aid === c.recipient_aid)
+          );
           if (filteredCreds.length === 0 && creds.length > 0) {
             // Show empty-state — do NOT fall back to all creds (they'd fail server validation)
             container.innerHTML =
               `<div class="info" style="margin-top:0.5rem;">
                 No credentials issued <strong>to</strong> this AP organization found for this edge.
-                This edge requires an I2I (issued-to) credential.
+                This edge requires an I2I (issued-to) or self-issued credential.
                 <a href="/ui/credentials">Issue credentials</a> first.
               </div>`;
             return;

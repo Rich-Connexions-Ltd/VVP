@@ -233,7 +233,7 @@
 
     async function loadIdentities() {
       try {
-        const response = await authFetch('/identities', {
+        const response = await authFetch('/identity', {
           headers: { 'X-Requested-With': 'XMLHttpRequest' }
         });
         if (response.ok) {
