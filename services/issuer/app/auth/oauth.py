@@ -17,6 +17,8 @@ Security measures:
 - Nonce parameter prevents ID token replay attacks
 - ID token signature validation against Microsoft's JWKS
 - Tenant (tid) claim validation
+
+Sprint 73: PostgresOAuthStateStore added for multi-replica deployments.
 """
 
 import asyncio
@@ -229,6 +231,139 @@ class OAuthStateStore:
     def state_count(self) -> int:
         """Number of active states (for monitoring)."""
         return len(self._states)
+
+
+# =============================================================================
+# POSTGRESQL OAUTH STATE STORE
+# =============================================================================
+
+
+class PostgresOAuthStateStore:
+    """PostgreSQL-backed OAuth state store for multi-replica deployments.
+
+    Sprint 73: OAuth state (CSRF/PKCE) is stored in the `oauth_states` table
+    and shared across all container replicas.
+    """
+
+    def __init__(self, default_ttl: int = 600) -> None:
+        self._default_ttl = default_ttl
+
+    async def create(self, oauth_state: OAuthState, ttl: int | None = None) -> str:
+        """Store OAuth state in PostgreSQL and return a state_id for the cookie."""
+        from app.db.models import DBOAuthState
+        from app.db.session import get_db_session
+
+        state_id = secrets.token_urlsafe(32)
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(seconds=ttl or self._default_ttl)
+
+        with get_db_session() as db:
+            db_row = DBOAuthState(
+                state_id=state_id,
+                state=oauth_state.state,
+                nonce=oauth_state.nonce,
+                code_verifier=oauth_state.code_verifier,
+                redirect_after=oauth_state.redirect_after,
+                created_at=now,
+                expires_at=expires_at,
+            )
+            db.add(db_row)
+
+        log.debug(f"Created OAuth state {state_id[:8]}... (postgres)")
+        return state_id
+
+    async def get(self, state_id: str) -> OAuthState | None:
+        """Retrieve OAuth state by state_id (does NOT delete)."""
+        from app.db.models import DBOAuthState
+        from app.db.session import get_db_session
+
+        with get_db_session() as db:
+            row = db.query(DBOAuthState).filter(DBOAuthState.state_id == state_id).first()
+            if row is None:
+                return None
+
+            expires_at = row.expires_at.replace(tzinfo=timezone.utc) if row.expires_at.tzinfo is None else row.expires_at
+            if datetime.now(timezone.utc) > expires_at:
+                db.delete(row)
+                log.debug(f"OAuth state {state_id[:8]}... expired (postgres)")
+                return None
+
+            return OAuthState(
+                state=row.state,
+                nonce=row.nonce,
+                code_verifier=row.code_verifier,
+                created_at=row.created_at.replace(tzinfo=timezone.utc) if row.created_at.tzinfo is None else row.created_at,
+                redirect_after=row.redirect_after,
+            )
+
+    async def get_and_delete(self, state_id: str) -> OAuthState | None:
+        """Retrieve and delete OAuth state (one-time use)."""
+        from app.db.models import DBOAuthState
+        from app.db.session import get_db_session
+
+        with get_db_session() as db:
+            row = db.query(DBOAuthState).filter(DBOAuthState.state_id == state_id).first()
+            if row is None:
+                return None
+
+            # Always delete (one-time use)
+            state = row.state
+            nonce = row.nonce
+            code_verifier = row.code_verifier
+            created_at = row.created_at.replace(tzinfo=timezone.utc) if row.created_at.tzinfo is None else row.created_at
+            redirect_after = row.redirect_after
+            expires_at = row.expires_at.replace(tzinfo=timezone.utc) if row.expires_at.tzinfo is None else row.expires_at
+
+            db.delete(row)
+
+        # Check expiry after deletion
+        if datetime.now(timezone.utc) > expires_at:
+            log.debug(f"OAuth state {state_id[:8]}... expired (postgres)")
+            return None
+
+        log.debug(f"Retrieved and deleted OAuth state {state_id[:8]}... (postgres)")
+        return OAuthState(
+            state=state,
+            nonce=nonce,
+            code_verifier=code_verifier,
+            created_at=created_at,
+            redirect_after=redirect_after,
+        )
+
+    async def delete(self, state_id: str) -> bool:
+        """Delete OAuth state."""
+        from app.db.models import DBOAuthState
+        from app.db.session import get_db_session
+
+        with get_db_session() as db:
+            row = db.query(DBOAuthState).filter(DBOAuthState.state_id == state_id).first()
+            if row is None:
+                return False
+            db.delete(row)
+        log.debug(f"Deleted OAuth state {state_id[:8]}... (postgres)")
+        return True
+
+    async def cleanup_expired(self) -> int:
+        """Remove all expired states."""
+        from app.db.models import DBOAuthState
+        from app.db.session import get_db_session
+
+        now = datetime.now(timezone.utc)
+        with get_db_session() as db:
+            count = db.query(DBOAuthState).filter(DBOAuthState.expires_at < now).delete()
+
+        if count > 0:
+            log.info(f"Cleaned up {count} expired OAuth states (postgres)")
+        return count
+
+    @property
+    def state_count(self) -> int:
+        """Number of active states."""
+        from app.db.models import DBOAuthState
+        from app.db.session import get_db_session
+
+        with get_db_session() as db:
+            return db.query(DBOAuthState).count()
 
 
 # =============================================================================
@@ -520,15 +655,28 @@ def is_email_domain_allowed(email: str, allowed_domains: list[str]) -> bool:
 _oauth_state_store: OAuthStateStore | None = None
 
 
-def get_oauth_state_store() -> OAuthStateStore:
-    """Get the global OAuth state store instance."""
+def get_oauth_state_store() -> OAuthStateStore | PostgresOAuthStateStore:
+    """Get the global OAuth state store instance.
+
+    Sprint 73: Uses PostgresOAuthStateStore when a database is available (production),
+    falls back to in-memory OAuthStateStore for local dev / testing.
+    """
     global _oauth_state_store
 
     if _oauth_state_store is None:
         from app.config import OAUTH_STATE_TTL_SECONDS
 
-        _oauth_state_store = OAuthStateStore(default_ttl=OAUTH_STATE_TTL_SECONDS)
-        log.info(f"Initialized OAuth state store (TTL: {OAUTH_STATE_TTL_SECONDS}s)")
+        try:
+            from app.config import DATABASE_URL
+            if DATABASE_URL and not DATABASE_URL.startswith("sqlite:///:memory:"):
+                _oauth_state_store = PostgresOAuthStateStore(default_ttl=OAUTH_STATE_TTL_SECONDS)
+                log.info(f"Initialized PostgreSQL OAuth state store (TTL: {OAUTH_STATE_TTL_SECONDS}s)")
+            else:
+                _oauth_state_store = OAuthStateStore(default_ttl=OAUTH_STATE_TTL_SECONDS)
+                log.info(f"Initialized in-memory OAuth state store (TTL: {OAUTH_STATE_TTL_SECONDS}s)")
+        except Exception:
+            _oauth_state_store = OAuthStateStore(default_ttl=OAUTH_STATE_TTL_SECONDS)
+            log.info(f"Initialized in-memory OAuth state store (TTL: {OAUTH_STATE_TTL_SECONDS}s, fallback)")
 
     return _oauth_state_store
 

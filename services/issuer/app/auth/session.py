@@ -3,9 +3,9 @@
 Provides session-based authentication alongside API key auth.
 Sessions are stored server-side; the client receives an opaque session ID cookie.
 
-Note: The default InMemorySessionStore is per-instance and sessions are lost
-on restart. For production multi-instance deployments, implement a Redis-backed
-store or use sticky sessions.
+Sprint 73: PostgresSessionStore added for multi-replica deployments.
+Sessions are shared across container replicas via PostgreSQL and survive restarts.
+The InMemorySessionStore is retained for local development / testing.
 """
 
 import asyncio
@@ -124,6 +124,21 @@ class SessionStore(ABC):
 
         Returns:
             Number of sessions deleted
+        """
+        ...
+
+    @abstractmethod
+    async def set_active_org(self, session_id: str, org_id: str | None) -> bool:
+        """Set the active_org_id on the stored session.
+
+        Sprint 67: Used by switch-org to update the stored session directly.
+
+        Args:
+            session_id: The session identifier
+            org_id: Organization ID to switch to, or None to revert
+
+        Returns:
+            True if session was found and updated
         """
         ...
 
@@ -333,6 +348,213 @@ class InMemorySessionStore(SessionStore):
 
 
 # =============================================================================
+# POSTGRESQL SESSION STORE
+# =============================================================================
+
+
+class PostgresSessionStore(SessionStore):
+    """PostgreSQL-backed session store for multi-replica deployments.
+
+    Sprint 73: Sessions are stored in the `sessions` table and shared across
+    all container replicas. Sessions survive restarts and redeployments.
+    """
+
+    async def create(self, principal: "Principal", ttl_seconds: int) -> Session:
+        """Create a new session and persist to PostgreSQL."""
+        from app.db.models import DBSession
+        from app.db.session import get_db_session
+
+        session_id = secrets.token_urlsafe(32)
+        now = datetime.now(timezone.utc)
+
+        session = Session(
+            session_id=session_id,
+            key_id=principal.key_id,
+            principal=principal,
+            created_at=now,
+            expires_at=now + timedelta(seconds=ttl_seconds),
+            last_accessed=now,
+            home_org_id=principal.organization_id,
+        )
+
+        with get_db_session() as db:
+            db_row = DBSession(
+                session_id=session_id,
+                key_id=principal.key_id,
+                principal_name=principal.name,
+                principal_roles=",".join(sorted(principal.roles)) if principal.roles else "",
+                principal_org_id=principal.organization_id,
+                home_org_id=principal.organization_id,
+                active_org_id=None,
+                created_at=now,
+                expires_at=now + timedelta(seconds=ttl_seconds),
+                last_accessed=now,
+            )
+            db.add(db_row)
+
+        log.debug(f"Created session {session_id[:8]}... for {principal.key_id} (postgres)")
+        return session
+
+    def _reconstruct_session(self, row) -> Session:
+        """Reconstruct a Session object from a DB row."""
+        from app.auth.api_key import Principal
+
+        roles = {r.strip() for r in row.principal_roles.split(",") if r.strip()} if row.principal_roles else set()
+        principal = Principal(
+            key_id=row.key_id,
+            name=row.principal_name,
+            roles=roles,
+            organization_id=row.principal_org_id,
+        )
+
+        return Session(
+            session_id=row.session_id,
+            key_id=row.key_id,
+            principal=principal,
+            created_at=row.created_at.replace(tzinfo=timezone.utc) if row.created_at.tzinfo is None else row.created_at,
+            expires_at=row.expires_at.replace(tzinfo=timezone.utc) if row.expires_at.tzinfo is None else row.expires_at,
+            last_accessed=row.last_accessed.replace(tzinfo=timezone.utc) if row.last_accessed.tzinfo is None else row.last_accessed,
+            home_org_id=row.home_org_id,
+            active_org_id=row.active_org_id,
+        )
+
+    async def get(self, session_id: str) -> Session | None:
+        """Get session from PostgreSQL, checking expiry and key/user revocation."""
+        from app.db.models import DBSession
+        from app.db.session import get_db_session
+
+        with get_db_session() as db:
+            row = db.query(DBSession).filter(DBSession.session_id == session_id).first()
+
+            if row is None:
+                return None
+
+            # Check expiry
+            expires_at = row.expires_at.replace(tzinfo=timezone.utc) if row.expires_at.tzinfo is None else row.expires_at
+            if datetime.now(timezone.utc) > expires_at:
+                db.delete(row)
+                log.debug(f"Session {session_id[:8]}... expired (postgres)")
+                return None
+
+            # Check if underlying principal is still valid
+            key_id = row.key_id
+            if key_id.startswith("user:"):
+                from app.auth.users import get_user_store
+                user_store = get_user_store()
+                user_store.reload_if_stale()
+                email = key_id[5:]
+                user = user_store.get_user(email)
+
+                user_valid = False
+                if user is not None:
+                    user_valid = not (hasattr(user, 'enabled') and not user.enabled)
+                else:
+                    try:
+                        from app.auth.db_users import get_db_user_store
+                        db_store = get_db_user_store()
+                        db_user = db_store.get_user_by_email(db, email)
+                        if db_user is not None and db_user.enabled:
+                            user_valid = True
+                    except Exception as e:
+                        log.debug(f"DB user check failed: {e}")
+
+                if not user_valid:
+                    db.delete(row)
+                    log.warning(f"Session {session_id[:8]}... invalidated: user {email} disabled or removed (postgres)")
+                    return None
+
+            elif key_id.startswith("org_key:"):
+                from app.auth.api_key import verify_org_key_still_valid
+                if not verify_org_key_still_valid(key_id):
+                    db.delete(row)
+                    log.warning(f"Session {session_id[:8]}... invalidated: org API key {key_id} revoked (postgres)")
+                    return None
+            else:
+                from app.auth.api_key import get_api_key_store
+                store = get_api_key_store()
+                store.reload_if_stale()
+                key_config = store._keys.get(key_id)
+                if key_config is None or key_config.revoked:
+                    db.delete(row)
+                    log.warning(f"Session {session_id[:8]}... invalidated: API key {key_id} revoked (postgres)")
+                    return None
+
+            # Update last accessed
+            row.last_accessed = datetime.now(timezone.utc)
+
+            session = self._reconstruct_session(row)
+
+        # Apply active_org_id override (Sprint 67)
+        if session.active_org_id:
+            effective_principal = replace(
+                session.principal,
+                organization_id=session.active_org_id,
+            )
+            return replace(session, principal=effective_principal)
+
+        return session
+
+    async def set_active_org(self, session_id: str, org_id: str | None) -> bool:
+        """Set the active_org_id on a stored session."""
+        from app.db.models import DBSession
+        from app.db.session import get_db_session
+
+        with get_db_session() as db:
+            row = db.query(DBSession).filter(DBSession.session_id == session_id).first()
+            if row is None:
+                return False
+            row.active_org_id = org_id
+        return True
+
+    async def delete(self, session_id: str) -> bool:
+        """Delete a session from PostgreSQL."""
+        from app.db.models import DBSession
+        from app.db.session import get_db_session
+
+        with get_db_session() as db:
+            row = db.query(DBSession).filter(DBSession.session_id == session_id).first()
+            if row is None:
+                return False
+            db.delete(row)
+        log.debug(f"Deleted session {session_id[:8]}... (postgres)")
+        return True
+
+    async def delete_by_key_id(self, key_id: str) -> int:
+        """Delete all sessions for a given API key."""
+        from app.db.models import DBSession
+        from app.db.session import get_db_session
+
+        with get_db_session() as db:
+            count = db.query(DBSession).filter(DBSession.key_id == key_id).delete()
+
+        if count > 0:
+            log.info(f"Deleted {count} sessions for key {key_id} (postgres)")
+        return count
+
+    async def cleanup_expired(self) -> int:
+        """Remove all expired sessions."""
+        from app.db.models import DBSession
+        from app.db.session import get_db_session
+
+        now = datetime.now(timezone.utc)
+        with get_db_session() as db:
+            count = db.query(DBSession).filter(DBSession.expires_at < now).delete()
+
+        if count > 0:
+            log.info(f"Cleaned up {count} expired sessions (postgres)")
+        return count
+
+    @property
+    def session_count(self) -> int:
+        """Number of active sessions."""
+        from app.db.models import DBSession
+        from app.db.session import get_db_session
+
+        with get_db_session() as db:
+            return db.query(DBSession).count()
+
+
+# =============================================================================
 # LOGIN RATE LIMITER
 # =============================================================================
 
@@ -490,12 +712,25 @@ _rate_limiter: LoginRateLimiter | None = None
 
 
 def get_session_store() -> SessionStore:
-    """Get the global session store instance."""
+    """Get the global session store instance.
+
+    Sprint 73: Uses PostgresSessionStore when a database is available (production),
+    falls back to InMemorySessionStore for local dev / testing.
+    """
     global _session_store
 
     if _session_store is None:
-        _session_store = InMemorySessionStore()
-        log.info("Initialized in-memory session store")
+        try:
+            from app.config import DATABASE_URL
+            if DATABASE_URL and not DATABASE_URL.startswith("sqlite:///:memory:"):
+                _session_store = PostgresSessionStore()
+                log.info("Initialized PostgreSQL session store")
+            else:
+                _session_store = InMemorySessionStore()
+                log.info("Initialized in-memory session store (SQLite/memory)")
+        except Exception:
+            _session_store = InMemorySessionStore()
+            log.info("Initialized in-memory session store (fallback)")
 
     return _session_store
 

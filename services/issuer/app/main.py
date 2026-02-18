@@ -31,7 +31,7 @@ log = logging.getLogger("vvp-issuer")
 
 
 async def _session_cleanup_task():
-    """Periodically clean up expired sessions."""
+    """Periodically clean up expired sessions and OAuth states."""
     while True:
         await asyncio.sleep(SESSION_CLEANUP_INTERVAL)
         try:
@@ -41,6 +41,14 @@ async def _session_cleanup_task():
                 log.debug(f"Session cleanup: removed {count} expired sessions")
         except Exception as e:
             log.error(f"Session cleanup error: {e}")
+        try:
+            from app.auth.oauth import get_oauth_state_store
+            oauth_store = get_oauth_state_store()
+            oauth_count = await oauth_store.cleanup_expired()
+            if oauth_count > 0:
+                log.debug(f"OAuth state cleanup: removed {oauth_count} expired states")
+        except Exception as e:
+            log.error(f"OAuth state cleanup error: {e}")
 
 
 async def _bootstrap_probe(app: FastAPI):

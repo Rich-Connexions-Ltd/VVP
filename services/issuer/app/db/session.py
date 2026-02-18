@@ -150,3 +150,5 @@ def init_database() -> None:
     run_sprint67(engine)
     from app.db.migrations.sprint71_pbx_config import run_migrations as run_sprint71
     run_sprint71(engine)
+    from app.db.migrations.sprint73_sessions import run_migrations as run_sprint73
+    run_sprint73(engine)

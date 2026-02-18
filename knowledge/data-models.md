@@ -240,6 +240,29 @@ class PBXConfig(Base):                # Sprint 71: PBX dialplan management singl
     last_deployed_by: Optional[String(255)]
     updated_at: datetime
 
+class DBSession(Base):               # Sprint 73: PostgreSQL-backed session store
+    __tablename__ = "sessions"
+    session_id: String(64)         # Primary key, cryptographically random
+    key_id: String(255)            # Principal key ID (indexed)
+    principal_name: String(255)
+    principal_roles: String(1024)  # Comma-separated roles
+    principal_org_id: Optional[String(36)]
+    home_org_id: Optional[String(36)]
+    active_org_id: Optional[String(36)]
+    created_at: datetime
+    expires_at: datetime           # Indexed for cleanup
+    last_accessed: datetime
+
+class DBOAuthState(Base):            # Sprint 73: PostgreSQL-backed OAuth state
+    __tablename__ = "oauth_states"
+    state_id: String(64)           # Primary key, cryptographically random
+    state: String(64)              # CSRF state parameter
+    nonce: String(64)              # ID token nonce
+    code_verifier: String(128)     # PKCE code verifier
+    redirect_after: String(1024)   # Post-login redirect URL
+    created_at: datetime
+    expires_at: datetime           # Indexed for cleanup
+
 class MockVLEIState(Base):            # Persists mock vLEI infrastructure state
     __tablename__ = "mock_vlei_state"
     id: int                        # Primary key (single row expected)

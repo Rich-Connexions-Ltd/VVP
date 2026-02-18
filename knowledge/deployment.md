@@ -30,7 +30,7 @@ The pipeline has separate jobs triggered by path filters:
 |-----|---------------|--------|
 | `deploy-verifier` | `services/verifier/**`, `common/**` | Azure Container Apps |
 | `deploy-keri-agent` | `services/keri-agent/**`, `keripy/**`, `common/**` | Azure Container Apps (ephemeral LMDB on tmpfs, internal-only) |
-| `deploy-issuer` | `services/issuer/**`, `common/**` | Azure Container Apps (no LMDB, fast ~30s deploy) |
+| `deploy-issuer` | `services/issuer/**`, `common/**` | Azure Container Apps (no LMDB, fast ~30s deploy, sticky sessions, 1-3 replicas) |
 | `deploy-sip-redirect` | `services/sip-redirect/**`, `common/**` | PBX VM via `az vm run-command` |
 | `deploy-sip-verify` | `services/sip-verify/**`, `common/**` | PBX VM via `az vm run-command` |
 | `build-witness-image` + `deploy-witnesses` | `services/witness/**` | Azure Container Apps (3 witnesses) |
@@ -39,6 +39,15 @@ The pipeline has separate jobs triggered by path filters:
 **Deploy ordering**: When both keri-agent and issuer change (e.g., `common/**` change), keri-agent deploys first. The issuer's `deploy-issuer` job depends on `deploy-keri-agent` completing successfully. This ensures the KERI Agent is healthy before the issuer starts routing to it.
 
 All path filters are bypassed when `force_all=true` is passed via workflow dispatch.
+
+### Issuer Session Persistence (Sprint 73)
+
+The issuer uses **sticky sessions** (Azure Container Apps session affinity) and **PostgreSQL-backed session storage** so that user login sessions survive across replicas and container restarts.
+
+- **Sticky sessions**: Configured via `az containerapp ingress sticky-sessions set --affinity sticky`. Routes the same client to the same replica for the duration of a session.
+- **PostgreSQL session store**: `PostgresSessionStore` persists sessions to the `sessions` table. Shared across all replicas. Falls back to `InMemorySessionStore` for local dev (SQLite).
+- **PostgreSQL OAuth state store**: `PostgresOAuthStateStore` persists OAuth CSRF/PKCE state to the `oauth_states` table. Eliminates the SSO "Session Expired" error when OAuth callback hits a different replica.
+- **Cleanup task**: Background task runs every `SESSION_CLEANUP_INTERVAL` (300s) to delete expired sessions and OAuth states from the database.
 
 ### KERI Agent Deployment (Sprint 69)
 

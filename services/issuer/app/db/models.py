@@ -375,6 +375,50 @@ class PBXConfig(Base):
         return f"<PBXConfig(id={self.id}, api_key_org_id={self.api_key_org_id!r})>"
 
 
+class DBSession(Base):
+    """Server-side session stored in PostgreSQL.
+
+    Sprint 73: Replaces in-memory session store for multi-replica support.
+    Sessions survive container restarts and are shared across replicas.
+    """
+
+    __tablename__ = "sessions"
+
+    session_id = Column(String(64), primary_key=True)
+    key_id = Column(String(255), nullable=False, index=True)
+    principal_name = Column(String(255), nullable=False)
+    principal_roles = Column(String(1024), default="", nullable=False)  # Comma-separated
+    principal_org_id = Column(String(36), nullable=True)
+    home_org_id = Column(String(36), nullable=True)
+    active_org_id = Column(String(36), nullable=True)
+    created_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    last_accessed = Column(DateTime, nullable=False)
+
+    def __repr__(self) -> str:
+        return f"<DBSession(id={self.session_id[:8]}..., key_id={self.key_id!r})>"
+
+
+class DBOAuthState(Base):
+    """OAuth state stored in PostgreSQL for CSRF/PKCE protection.
+
+    Sprint 73: Replaces in-memory OAuth state store for multi-replica support.
+    """
+
+    __tablename__ = "oauth_states"
+
+    state_id = Column(String(64), primary_key=True)
+    state = Column(String(64), nullable=False)
+    nonce = Column(String(64), nullable=False)
+    code_verifier = Column(String(128), nullable=False)
+    redirect_after = Column(String(1024), default="/ui/", nullable=False)
+    created_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False, index=True)
+
+    def __repr__(self) -> str:
+        return f"<DBOAuthState(id={self.state_id[:8]}...)>"
+
+
 # Event listener to normalize email to lowercase before insert/update
 @event.listens_for(User.email, "set", propagate=True)
 def normalize_email(target: User, value: str, oldvalue: str, initiator) -> str:
