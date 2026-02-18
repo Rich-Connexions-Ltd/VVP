@@ -388,7 +388,11 @@ class CredentialIssuer:
                 return None
 
     async def delete_credential(self, credential_said: str) -> bool:
-        """Delete a credential from local storage."""
+        """Delete a credential from local storage and seed store.
+
+        Sprint 73: Also removes the credential seed from PostgreSQL so the
+        credential won't be rebuilt by StateBuilder on container restart.
+        """
         async with self._lock:
             registry_mgr = await get_registry_manager()
             reger = registry_mgr.regery.reger
@@ -403,6 +407,14 @@ class CredentialIssuer:
                 reger.cancs.rem(keys=(credential_said,))
             except Exception:
                 pass
+
+            # Sprint 73: Cascade delete to seed store
+            try:
+                from app.keri.seed_store import get_seed_store
+                seed_store = get_seed_store()
+                seed_store.delete_credential_seed(credential_said)
+            except Exception as e:
+                log.warning(f"Failed to delete credential seed {credential_said[:16]}...: {e}")
 
             log.info(f"Deleted credential from local storage: {credential_said[:16]}...")
             return True

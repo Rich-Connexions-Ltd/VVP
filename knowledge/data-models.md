@@ -947,6 +947,40 @@ class AgentErrorResponse(BaseModel):
     error_code: str | None
 ```
 
+### SeedStore Methods (`services/keri-agent/app/db/seed_store.py`) — Sprint 69+73
+
+The SeedStore manages PostgreSQL-backed KERI key material (identity seeds, rotation seeds, credential seeds). Sprint 73 added bulk deletion and lookup-by-issuer/schema methods.
+
+#### Deletion Methods (Sprint 73)
+```python
+def delete_credential_seed(said: str) -> bool
+    """Delete a single credential seed by SAID. Returns True if deleted."""
+
+def delete_identity_seed(name: str) -> bool
+    """Delete identity seed by name. Returns True if deleted."""
+
+def delete_identity_seed_by_aid(aid: str) -> bool
+    """Delete identity seed by AID prefix. Returns True if deleted."""
+
+def delete_credential_seeds_bulk(saids: list[str]) -> int
+    """Bulk delete credential seeds by SAID list. Returns count deleted."""
+
+def delete_identity_seeds_bulk(names: list[str]) -> int
+    """Bulk delete identity seeds (and associated rotation seeds) by name list. Returns count deleted."""
+```
+
+#### Query Methods (Sprint 73)
+```python
+def get_credential_seeds_by_issuer(issuer_aid: str) -> list[KeriCredentialSeed]
+    """Get all credential seeds issued by a specific AID."""
+
+def get_credential_seeds_by_schema(schema_said: str) -> list[KeriCredentialSeed]
+    """Get all credential seeds matching a schema SAID."""
+
+def get_identity_seed_by_aid(aid: str) -> KeriIdentitySeed | None
+    """Look up an identity seed by its AID prefix."""
+```
+
 ---
 
 ## Error Code Registry

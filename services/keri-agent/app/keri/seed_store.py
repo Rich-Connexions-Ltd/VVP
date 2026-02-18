@@ -297,7 +297,149 @@ class SeedStore:
                     max_dep_order = dep.rebuild_order + 1
             return max_dep_order
 
+    # -- Delete Methods (Sprint 73: Cascade Delete) --
+
+    def delete_credential_seed(self, expected_said: str) -> bool:
+        """Delete a credential seed by SAID. Returns True if deleted, False if not found."""
+        with _get_db_session() as db:
+            count = (
+                db.query(KeriCredentialSeed)
+                .filter(KeriCredentialSeed.expected_said == expected_said)
+                .delete()
+            )
+            if count > 0:
+                log.info(f"Deleted credential seed: {expected_said[:16]}...")
+            return count > 0
+
+    def delete_identity_seed(self, name: str) -> bool:
+        """Delete an identity seed by name and its associated rotation seeds.
+
+        Returns True if the identity seed was found and deleted.
+        """
+        with _get_db_session() as db:
+            # Delete rotation seeds first (FK by identity_name)
+            rot_count = (
+                db.query(KeriRotationSeed)
+                .filter(KeriRotationSeed.identity_name == name)
+                .delete()
+            )
+            if rot_count > 0:
+                log.info(f"Deleted {rot_count} rotation seed(s) for identity: {name}")
+
+            count = (
+                db.query(KeriIdentitySeed)
+                .filter(KeriIdentitySeed.name == name)
+                .delete()
+            )
+            if count > 0:
+                log.info(f"Deleted identity seed: {name}")
+            return count > 0
+
+    def delete_identity_seed_by_aid(self, aid: str) -> bool:
+        """Delete an identity seed by AID (expected_aid) and its rotation seeds.
+
+        Looks up the identity name from the seed record, then deletes
+        both the identity seed and associated rotation seeds.
+        Returns True if the identity seed was found and deleted.
+        """
+        with _get_db_session() as db:
+            seed = (
+                db.query(KeriIdentitySeed)
+                .filter(KeriIdentitySeed.expected_aid == aid)
+                .first()
+            )
+            if seed is None:
+                return False
+
+            name = seed.name
+
+            # Delete rotation seeds first
+            rot_count = (
+                db.query(KeriRotationSeed)
+                .filter(KeriRotationSeed.identity_name == name)
+                .delete()
+            )
+            if rot_count > 0:
+                log.info(f"Deleted {rot_count} rotation seed(s) for identity: {name}")
+
+            db.delete(seed)
+            log.info(f"Deleted identity seed by AID: {name} ({aid[:16]}...)")
+            return True
+
+    def delete_credential_seeds_bulk(self, saids: list[str]) -> int:
+        """Delete multiple credential seeds by SAID list. Returns count deleted."""
+        if not saids:
+            return 0
+        with _get_db_session() as db:
+            count = (
+                db.query(KeriCredentialSeed)
+                .filter(KeriCredentialSeed.expected_said.in_(saids))
+                .delete(synchronize_session="fetch")
+            )
+            if count > 0:
+                log.info(f"Bulk deleted {count} credential seed(s)")
+            return count
+
+    def delete_identity_seeds_bulk(self, names: list[str]) -> int:
+        """Delete multiple identity seeds and their rotation seeds. Returns identity count deleted."""
+        if not names:
+            return 0
+        with _get_db_session() as db:
+            # Delete rotation seeds first
+            rot_count = (
+                db.query(KeriRotationSeed)
+                .filter(KeriRotationSeed.identity_name.in_(names))
+                .delete(synchronize_session="fetch")
+            )
+            if rot_count > 0:
+                log.info(f"Bulk deleted {rot_count} rotation seed(s)")
+
+            count = (
+                db.query(KeriIdentitySeed)
+                .filter(KeriIdentitySeed.name.in_(names))
+                .delete(synchronize_session="fetch")
+            )
+            if count > 0:
+                log.info(f"Bulk deleted {count} identity seed(s)")
+            return count
+
     # -- Query Helpers --
+
+    def get_credential_seeds_by_issuer(self, identity_name: str) -> list[KeriCredentialSeed]:
+        """Get all credential seeds issued by a specific identity."""
+        with _get_db_session() as db:
+            seeds = (
+                db.query(KeriCredentialSeed)
+                .filter(KeriCredentialSeed.issuer_identity_name == identity_name)
+                .order_by(KeriCredentialSeed.rebuild_order)
+                .all()
+            )
+            db.expunge_all()
+            return seeds
+
+    def get_credential_seeds_by_schema(self, schema_said: str) -> list[KeriCredentialSeed]:
+        """Get all credential seeds for a specific schema."""
+        with _get_db_session() as db:
+            seeds = (
+                db.query(KeriCredentialSeed)
+                .filter(KeriCredentialSeed.schema_said == schema_said)
+                .order_by(KeriCredentialSeed.rebuild_order)
+                .all()
+            )
+            db.expunge_all()
+            return seeds
+
+    def get_identity_seed_by_aid(self, aid: str) -> Optional[KeriIdentitySeed]:
+        """Get an identity seed by AID."""
+        with _get_db_session() as db:
+            seed = (
+                db.query(KeriIdentitySeed)
+                .filter(KeriIdentitySeed.expected_aid == aid)
+                .first()
+            )
+            if seed:
+                db.expunge(seed)
+            return seed
 
     def has_seeds(self) -> bool:
         """Check if any seeds exist (to distinguish first boot from rebuild)."""

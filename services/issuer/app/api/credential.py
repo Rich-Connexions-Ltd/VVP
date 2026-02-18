@@ -666,8 +666,13 @@ async def delete_credential(
                 detail="Access denied to this credential",
             )
 
-        # Delete via KERI Agent
+        # Delete via KERI Agent (also deletes seed in Sprint 73)
         await client.delete_credential(said)
+
+        # Sprint 73: Clean up issuer metadata
+        from app.db.models import ManagedCredential
+        db.query(ManagedCredential).filter(ManagedCredential.said == said).delete()
+        db.commit()
 
         # Audit log the deletion
         audit.log_access(
@@ -682,7 +687,7 @@ async def delete_credential(
             deleted=True,
             resource_type="credential",
             resource_id=said,
-            message="Credential removed from local storage. Note: The credential still exists in the KERI ecosystem.",
+            message="Credential removed from local storage and metadata. Note: The credential still exists in the KERI ecosystem.",
         )
 
     except KeriAgentUnavailableError as e:

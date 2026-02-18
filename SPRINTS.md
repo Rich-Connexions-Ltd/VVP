@@ -5590,3 +5590,61 @@ The issuer UI was built incrementally over 40+ sprints, exposing every schema fi
 - [ ] Full dossier created for ACME Inc via simplified UI (walkthrough passes)
 - [ ] All existing tests pass (no regressions)
 
+## Sprint 73: Credential & Identity Cleanup — Cascade Delete and Bulk Purge
+
+**Status:** COMPLETE
+**Goal:** Make credential and identity deletion permanent by cascading deletes through all storage layers (LMDB, PostgreSQL seeds, issuer metadata), and add bulk cleanup capabilities so test data can be efficiently removed without wiping the entire system.
+
+### Why This Matters
+
+The current DELETE endpoints only remove items from KERI Agent LMDB. Because PostgreSQL seed tables (`keri_credential_seeds`, `keri_identity_seeds`) are not cleaned up, deleted credentials and identities are silently rebuilt by StateBuilder on every container restart. The issuer's `managed_credentials` table also retains orphan records. Testing creates numerous credentials and identities that permanently overload the UI with no way to remove them short of the nuclear `POST /admin/mock-vlei/reinitialize`.
+
+### Deliverables
+
+#### Part 1: Cascade Deletion (fix existing endpoints)
+- [x] Add `delete_credential_seed(said)` and `delete_identity_seed(name)` methods to `SeedStore`
+- [x] KERI Agent `delete_credential()` also deletes from `keri_credential_seeds`
+- [x] KERI Agent `delete_identity()` also deletes from `keri_identity_seeds` (and associated `keri_rotation_seeds`)
+- [x] Issuer `DELETE /credential/{said}` also deletes from `managed_credentials`
+- [x] Issuer `DELETE /identity/{aid}` also deletes from `keri_identity_seeds` via KERI Agent cascade
+
+#### Part 2: Bulk Cleanup API
+- [x] `POST /admin/cleanup/credentials` — bulk delete credentials by org, schema, or date range
+- [x] `POST /admin/cleanup/identities` — bulk delete identities by name pattern or metadata type
+- [x] Dry-run mode (`?dry_run=true`) that returns what would be deleted without deleting
+- [x] Summary response with counts of items deleted across all layers
+
+#### Part 3: Tests
+- [x] Test cascade: delete credential → verify seed removed → restart won't rebuild
+- [x] Test cascade: delete identity → verify seed + rotation seeds removed
+- [x] Test issuer cascade: delete credential → verify managed_credential row removed
+- [x] Test bulk cleanup: delete by org, by schema, dry-run mode
+- [x] Existing tests unaffected
+
+### Key Files
+
+| File | Action | Purpose |
+|------|--------|---------|
+| `services/keri-agent/app/keri/seed_store.py` | Modify | Add delete methods |
+| `services/keri-agent/app/keri/issuer.py` | Modify | Cascade credential delete to seed store |
+| `services/keri-agent/app/keri/identity.py` | Modify | Cascade identity delete to seed store |
+| `services/issuer/app/api/credential.py` | Modify | Cascade to managed_credentials |
+| `services/issuer/app/api/admin.py` | Modify | Add bulk cleanup endpoints |
+| `services/keri-agent/app/api/admin.py` | Create/Modify | Add bulk cleanup endpoints on agent side |
+| `services/keri-agent/tests/test_seed_delete.py` | Create | Seed deletion tests |
+| `services/issuer/tests/test_cleanup.py` | Create | Bulk cleanup tests |
+
+### Dependencies
+
+- Sprint 69 (Ephemeral LMDB — seed store architecture)
+- Sprint 70 (StateBuilder — witness publish on startup)
+
+### Exit Criteria
+
+- [x] Deleting a credential via API removes it from LMDB, `keri_credential_seeds`, and `managed_credentials`
+- [x] Deleting an identity via API removes it from LMDB, `keri_identity_seeds`, and `keri_rotation_seeds`
+- [x] Deleted items do NOT reappear after container restart (seed store cleaned)
+- [x] Bulk cleanup endpoint deletes multiple credentials/identities with summary
+- [x] Dry-run mode reports what would be deleted
+- [x] All existing tests pass (no regressions) — 179+898+1844=2,921 tests pass
+

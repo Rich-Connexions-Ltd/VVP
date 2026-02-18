@@ -508,6 +508,25 @@ class KeriAgentClient:
         """Delete a credential by SAID. Raises HTTPException on error."""
         await self._delete(f"/credentials/{said}")
 
+    async def bulk_cleanup_credentials(self, saids: list[str], force: bool = True) -> dict:
+        """Bulk delete credentials by SAID list via KERI Agent admin endpoint.
+
+        Sprint 73: Returns dict with deleted_saids, failed, blocked_saids, etc.
+        """
+        resp = await self._post(
+            "/admin/cleanup/credentials",
+            json={"saids": saids, "force": force, "dry_run": False},
+        )
+        return resp.json()
+
+    async def bulk_cleanup_identities(self, body: dict) -> dict:
+        """Bulk delete identities via KERI Agent admin endpoint.
+
+        Sprint 73: Returns dict with deleted_names, failed, blocked_names, etc.
+        """
+        resp = await self._post("/admin/cleanup/identities", json=body)
+        return resp.json()
+
     # =========================================================================
     # Dossier
     # =========================================================================

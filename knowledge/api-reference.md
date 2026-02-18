@@ -203,7 +203,7 @@ Lightweight org name list for any authenticated user. Used by dossier wizard for
 | `GET` | `/identity/{aid}` | Get identity details |
 | `GET` | `/identity/{aid}/oobi` | Get OOBI URL |
 | `POST` | `/identity/{aid}/rotate` | Rotate keys |
-| `DELETE` | `/identity/{aid}` | Delete identity |
+| `DELETE` | `/identity/{aid}` | Delete identity (cascades to `keri_identity_seeds` + `keri_rotation_seeds` via KERI Agent, Sprint 73) |
 
 ### Credential Registries (`/registry`)
 
@@ -222,7 +222,7 @@ Lightweight org name list for any authenticated user. Used by dossier wizard for
 | `GET` | `/credential` | List credentials |
 | `GET` | `/credential/{said}` | Get credential details |
 | `POST` | `/credential/{said}/revoke` | Revoke credential |
-| `DELETE` | `/credential/{said}` | Delete credential |
+| `DELETE` | `/credential/{said}` | Delete credential (cascades to `managed_credentials`, Sprint 73) |
 
 #### POST /credential/issue — Sprint 67 Validation
 
@@ -527,6 +527,8 @@ When found via OSP delegation, the response contains the **owner org's** data (o
 | `POST` | `/admin/mock-vlei/reinitialize` | Clear all data and re-create mock GLEIF/QVI infrastructure |
 | `GET` | `/admin/settings/vetter-enforcement` | Get vetter constraint enforcement status |
 | `PUT` | `/admin/settings/vetter-enforcement` | Toggle vetter constraint enforcement (query: `enabled=true\|false`) |
+| `POST` | `/admin/cleanup/credentials` | Bulk delete credentials by org, schema, or date. Requires admin. Sends batch to KERI Agent (Sprint 73) |
+| `POST` | `/admin/cleanup/identities` | Bulk delete identities. Requires admin. Forwards to KERI Agent (Sprint 73) |
 
 ### PBX Management (`/pbx`) — Sprint 71
 
@@ -592,6 +594,8 @@ Base URL: `http://keri-agent.internal:8002` (internal only)
 | Method | Path | Purpose |
 |--------|------|---------|
 | `GET` | `/admin/seeds/export?passphrase=<passphrase>` | Export encrypted KERI seed backup |
+| `POST` | `/admin/cleanup/credentials` | Bulk delete credentials by SAID list, issuer, schema, or date filter (Sprint 73) |
+| `POST` | `/admin/cleanup/identities` | Bulk delete identities by name list, pattern, or metadata type (Sprint 73) |
 
 #### GET /admin/seeds/export (Sprint 69)
 
@@ -628,6 +632,46 @@ Disaster recovery endpoint that exports all KERI key material as an AES-256-GCM 
 - `400 Bad Request`: Passphrase missing or shorter than 8 characters
 - `401 Unauthorized`: Missing or invalid bearer token
 
+#### POST /admin/cleanup/credentials (Sprint 73)
+
+Bulk delete credentials matching filter criteria. Deletes from both KERI state (Credentialer) and PostgreSQL `keri_credential_seeds`.
+
+**Auth:** Bearer token
+
+**Request:**
+```json
+{
+  "saids": ["E...", "E..."],        // Explicit SAID list (optional)
+  "issuer_aid": "E...",             // Filter by issuer AID (optional)
+  "schema_said": "E...",            // Filter by schema SAID (optional)
+  "before_date": "2026-01-01T00:00:00Z",  // Filter by issuance date (optional)
+  "dry_run": false,                 // Preview without deleting
+  "force": false                    // Delete even if revocation fails
+}
+```
+
+**Response:** `{ "deleted_count": 5, "errors": [], "dry_run": false }`
+
+#### POST /admin/cleanup/identities (Sprint 73)
+
+Bulk delete identities matching filter criteria. Deletes from both KERI state (Habery) and PostgreSQL `keri_identity_seeds` + `keri_rotation_seeds`.
+
+**Auth:** Bearer token
+
+**Request:**
+```json
+{
+  "names": ["id-1", "id-2"],        // Explicit name list (optional)
+  "pattern": "test-*",              // Glob pattern on name (optional)
+  "metadata_type": "regular",       // Filter by identity metadata (optional)
+  "dry_run": false,                 // Preview without deleting
+  "force": false,                   // Delete even if errors occur
+  "cascade_credentials": false      // Also delete credentials issued by these identities
+}
+```
+
+**Response:** `{ "deleted_count": 3, "errors": [], "dry_run": false, "cascaded_credentials": 0 }`
+
 ### Identity
 
 | Method | Path | Purpose |
@@ -637,7 +681,7 @@ Disaster recovery endpoint that exports all KERI key material as an AES-256-GCM 
 | `GET` | `/identity/{aid}` | Get identity details |
 | `GET` | `/identity/{aid}/oobi` | Get OOBI URL |
 | `POST` | `/identity/{aid}/rotate` | Rotate keys |
-| `DELETE` | `/identity/{aid}` | Delete identity |
+| `DELETE` | `/identity/{aid}` | Delete identity (cascades to `keri_identity_seeds` + `keri_rotation_seeds`, Sprint 73) |
 
 ### Registry
 
@@ -657,7 +701,7 @@ Disaster recovery endpoint that exports all KERI key material as an AES-256-GCM 
 | `GET` | `/credential/{said}` | Get credential details |
 | `GET` | `/credential/{said}/cesr` | Get credential in CESR format |
 | `POST` | `/credential/{said}/revoke` | Revoke credential |
-| `DELETE` | `/credential/{said}` | Delete credential |
+| `DELETE` | `/credential/{said}` | Delete credential (cascades to `keri_credential_seeds`, Sprint 73) |
 
 ### Dossier
 

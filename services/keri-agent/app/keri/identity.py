@@ -371,7 +371,12 @@ class IssuerIdentityManager:
             pass
 
     async def delete_identity(self, aid: str) -> bool:
-        """Delete an identity from local storage."""
+        """Delete an identity from local storage and seed store.
+
+        Sprint 73: Also removes the identity seed and rotation seeds from
+        PostgreSQL so the identity won't be rebuilt by StateBuilder on
+        container restart.
+        """
         async with self._lock:
             if aid not in self.hby.prefixes:
                 raise IdentityNotFoundError(f"Identity not found: {aid}")
@@ -388,6 +393,14 @@ class IssuerIdentityManager:
 
             if pre in self.hby.prefixes:
                 self.hby.prefixes.remove(pre)
+
+            # Sprint 73: Cascade delete to seed store
+            try:
+                from app.keri.seed_store import get_seed_store
+                seed_store = get_seed_store()
+                seed_store.delete_identity_seed_by_aid(aid)
+            except Exception as e:
+                log.warning(f"Failed to delete identity seed for {aid[:16]}...: {e}")
 
             log.info(f"Deleted identity from local storage: {name} ({aid[:16]}...)")
             return True

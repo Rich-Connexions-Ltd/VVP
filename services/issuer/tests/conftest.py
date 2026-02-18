@@ -299,6 +299,26 @@ class MockKeriAgentClient:
             self._issued_credentials.pop(said, None)
         self.delete_credential = AsyncMock(side_effect=_delete_credential)
 
+        # Sprint 73: Bulk cleanup methods
+        async def _bulk_cleanup_credentials(saids, force=True):
+            deleted = []
+            for said in saids:
+                self._issued_credentials.pop(said, None)
+                deleted.append(said)
+            return {
+                "deleted_count": len(deleted), "deleted_saids": deleted,
+                "failed": [], "blocked_saids": [], "dry_run": False,
+            }
+        self.bulk_cleanup_credentials = AsyncMock(side_effect=_bulk_cleanup_credentials)
+
+        async def _bulk_cleanup_identities(body):
+            return {
+                "deleted_count": 0, "deleted_names": [],
+                "failed": [], "blocked_names": [],
+                "cascaded_credential_count": 0, "dry_run": body.get("dry_run", False),
+            }
+        self.bulk_cleanup_identities = AsyncMock(side_effect=_bulk_cleanup_identities)
+
         # Dossier methods
         self.build_dossier = AsyncMock(return_value=DossierResponse(
             root_said=_DEFAULT_CRED_SAID, root_saids=[_DEFAULT_CRED_SAID],

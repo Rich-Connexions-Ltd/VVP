@@ -1542,3 +1542,218 @@ async def reinitialize_mock_vlei(
             tables_cleared=tables_cleared,
             message=f"Tables cleared but re-initialization failed: {e}",
         )
+
+
+# =============================================================================
+# Sprint 73: Bulk Cleanup Endpoints
+# =============================================================================
+
+
+class BulkCredentialCleanupRequest(BaseModel):
+    """Request for bulk credential cleanup."""
+    organization_id: str | None = None
+    schema_said: str | None = None
+    before: str | None = None  # ISO datetime string
+    dry_run: bool = False
+
+
+class BulkCredentialCleanupResponse(BaseModel):
+    """Response for bulk credential cleanup."""
+    deleted_count: int
+    deleted_saids: list[str]
+    failed: list[dict]
+    blocked_saids: list[str]
+    dry_run: bool
+
+
+class BulkIdentityCleanupRequest(BaseModel):
+    """Request for bulk identity cleanup."""
+    organization_id: str | None = None
+    name_pattern: str | None = None
+    cascade_credentials: bool = False
+    force: bool = False
+    dry_run: bool = False
+
+
+class BulkIdentityCleanupResponse(BaseModel):
+    """Response for bulk identity cleanup."""
+    deleted_count: int
+    deleted_names: list[str]
+    failed: list[dict]
+    blocked_names: list[dict]
+    cascaded_credential_count: int
+    dry_run: bool
+
+
+@router.post("/cleanup/credentials", response_model=BulkCredentialCleanupResponse)
+async def bulk_cleanup_credentials(
+    body: BulkCredentialCleanupRequest,
+    request: Request,
+    principal: Principal = require_admin,
+) -> BulkCredentialCleanupResponse:
+    """Bulk delete credentials by organization, schema, or date.
+
+    Queries the issuer's managed_credentials table for matching SAIDs,
+    sends a single batch request to the KERI Agent, then cleans up
+    managed_credentials rows.
+
+    Requires: issuer:admin role
+    """
+    from app.db.session import get_db_session
+    from app.db.models import ManagedCredential
+    from app.keri_client import get_keri_client, KeriAgentUnavailableError
+
+    audit = get_audit_logger()
+
+    # Query matching SAIDs from issuer DB
+    with get_db_session() as db:
+        query = db.query(ManagedCredential)
+        if body.organization_id:
+            query = query.filter(ManagedCredential.organization_id == body.organization_id)
+        if body.schema_said:
+            query = query.filter(ManagedCredential.schema_said == body.schema_said)
+        if body.before:
+            from datetime import datetime as dt
+            try:
+                before_dt = dt.fromisoformat(body.before.replace("Z", "+00:00"))
+                query = query.filter(ManagedCredential.created_at < before_dt)
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Invalid date format: {body.before}")
+
+        matching = query.all()
+        target_saids = [m.said for m in matching]
+
+    if not target_saids:
+        return BulkCredentialCleanupResponse(
+            deleted_count=0, deleted_saids=[], failed=[],
+            blocked_saids=[], dry_run=body.dry_run,
+        )
+
+    if body.dry_run:
+        return BulkCredentialCleanupResponse(
+            deleted_count=len(target_saids),
+            deleted_saids=target_saids,
+            failed=[],
+            blocked_saids=[],
+            dry_run=True,
+        )
+
+    # Send batch to KERI Agent
+    try:
+        client = get_keri_client()
+        agent_result = await client.bulk_cleanup_credentials(target_saids)
+    except KeriAgentUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        log.error(f"KERI Agent bulk credential cleanup failed: {e}")
+        raise HTTPException(status_code=500, detail="KERI Agent bulk cleanup failed")
+
+    deleted_saids = agent_result.get("deleted_saids", [])
+
+    # Clean up issuer metadata for successfully deleted credentials
+    if deleted_saids:
+        with get_db_session() as db:
+            db.query(ManagedCredential).filter(
+                ManagedCredential.said.in_(deleted_saids)
+            ).delete(synchronize_session="fetch")
+
+    audit.log_access(
+        action="admin.bulk_cleanup_credentials",
+        principal_id=principal.key_id,
+        resource="credentials",
+        details={
+            "deleted_count": len(deleted_saids),
+            "organization_id": body.organization_id,
+            "schema_said": body.schema_said,
+        },
+        request=request,
+    )
+
+    return BulkCredentialCleanupResponse(
+        deleted_count=len(deleted_saids),
+        deleted_saids=deleted_saids,
+        failed=agent_result.get("failed", []),
+        blocked_saids=agent_result.get("blocked_saids", []),
+        dry_run=False,
+    )
+
+
+@router.post("/cleanup/identities", response_model=BulkIdentityCleanupResponse)
+async def bulk_cleanup_identities(
+    body: BulkIdentityCleanupRequest,
+    request: Request,
+    principal: Principal = require_admin,
+) -> BulkIdentityCleanupResponse:
+    """Bulk delete identities by organization, name pattern, or metadata.
+
+    Sends filter criteria to the KERI Agent for processing.
+    If cascade_credentials=true, also deletes credentials issued by the identities.
+
+    Requires: issuer:admin role
+    """
+    from app.keri_client import get_keri_client, KeriAgentUnavailableError
+
+    audit = get_audit_logger()
+
+    # Build KERI Agent request
+    agent_body: dict = {
+        "cascade_credentials": body.cascade_credentials,
+        "force": body.force,
+        "dry_run": body.dry_run,
+    }
+
+    if body.name_pattern:
+        agent_body["name_pattern"] = body.name_pattern
+
+    # If org filter, look up identities for that org
+    if body.organization_id:
+        from app.db.session import get_db_session
+        from app.db.models import Organization
+        with get_db_session() as db:
+            org = db.query(Organization).filter_by(id=body.organization_id).first()
+            if org and org.aid:
+                # Find identity name from KERI Agent
+                try:
+                    client = get_keri_client()
+                    identities = await client.list_identities()
+                    org_names = [i.name for i in identities if i.aid == org.aid]
+                    if org_names:
+                        agent_body["names"] = org_names
+                    else:
+                        return BulkIdentityCleanupResponse(
+                            deleted_count=0, deleted_names=[], failed=[],
+                            blocked_names=[], cascaded_credential_count=0,
+                            dry_run=body.dry_run,
+                        )
+                except KeriAgentUnavailableError as e:
+                    raise HTTPException(status_code=503, detail=str(e))
+
+    try:
+        client = get_keri_client()
+        agent_result = await client.bulk_cleanup_identities(agent_body)
+    except KeriAgentUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        log.error(f"KERI Agent bulk identity cleanup failed: {e}")
+        raise HTTPException(status_code=500, detail="KERI Agent bulk cleanup failed")
+
+    audit.log_access(
+        action="admin.bulk_cleanup_identities",
+        principal_id=principal.key_id,
+        resource="identities",
+        details={
+            "deleted_count": agent_result.get("deleted_count", 0),
+            "organization_id": body.organization_id,
+            "name_pattern": body.name_pattern,
+        },
+        request=request,
+    )
+
+    return BulkIdentityCleanupResponse(
+        deleted_count=agent_result.get("deleted_count", 0),
+        deleted_names=agent_result.get("deleted_names", []),
+        failed=agent_result.get("failed", []),
+        blocked_names=agent_result.get("blocked_names", []),
+        cascaded_credential_count=agent_result.get("cascaded_credential_count", 0),
+        dry_run=body.dry_run,
+    )
