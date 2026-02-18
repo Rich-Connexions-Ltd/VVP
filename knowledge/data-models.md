@@ -292,6 +292,7 @@ class CreateIdentityRequest(BaseModel):
     next_key_count: Optional[int]  # Number of next keys
     next_threshold: Optional[str]  # Next signing threshold
     publish_to_witnesses: bool = True
+    metadata: Optional[dict] = None  # e.g. {"type": "test"} for cleanup filtering
 
 class IdentityResponse(BaseModel):
     aid: str                       # Autonomic Identifier
@@ -839,6 +840,7 @@ class CreateIdentityRequest(BaseModel):
     next_key_count: int = 1        # Number of pre-rotated next keys
     next_threshold: str = "1"      # Next key threshold expression
     transferable: bool = True      # Whether keys can be rotated
+    metadata: dict | None = None   # e.g. {"type": "test"} for cleanup filtering
 
 class IdentityResponse(BaseModel):
     aid: str                       # Autonomic Identifier

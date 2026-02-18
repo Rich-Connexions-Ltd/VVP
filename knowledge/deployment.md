@@ -40,6 +40,16 @@ The pipeline has separate jobs triggered by path filters:
 
 All path filters are bypassed when `force_all=true` is passed via workflow dispatch.
 
+### Post-Deployment Integration Tests
+
+The `post-deployment-tests` job runs after deploy jobs complete. It:
+1. Waits for services to be healthy (up to 5 minutes)
+2. Runs integration tests selected by change-based heuristic or `test_suite` input
+3. Submits results to `POST /admin/deployment-tests`
+4. **Cleans up test identities** — calls `POST /admin/cleanup/identities` with `metadata_type: "test"`, `cascade_credentials: true`, `force: true` to remove all test-created identities and their credentials
+
+Test identities are tagged with `metadata={"type": "test"}` during creation and named with `test-` prefixes for visibility. Three cleanup layers ensure no test data persists: per-test fixture teardown, session-scoped autouse cleanup, and the CI cleanup step.
+
 ### Issuer Session Persistence (Sprint 73)
 
 The issuer uses **sticky sessions** (Azure Container Apps session affinity) and **PostgreSQL-backed session storage** so that user login sessions survive across replicas and container restarts.

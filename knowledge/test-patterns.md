@@ -150,6 +150,22 @@ Key shared fixtures:
 5. **libsodium**: Required for crypto tests - always use test runner script
 6. **keripy exclusion**: `keripy/` directory excluded in `pytest.ini` to avoid conflicts
 
+### Test Identity Conventions (Post-Sprint 73)
+
+Integration tests that create identities on the live platform follow these conventions:
+
+1. **Name prefix**: All test identities use a `test-` prefix (e.g., `test-api-rotate-a1b2c3d4`, `test-integ-e5f6g7h8`)
+2. **Metadata tag**: All test identities are created with `metadata={"type": "test"}` so they can be filtered by the bulk cleanup API
+3. **Three-layer cleanup**:
+   - **Per-test**: `test_identity` fixture deletes its identity in teardown
+   - **Session**: `cleanup_test_identities` autouse fixture sweeps leftover `test-*` identities after the test session
+   - **CI**: `deploy.yml` "Cleanup test identities" step calls `POST /admin/cleanup/identities` with `metadata_type: "test"` after every post-deployment test run
+
+Key files:
+- `tests/integration/conftest.py` — `TEST_IDENTITY_PREFIXES` tuple, `cleanup_test_identities` fixture
+- `tests/integration/helpers/issuer_client.py` — `create_identity(metadata=...)` parameter
+- `.github/workflows/deploy.yml` — "Cleanup test identities" step
+
 ### Sprint 61 Test Patterns
 
 **Direct DB org creation** (`_create_db_org()`): Creates organizations directly in the database via `SessionLocal()`, bypassing KERI infrastructure. Used when tests need an org with an AID but don't need real KERI identity management. Pattern:
