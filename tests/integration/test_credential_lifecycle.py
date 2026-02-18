@@ -170,7 +170,7 @@ class TestSingleCredentialLifecycle:
             if acdc.get("d") == credential["said"]:
                 found = True
                 # Verify ACDC structure
-                assert acdc.get("i") == test_identity["aid"], "Issuer AID mismatch"
+                assert acdc.get("i") == credential["issuer_aid"], "Issuer AID mismatch"
                 assert acdc.get("s") == TN_ALLOCATION_SCHEMA, "Schema mismatch"
                 break
 
