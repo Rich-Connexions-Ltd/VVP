@@ -39,6 +39,7 @@ async def create_identity(request: CreateIdentityRequest):
             isith=request.key_threshold,
             ncount=request.next_key_count,
             nsith=request.next_threshold,
+            metadata=request.metadata,
         )
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))

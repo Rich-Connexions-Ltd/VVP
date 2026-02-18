@@ -60,24 +60,26 @@ class IssuerClient:
         self,
         name: str,
         publish_to_witnesses: bool = False,
+        metadata: dict | None = None,
     ) -> dict:
         """Create a new issuer identity.
 
         Args:
             name: Unique name for the identity
             publish_to_witnesses: Whether to publish to witnesses
+            metadata: Optional metadata dict (e.g. {"type": "test"})
 
         Returns:
             Response containing identity details
         """
+        payload = {
+            "name": name,
+            "publish_to_witnesses": publish_to_witnesses,
+        }
+        if metadata is not None:
+            payload["metadata"] = metadata
         async with self._get_client() as client:
-            response = await client.post(
-                "/identity",
-                json={
-                    "name": name,
-                    "publish_to_witnesses": publish_to_witnesses,
-                },
-            )
+            response = await client.post("/identity", json=payload)
             response.raise_for_status()
             return response.json()
 
@@ -85,6 +87,20 @@ class IssuerClient:
         """Get identity by AID."""
         async with self._get_client() as client:
             response = await client.get(f"/identity/{aid}")
+            response.raise_for_status()
+            return response.json()
+
+    async def delete_identity(self, aid: str) -> dict:
+        """Delete an identity by AID.
+
+        Args:
+            aid: AID of the identity to delete
+
+        Returns:
+            Response confirming deletion
+        """
+        async with self._get_client() as client:
+            response = await client.delete(f"/identity/{aid}")
             response.raise_for_status()
             return response.json()
 

@@ -162,6 +162,7 @@ class IssuerIdentityManager:
         ncount: Optional[int] = None,
         nsith: Optional[str] = None,
         witness_aids: Optional[list[str]] = None,
+        metadata: Optional[dict] = None,
     ) -> IdentityInfo:
         """Create a new KERI identity.
 
@@ -173,6 +174,7 @@ class IssuerIdentityManager:
             ncount: Next key count for rotation (default from config)
             nsith: Next signing threshold (default from config)
             witness_aids: List of witness AIDs (default from config)
+            metadata: Optional metadata dict (e.g. {"type": "test"})
 
         Returns:
             IdentityInfo with created identity details
@@ -217,6 +219,7 @@ class IssuerIdentityManager:
                 nsith=str(nsith),
                 witness_aids=wits,
                 toad=toad,
+                metadata=metadata,
             )
 
             return IdentityInfo(

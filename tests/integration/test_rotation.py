@@ -16,9 +16,12 @@ from .helpers import IssuerClient
 pytestmark = [pytest.mark.integration, pytest.mark.issuer]
 
 
-def unique_name(prefix: str = "rotate") -> str:
+def unique_name(prefix: str = "test-rotate") -> str:
     """Generate unique name for test identity."""
     return f"{prefix}-{uuid.uuid4().hex[:8]}"
+
+
+TEST_METADATA = {"type": "test"}
 
 
 @pytest.mark.asyncio
@@ -31,8 +34,8 @@ async def test_rotation_via_api(admin_issuer_client: IssuerClient):
     - Identity state is updated
     """
     # Create identity
-    name = unique_name("api-rotate")
-    create_result = await admin_issuer_client.create_identity(name, publish_to_witnesses=False)
+    name = unique_name("test-api-rotate")
+    create_result = await admin_issuer_client.create_identity(name, publish_to_witnesses=False, metadata=TEST_METADATA)
     identity = create_result["identity"]
     aid = identity["aid"]
     assert identity["sequence_number"] == 0
@@ -61,8 +64,8 @@ async def test_multiple_rotations(admin_issuer_client: IssuerClient):
     - State remains consistent after multiple rotations
     """
     # Create identity
-    name = unique_name("multi-rotate")
-    create_result = await admin_issuer_client.create_identity(name, publish_to_witnesses=False)
+    name = unique_name("test-multi-rotate")
+    create_result = await admin_issuer_client.create_identity(name, publish_to_witnesses=False, metadata=TEST_METADATA)
     identity = create_result["identity"]
     aid = identity["aid"]
 
@@ -88,8 +91,8 @@ async def test_rotation_with_witness_publishing(admin_issuer_client: IssuerClien
     - Response includes publish results
     """
     # Create identity with witness publishing
-    name = unique_name("witness-rotate")
-    create_result = await admin_issuer_client.create_identity(name, publish_to_witnesses=True)
+    name = unique_name("test-witness-rotate")
+    create_result = await admin_issuer_client.create_identity(name, publish_to_witnesses=True, metadata=TEST_METADATA)
     identity = create_result["identity"]
     aid = identity["aid"]
 
@@ -118,8 +121,8 @@ async def test_rotation_with_custom_key_config(admin_issuer_client: IssuerClient
     - Rotation succeeds with valid configuration
     """
     # Create identity
-    name = unique_name("custom-rotate")
-    create_result = await admin_issuer_client.create_identity(name, publish_to_witnesses=False)
+    name = unique_name("test-custom-rotate")
+    create_result = await admin_issuer_client.create_identity(name, publish_to_witnesses=False, metadata=TEST_METADATA)
     identity = create_result["identity"]
     aid = identity["aid"]
 
@@ -145,8 +148,8 @@ async def test_rotation_invalid_threshold_rejected(admin_issuer_client: IssuerCl
     import httpx
 
     # Create identity
-    name = unique_name("invalid-rotate")
-    create_result = await admin_issuer_client.create_identity(name, publish_to_witnesses=False)
+    name = unique_name("test-invalid-rotate")
+    create_result = await admin_issuer_client.create_identity(name, publish_to_witnesses=False, metadata=TEST_METADATA)
     identity = create_result["identity"]
     aid = identity["aid"]
 

@@ -80,6 +80,7 @@ async def create_identity(
             key_threshold=request.key_threshold or "1",
             next_key_count=request.next_key_count or 1,
             next_threshold=request.next_threshold or "1",
+            metadata=request.metadata,
         )
 
         # Create identity via KERI Agent

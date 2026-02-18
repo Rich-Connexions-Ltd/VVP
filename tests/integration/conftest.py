@@ -5,12 +5,15 @@ the issuer and verifier services, supporting local, docker, and
 Azure deployment modes.
 """
 
+import logging
 import os
 from dataclasses import dataclass
 from typing import AsyncGenerator
 
 import pytest
 import pytest_asyncio
+
+log = logging.getLogger(__name__)
 
 from .helpers import (
     IssuerClient,
@@ -203,38 +206,40 @@ async def dossier_server(
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def test_identity(
-    issuer_client: IssuerClient,
+    admin_issuer_client: IssuerClient,
     environment_config: EnvironmentConfig,
-) -> dict:
-    """Get or create a test identity for credential issuance.
+) -> AsyncGenerator[dict, None]:
+    """Create a dedicated test identity for credential issuance.
 
-    When VVP_TEST_ORG_ID is set (Sprint 67+), returns the org's identity
-    so credentials are issued under the org's AID. Otherwise creates a
-    fresh identity for local/pre-org testing.
+    Always creates a fresh identity with a 'test-' prefix name so it can
+    be identified and cleaned up. Uses admin_issuer_client for the
+    issuer:admin role required by POST/DELETE /identity.
+
+    After tests complete, the identity is automatically deleted.
     """
-    if environment_config.org_id:
-        # Use the org's identity — credential endpoint uses org AID for issuance
-        org_info = await issuer_client.get_organization(environment_config.org_id)
-        org_aid = org_info["aid"]
-        identity = await issuer_client.get_identity(org_aid)
-        return identity
-    else:
-        import uuid
-        name = f"test-identity-{uuid.uuid4().hex[:8]}"
-        result = await issuer_client.create_identity(name, publish_to_witnesses=False)
-        return result["identity"]
+    import uuid
+    name = f"test-integ-{uuid.uuid4().hex[:8]}"
+    result = await admin_issuer_client.create_identity(name, publish_to_witnesses=False, metadata={"type": "test"})
+    identity = result["identity"]
+    yield identity
+    # Cleanup: delete the test identity
+    try:
+        await admin_issuer_client.delete_identity(identity["aid"])
+    except Exception:
+        pass  # Best-effort cleanup
 
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def test_registry(
-    issuer_client: IssuerClient,
+    admin_issuer_client: IssuerClient,
     test_identity: dict,
     environment_config: EnvironmentConfig,
 ) -> dict:
     """Get or create a test registry linked to test identity.
 
-    When VVP_TEST_ORG_ID is set, returns the org's registry (derived from
-    the org identity name). Otherwise creates a fresh registry.
+    When VVP_TEST_ORG_ID is set, returns the org's registry (the org's
+    credential issuance uses its own registry). Otherwise creates a fresh
+    registry for the test identity.
     """
     if environment_config.org_id:
         # Org registry name follows the pattern: org-{org_id[:8]}-registry
@@ -243,7 +248,7 @@ async def test_registry(
     else:
         import uuid
         name = f"test-registry-{uuid.uuid4().hex[:8]}"
-        result = await issuer_client.create_registry(
+        result = await admin_issuer_client.create_registry(
             name=name,
             identity_name=test_identity["name"],
         )
@@ -301,3 +306,53 @@ def tn_allocation_schema() -> str:
 def legal_entity_schema() -> str:
     """Extended Brand Credential schema SAID (aliased as legal_entity for test compat)."""
     return LEGAL_ENTITY_SCHEMA
+
+
+# =============================================================================
+# Session-Scoped Test Identity Cleanup
+# =============================================================================
+
+# Prefixes used by integration tests when creating identities.
+# All identities with these prefixes are auto-deleted after the test session.
+TEST_IDENTITY_PREFIXES = (
+    "test-integ-",
+    "test-identity-",
+    "test-rotate-",
+    "test-api-rotate-",
+    "test-multi-rotate-",
+    "test-witness-rotate-",
+    "test-custom-rotate-",
+    "test-invalid-rotate-",
+)
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session", autouse=True)
+async def cleanup_test_identities(
+    admin_issuer_client: IssuerClient,
+) -> AsyncGenerator[None, None]:
+    """Auto-cleanup identities created by integration tests.
+
+    Runs after all tests in the session complete. Deletes any identity
+    whose name starts with a known test prefix.
+    """
+    yield  # Run all tests first
+
+    # Cleanup: list all identities and delete test ones
+    try:
+        async with admin_issuer_client._get_client() as client:
+            response = await client.get("/identity")
+            if response.status_code != 200:
+                return
+            data = response.json()
+            identities = data.get("identities", [])
+
+        for identity in identities:
+            name = identity.get("name", "")
+            if any(name.startswith(prefix) for prefix in TEST_IDENTITY_PREFIXES):
+                try:
+                    await admin_issuer_client.delete_identity(identity["aid"])
+                    log.info(f"Cleaned up test identity: {name} ({identity['aid'][:16]}...)")
+                except Exception as e:
+                    log.warning(f"Failed to clean up {name}: {e}")
+    except Exception as e:
+        log.warning(f"Test identity cleanup failed: {e}")

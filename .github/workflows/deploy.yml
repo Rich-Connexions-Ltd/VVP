@@ -1084,6 +1084,19 @@ jobs:
 
           echo "Test results submitted to ${VVP_ISSUER_URL}/admin/deployment-tests"
 
+      - name: Cleanup test identities
+        if: always()
+        env:
+          VVP_TEST_ADMIN_KEY: ${{ secrets.VVP_SYSTEM_ADMIN_KEY }}
+        run: |
+          echo "Cleaning up test identities (metadata_type=test)..."
+          RESULT=$(curl -s -X POST "${VVP_ISSUER_URL}/admin/cleanup/identities" \
+            -H "X-API-Key: ${VVP_TEST_ADMIN_KEY}" \
+            -H "Content-Type: application/json" \
+            -d '{"metadata_type": "test", "cascade_credentials": true, "force": true}')
+          DELETED=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('deleted_count',0))" 2>/dev/null || echo "unknown")
+          echo "Deleted $DELETED test identities"
+
       - name: Upload test artifacts
         if: failure()
         uses: actions/upload-artifact@v4

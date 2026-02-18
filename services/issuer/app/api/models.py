@@ -22,6 +22,7 @@ class CreateIdentityRequest(BaseModel):
     next_key_count: Optional[int] = Field(None, description="Number of next keys")
     next_threshold: Optional[str] = Field(None, description="Next signing threshold")
     publish_to_witnesses: bool = Field(True, description="Publish OOBI to witnesses")
+    metadata: Optional[dict] = Field(None, description="Optional metadata (e.g. {\"type\": \"test\"})")
 
 
 # =============================================================================

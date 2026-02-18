@@ -26,6 +26,7 @@ class CreateIdentityRequest(BaseModel):
     next_key_count: int = Field(1, description="Number of pre-rotated next keys")
     next_threshold: str = Field("1", description="Next key threshold expression")
     transferable: bool = Field(True, description="Whether keys can be rotated")
+    metadata: dict | None = Field(None, description="Optional metadata (e.g. {\"type\": \"test\"})")
 
 
 class IdentityResponse(BaseModel):
