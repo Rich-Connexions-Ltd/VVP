@@ -492,12 +492,12 @@
 
       // Edge slot definitions matching server-side DOSSIER_EDGE_DEFS
       const EDGE_SLOTS = [
-        { name: 'vetting',  label: 'Vetting (LE)',       desc: 'Legal Entity credential verifying the AP', required: true,  schema: null,               i2i: false, access: 'ap_org' },
-        { name: 'alloc',    label: 'Allocation (GCD)',    desc: 'Cooperative Delegation credential allocating authority to AP', required: true,  schema: GCD_SCHEMA_SAID,    i2i: true,  access: 'ap_org' },
-        { name: 'tnalloc',  label: 'TN Allocation (RTU)', desc: 'Telephone Number allocation credential', required: true,  schema: TNALLOC_SCHEMA_SAID, i2i: true,  access: 'ap_org' },
-        { name: 'delsig',   label: 'Delegation Signing',  desc: 'Delegation from AP to OP for call signing', required: true,  schema: GCD_SCHEMA_SAID,    i2i: false, access: 'ap_org' },
-        { name: 'bownr',    label: 'Brand Ownership',     desc: 'Brand ownership credential (optional)', required: false, schema: null,               i2i: false, access: 'ap_org' },
-        { name: 'bproxy',   label: 'Brand Proxy',         desc: 'Brand proxy delegation (required if brand + OP differs from AP)', required: false, schema: null,               i2i: false, access: 'principal' },
+        { name: 'vetting',  label: 'Organisation Verification',       desc: 'Legal Entity credential verifying the AP', required: true,  schema: null,               i2i: false, access: 'ap_org' },
+        { name: 'alloc',    label: 'Service Provider Authorisation',   desc: 'Delegation credential authorising the AP to allocate telephone numbers', required: true,  schema: GCD_SCHEMA_SAID,    i2i: true,  access: 'ap_org' },
+        { name: 'tnalloc',  label: 'Phone Number Allocation',         desc: 'Telephone number allocation credential', required: true,  schema: TNALLOC_SCHEMA_SAID, i2i: true,  access: 'ap_org' },
+        { name: 'delsig',   label: 'Signing Authorisation',           desc: 'Delegation from AP to signing identity', required: true,  schema: GCD_SCHEMA_SAID,    i2i: false, access: 'ap_org' },
+        { name: 'bownr',    label: 'Brand Ownership',                 desc: 'Brand ownership credential (optional)', required: false, schema: null,               i2i: false, access: 'ap_org' },
+        { name: 'bproxy',   label: 'Brand Proxy',                     desc: 'Brand proxy delegation (required if brand + OP differs from AP)', required: false, schema: null,               i2i: false, access: 'principal' },
       ];
 
       // =================================================================
@@ -730,23 +730,37 @@
           }
         }
 
+        // C3: Auto-select when there's exactly one candidate
+        if (filteredCreds.length === 1 && !edgeSelections[slot.name]) {
+          selectEdgeCredential(slot.name, filteredCreds[0].said);
+          return; // selectEdgeCredential will re-render
+        }
+
         let html = `<table class="cred-picker-table">
           <thead><tr>
             <th></th>
             <th>SAID</th>
             <th>Type</th>
-            <th>Relationship</th>
+            <th>Preview</th>
             <th>Issued</th>
           </tr></thead><tbody>`;
 
         for (const c of filteredCreds) {
           const isSelected = selected === c.said;
           const schemaLabel = SCHEMA_LABELS[c.schema_said] || c.schema_said.substring(0, 16) + '...';
-          const relBadge = c.relationship === 'issued'
-            ? '<span class="status-badge" style="background:#e2e3f0;color:#3c3c8a;font-size:0.75rem;">Issued</span>'
-            : c.relationship === 'subject'
-            ? '<span class="status-badge" style="background:#dff0d8;color:#3c763d;font-size:0.75rem;">Subject</span>'
-            : '-';
+          // C4: Build credential preview from cached detail
+          let preview = '';
+          const detail = credDetailCache[c.said];
+          if (detail?.attributes) {
+            const a = detail.attributes;
+            if (a.numbers?.tn) {
+              const tns = Array.isArray(a.numbers.tn) ? a.numbers.tn : [a.numbers.tn];
+              preview = tns.slice(0, 2).join(', ') + (tns.length > 2 ? '...' : '');
+            } else if (a.legalName) { preview = a.legalName; }
+            else if (a.brandName) { preview = a.brandName; }
+            else if (a.LEI) { preview = 'LEI: ' + a.LEI; }
+            else if (a.role) { preview = 'Role: ' + a.role; }
+          }
           const names = [];
           if (c.issuer_name) names.push('by ' + c.issuer_name);
           if (c.recipient_name) names.push('to ' + c.recipient_name);
@@ -757,7 +771,7 @@
             <td><input type="radio" name="edge-${slot.name}" ${isSelected ? 'checked' : ''}></td>
             <td class="said-cell" title="${c.said}">${c.said.substring(0, 20)}...</td>
             <td>${esc(schemaLabel)}${nameInfo}</td>
-            <td>${relBadge}</td>
+            <td style="font-size:0.85rem;color:#555;">${esc(preview)}</td>
             <td>${c.issuance_dt ? new Date(c.issuance_dt).toLocaleDateString() : '-'}</td>
           </tr>`;
 

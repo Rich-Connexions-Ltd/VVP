@@ -61,6 +61,7 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 69 | Ephemeral LMDB & Zero-Downtime KERI Deploys | COMPLETE | Sprint 68c |
 | 70 | Automatic Witness Re-Publishing on Startup | COMPLETE | Sprint 69 |
 | 71 | PBX Management UI | COMPLETE | Sprint 42 |
+| 72 | Issuer UI Simplification | IN PROGRESS | Sprint 71, 65, 67 |
 
 ---
 
@@ -5510,4 +5511,82 @@ The FreeSWITCH dialplan (`public-sip.xml`) previously had hardcoded extension ma
 - [x] Deploy dry-run returns generated XML
 - [x] All 33 new tests pass, 859 total issuer tests pass
 - [x] Extensions 1000-1009 configurable with E.164 CLI validation
+
+---
+
+## Sprint 72: Issuer UI Simplification — Dossier Creation UX
+
+**Status:** COMPLETE (Phases A-C implemented, code review APPROVED R3)
+**Goal:** Simplify the issuer UI for the end-to-end dossier creation workflow. Remove unnecessary fields, add smart defaults, replace free-text inputs with constrained controls, and reduce the expertise required to create a complete dossier.
+
+**Context:** Full audit in `DOSSIER_SIMPLIFICATION_AUDIT.md`. The current UI requires deep KERI knowledge and 10 steps across 5 pages with manual org switching. Target: a user who understands VVP concepts but not KERI internals should be able to create a dossier without confusion.
+
+### Why This Matters
+
+The issuer UI was built incrementally over 40+ sprints, exposing every schema field and KERI concept directly. Creating a single dossier requires navigating identity creation, credential issuance (4 credential types), dossier assembly, and TN mapping — with no guided workflow and many fields that confuse or overwhelm non-expert users.
+
+### Deliverables
+
+#### Phase A: Quick Wins (form-level fixes)
+- [ ] Remove "Publish to witnesses" checkbox from all forms (identity, credentials, vetter cert) — always true
+- [ ] Replace `assertionCountry` free-text with country dropdown (ISO 3166-1 alpha-3)
+- [ ] Replace `channel` free-text with dropdown (voice/sms/video)
+- [ ] Hide GCD constraint fields (`c_goal`, `c_pgeo`, `c_rgeo`, `c_jur`, `c_ical`, `c_proto`, `c_prove`, `c_human`, `gfw`) under collapsible "Advanced Constraints" section
+- [ ] Hide auto-injected `certification` edge from credential UI
+- [ ] Hide "Additional Edges (manual)" section under "Advanced" toggle
+- [ ] Rename "Transferable" to "Allow key rotation" with explanatory hint
+- [ ] Rename identity placeholder to purpose-suggestive (e.g., "acme-signing-key")
+
+#### Phase B: Smart Defaults & Pickers
+- [ ] Identity picker dropdown for GCD delegate (`i` field) and recipient AID — replaces raw AID text input
+- [ ] Auto-populate `issuer` edge with current org's LE credential SAID
+- [ ] Auto-populate recipient AID from org context for brand/TNAlloc credentials
+- [ ] Context-aware field labels: "Recipient AID" → "Delegate Identity" (GCD), "Brand Owner" (Brand), etc.
+- [ ] Add Pseudo-LEI auto-generation hint on org creation (or auto-generate if blank)
+- [ ] Searchable country multi-select for VetterCert ECC/jurisdiction selectors (replace checkbox grid)
+
+#### Phase C: Credential List & Dossier Wizard UX
+- [ ] Credential list pagination (50 per page) + schema type filter on credentials page
+- [ ] Dossier wizard edge slot pagination + search
+- [ ] Rename dossier edge labels to user-friendly terms (vetting → "Organization Verification", alloc → "Service Provider Authorization", etc.)
+- [ ] Auto-select single-candidate edge slots in dossier wizard
+- [ ] Show credential attribute preview in dossier edge picker (not just SAID)
+- [ ] Pre-select just-created dossier in TN mapping when linked from wizard
+- [ ] Auto-fill brand name/logo in TN mapping from dossier's brand credential
+
+#### Phase D: Walkthrough Validation
+- [ ] End-to-end walkthrough: create full dossier for ACME Inc using Brand Assure + Deutsche Vetters
+- [ ] Verify each step works smoothly with simplified UI
+- [ ] Document any remaining issues
+
+### Key Files to Modify
+
+| File | Changes |
+|------|---------|
+| `services/issuer/web/create.html` | Remove publish checkbox, rename transferable, update placeholder |
+| `services/issuer/web/credentials.html` | Country/channel dropdowns, hide advanced sections, identity picker, auto-populate edges, pagination |
+| `services/issuer/web/vetter.html` | Searchable country selectors, remove publish checkbox, remove vetter name field |
+| `services/issuer/web/dossier.html` | Rename edge labels, pagination, auto-select, attribute preview |
+| `services/issuer/web/tn-mappings.html` | Pre-select dossier, auto-fill brand info |
+| `services/issuer/web/organizations.html` | LEI hint, next-steps prompt |
+| `services/issuer/web/styles.css` | Styles for new components (searchable select, collapsible sections) |
+
+### Dependencies
+
+- Sprint 71 (PBX Management UI — latest sprint)
+- Sprint 65 (Schema-Aware Credential Management — edge slot system)
+- Sprint 67 (Trust Anchor Admin — org type authorization)
+
+### Exit Criteria
+
+- [ ] All "Publish to witnesses" checkboxes removed from UI
+- [ ] assertionCountry and channel are dropdown selectors
+- [ ] GCD form shows only essential fields by default (constraint fields hidden)
+- [ ] Auto-injected edges hidden from UI
+- [ ] Identity picker works for GCD delegate selection
+- [ ] Vetter cert country selectors are searchable
+- [ ] Credential lists paginated (≤50 per page)
+- [ ] Dossier wizard edge labels are user-friendly
+- [ ] Full dossier created for ACME Inc via simplified UI (walkthrough passes)
+- [ ] All existing tests pass (no regressions)
 

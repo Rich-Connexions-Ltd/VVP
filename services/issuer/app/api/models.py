@@ -16,7 +16,7 @@ class CreateIdentityRequest(BaseModel):
     """Request to create a new identity."""
 
     name: str = Field(..., description="Human-readable alias for the identity")
-    transferable: bool = Field(True, description="Whether keys can rotate")
+    transferable: bool = Field(True, description="Allow key rotation")
     key_count: Optional[int] = Field(None, description="Number of signing keys")
     key_threshold: Optional[str] = Field(None, description="Signing threshold")
     next_key_count: Optional[int] = Field(None, description="Number of next keys")
@@ -38,7 +38,7 @@ class IdentityResponse(BaseModel):
     witness_count: int = Field(..., description="Number of witnesses")
     key_count: int = Field(..., description="Number of signing keys")
     sequence_number: int = Field(..., description="Current key event sequence")
-    transferable: bool = Field(..., description="Whether keys can rotate")
+    transferable: bool = Field(..., description="Allow key rotation")
 
 
 class OobiResponse(BaseModel):
@@ -341,10 +341,18 @@ class RevokeCredentialResponse(BaseModel):
 
 
 class CredentialListResponse(BaseModel):
-    """Response listing credentials."""
+    """Response listing credentials.
+
+    Sprint 72: Added ``total``, ``limit``, ``offset`` for server-side pagination.
+    ``count`` is the number of credentials in this page (backward compat).
+    ``total`` is the unfiltered total before pagination.
+    """
 
     credentials: list[CredentialResponse]
     count: int
+    total: Optional[int] = None
+    limit: Optional[int] = None
+    offset: Optional[int] = None
 
 
 # =============================================================================

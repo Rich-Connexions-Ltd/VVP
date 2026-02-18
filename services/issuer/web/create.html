@@ -38,18 +38,14 @@
       <form id="createForm">
         <div style="margin-bottom: 1rem;">
           <label for="name">Identity Name</label>
-          <input type="text" id="name" name="name" placeholder="e.g., my-issuer" required>
+          <input type="text" id="name" name="name" placeholder="e.g., acme-signing-key" required>
         </div>
 
         <div class="checkbox-row">
           <input type="checkbox" id="transferable" name="transferable" checked>
-          <label for="transferable">Transferable (keys can rotate)</label>
+          <label for="transferable">Allow key rotation</label>
         </div>
-
-        <div class="checkbox-row">
-          <input type="checkbox" id="publishToWitnesses" name="publishToWitnesses" checked>
-          <label for="publishToWitnesses">Publish to witnesses</label>
-        </div>
+        <p class="hint" style="margin-top:-0.5rem;margin-bottom:1rem;font-size:0.85rem;color:#666;">Recommended. Allows rotating keys without changing the identity.</p>
 
         <button type="submit" id="createBtn">Create Identity</button>
       </form>
@@ -82,7 +78,6 @@
 
         const name = document.getElementById('name').value.trim();
         const transferable = document.getElementById('transferable').checked;
-        const publishToWitnesses = document.getElementById('publishToWitnesses').checked;
 
         try {
           const res = await authFetch('/identity', {
@@ -94,7 +89,7 @@
             body: JSON.stringify({
               name,
               transferable,
-              publish_to_witnesses: publishToWitnesses
+              publish_to_witnesses: true
             })
           });
 

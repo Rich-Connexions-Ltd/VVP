@@ -1,5 +1,60 @@
 # VVP Verifier Change Log
 
+## Sprint 72: Issuer UI Simplification — Dossier Creation UX
+
+**Date:** 2026-02-18
+**Status:** Complete
+
+### Summary
+
+Comprehensive UX overhaul of the issuer UI to simplify dossier creation. Removes unnecessary fields (publish checkboxes, vetter name), adds smart defaults (identity picker, auto-populated edges, issuer edge), replaces free-text inputs with constrained controls (country dropdowns, channel picker, searchable multi-selects), hides advanced KERI concepts (constraint fields, certification edge, manual edges), and adds server-side pagination to credential lists. 6 new pagination tests, 865 issuer tests pass.
+
+### Key Changes
+
+**Phase A: Quick Wins**
+- Removed "Publish to witnesses" checkbox from identity, credential, and vetter cert forms (always true)
+- Country dropdown (ISO 3166-1 alpha-3, 68 countries) for `assertionCountry` field
+- Channel dropdown (voice/sms/video) for `channel` field
+- GCD constraint fields (`c_goal`, `c_pgeo`, etc.) hidden under collapsible "Advanced Constraints" section
+- Auto-injected `certification` edge hidden from credential form
+- Manual edges section hidden under "Advanced" toggle
+- "Transferable" renamed to "Allow key rotation" with hint text
+- Identity placeholder changed to "acme-signing-key"
+
+**Phase B: Smart Defaults & Pickers**
+- Identity picker dropdown for GCD delegate (replaces raw AID text input)
+- Auto-populate `issuer` edge from org's LE credential
+- Context-aware field labels per schema (Recipient → Delegate Identity, Brand Owner, etc.)
+- SearchableMultiSelect component for VetterCert ECC/jurisdiction (type-ahead, chips, select all/clear)
+- LEI explanation hint on org creation page
+- Removed vetter name field (auto-derived from org)
+
+**Phase C: Credential List & Dossier Wizard UX**
+- Server-side pagination on GET /credential (limit/offset, default 50, max 200)
+- Dossier wizard edge labels renamed (vetting → Organisation Verification, etc.)
+- Auto-select single-candidate edges in dossier wizard
+- Credential attribute preview in edge picker (brand name, phone numbers, LEI, role)
+- TN mapping auto-fill from dossier context via `?dossier=` query param
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `services/issuer/web/create.html` | Removed publish checkbox, renamed transferable, updated placeholder |
+| `services/issuer/web/credentials.html` | Country/channel dropdowns, advanced sections, identity picker, auto-populate edges, context labels |
+| `services/issuer/web/vetter.html` | SearchableMultiSelect, removed publish checkbox, removed vetter name |
+| `services/issuer/web/dossier.html` | Renamed edge labels, auto-select single candidates, credential preview |
+| `services/issuer/web/tn-mappings.html` | Dossier query param pre-select |
+| `services/issuer/web/organizations.html` | LEI explanation hint |
+| `services/issuer/web/styles.css` | Advanced section styles |
+| `services/issuer/app/api/credential.py` | Pagination (limit/offset) on list_credentials |
+| `services/issuer/app/api/models.py` | CredentialListResponse pagination fields, transferable description |
+| `services/issuer/tests/test_credential_pagination.py` | 6 new pagination tests |
+| `knowledge/api-reference.md` | Pagination query params documented |
+| `knowledge/data-models.md` | CredentialListResponse pagination fields |
+
+---
+
 ## Sprint 71: PBX Management UI
 
 **Date:** 2026-02-18

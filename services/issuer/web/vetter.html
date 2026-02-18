@@ -7,48 +7,88 @@
   <link rel="stylesheet" href="/static/styles.css">
   <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
   <style>
-    .country-selector {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-      gap: 0.5rem;
-      max-height: 300px;
-      overflow-y: auto;
+    /* Searchable Multi-Select component */
+    .searchable-select {
       border: 1px solid #ddd;
-      padding: 1rem;
       border-radius: 4px;
       background: #fafafa;
     }
-    .country-item {
+    .searchable-select-header {
       display: flex;
+      gap: 0.5rem;
+      padding: 0.5rem;
+      border-bottom: 1px solid #eee;
       align-items: center;
-      gap: 0.5rem;
-      padding: 0.25rem;
     }
-    .country-item label {
+    .searchable-select-header input {
+      flex: 1;
+      padding: 0.4rem 0.6rem;
+      border: 1px solid #ddd;
+      border-radius: 4px;
       font-size: 0.9rem;
-      cursor: pointer;
     }
-    .country-item input {
-      margin: 0;
-    }
-    .selection-controls {
-      display: flex;
-      gap: 0.5rem;
-      margin-bottom: 0.5rem;
-    }
-    .selection-controls button {
+    .searchable-select-header button {
       padding: 0.3rem 0.6rem;
       font-size: 0.8rem;
       background: #6c757d;
     }
-    .selection-controls button:hover {
-      background: #5a6268;
-    }
-    .selected-count {
+    .searchable-select-header button:hover { background: #5a6268; }
+    .searchable-select-count {
       font-size: 0.85rem;
       color: #666;
-      margin-left: auto;
+      white-space: nowrap;
     }
+    .searchable-select-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.3rem;
+      padding: 0.5rem;
+      min-height: 1.5rem;
+    }
+    .searchable-select-chips:empty::after {
+      content: 'None selected';
+      color: #999;
+      font-size: 0.85rem;
+      font-style: italic;
+    }
+    .select-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      padding: 0.15rem 0.4rem;
+      background: #e9ecef;
+      border-radius: 3px;
+      font-size: 0.8rem;
+    }
+    .select-chip.ecc { background: #d1ecf1; color: #0c5460; }
+    .select-chip.jurisdiction { background: #d4edda; color: #155724; }
+    .select-chip button {
+      background: none;
+      border: none;
+      padding: 0;
+      margin: 0;
+      font-size: 0.9rem;
+      cursor: pointer;
+      color: inherit;
+      line-height: 1;
+    }
+    .searchable-select-list {
+      max-height: 250px;
+      overflow-y: auto;
+      padding: 0.5rem;
+    }
+    .searchable-select-item {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.3rem 0.25rem;
+      cursor: pointer;
+      border-radius: 3px;
+      font-size: 0.9rem;
+    }
+    .searchable-select-item:hover { background: #e8f4ff; }
+    .searchable-select-item input { margin: 0; }
+    .searchable-select-item.hidden { display: none; }
     .section-header {
       display: flex;
       align-items: center;
@@ -161,43 +201,23 @@
           <p class="hint">Select the organization to be authorized as a vetter</p>
         </div>
 
-        <div class="form-group">
-          <label for="vetterName">Vetter Organization Name</label>
-          <input type="text" id="vetterName" placeholder="Auto-filled from selected organization"/>
-        </div>
-
         <!-- ECC Targets -->
         <div class="form-group">
           <label>ECC Targets (E.164 Country Codes)</label>
           <p class="hint">Select the country codes for which this vetter can authorize telephone numbers</p>
-          <div class="selection-controls">
-            <button type="button" onclick="selectAllEcc()">Select All</button>
-            <button type="button" onclick="clearAllEcc()">Clear All</button>
-            <span class="selected-count" id="eccCount">0 selected</span>
-          </div>
-          <div class="country-selector" id="eccSelector"></div>
+          <div id="eccSearchableSelect"></div>
         </div>
 
         <!-- Jurisdiction Targets -->
         <div class="form-group">
           <label>Jurisdiction Targets (ISO 3166-1 Alpha-3)</label>
           <p class="hint">Select the countries for which this vetter can issue Legal Entity and Brand credentials</p>
-          <div class="selection-controls">
-            <button type="button" onclick="selectAllJurisdiction()">Select All</button>
-            <button type="button" onclick="clearAllJurisdiction()">Clear All</button>
-            <span class="selected-count" id="jurisdictionCount">0 selected</span>
-          </div>
-          <div class="country-selector" id="jurisdictionSelector"></div>
+          <div id="jurisdictionSearchableSelect"></div>
         </div>
 
         <div class="form-group">
           <label for="expiry">Certification Expiry (optional)</label>
           <input type="datetime-local" id="expiry"/>
-        </div>
-
-        <div class="checkbox-row">
-          <input type="checkbox" id="publishWitnesses" checked/>
-          <label for="publishWitnesses">Publish to witnesses</label>
         </div>
 
         <button type="submit" id="issueBtn">Issue Vetter Certification</button>
@@ -370,48 +390,124 @@
     // Vetter Certification schema SAID
     const VETTER_SCHEMA_SAID = "EOefmhWU2qTpMiEQhXohE6z3xRXkpLloZdhTYIenlD4H";
 
-    // Build selector UI
-    function buildSelector(container, codes, type) {
-      // Only add "+" prefix for E.164 codes, not for ISO alpha-3 jurisdiction codes
-      const prefix = type === 'ecc' ? '+' : '';
-      container.innerHTML = codes.map(c => `
-        <div class="country-item">
-          <input type="checkbox" id="${type}_${c.code}" value="${c.code}" onchange="updateCount('${type}')">
-          <label for="${type}_${c.code}">${prefix}${c.code} ${c.name}</label>
-        </div>
-      `).join('');
+    // Searchable Multi-Select component
+    class SearchableMultiSelect {
+      constructor(container, options, { type = '', commonCodes = [] } = {}) {
+        this.selected = new Set();
+        this.type = type;
+        this.container = container;
+        this.options = options;
+        this.commonCodes = commonCodes;
+
+        this.render();
+      }
+
+      render() {
+        const prefix = this.type === 'ecc' ? '+' : '';
+
+        // Sort: common first, then alphabetical
+        const commonSet = new Set(this.commonCodes);
+        const sorted = [
+          ...this.options.filter(o => commonSet.has(o.code)),
+          ...this.options.filter(o => !commonSet.has(o.code)),
+        ];
+
+        this.container.innerHTML = `
+          <div class="searchable-select">
+            <div class="searchable-select-header">
+              <input type="text" placeholder="Search..." class="search-input">
+              <button type="button" class="select-all-btn">All</button>
+              <button type="button" class="clear-all-btn">Clear</button>
+              <span class="searchable-select-count">0 selected</span>
+            </div>
+            <div class="searchable-select-chips"></div>
+            <div class="searchable-select-list">
+              ${sorted.map(o => `
+                <label class="searchable-select-item" data-code="${o.code}" data-name="${o.name.toLowerCase()}">
+                  <input type="checkbox" value="${o.code}">
+                  ${prefix}${o.code} ${o.name}
+                </label>
+              `).join('')}
+            </div>
+          </div>
+        `;
+
+        // Search filtering
+        const searchInput = this.container.querySelector('.search-input');
+        searchInput.addEventListener('input', () => this.filter(searchInput.value));
+
+        // Checkbox changes
+        this.container.querySelectorAll('.searchable-select-item input').forEach(cb => {
+          cb.addEventListener('change', () => {
+            if (cb.checked) this.selected.add(cb.value);
+            else this.selected.delete(cb.value);
+            this.updateChips();
+            this.updateCount();
+          });
+        });
+
+        // Select All / Clear
+        this.container.querySelector('.select-all-btn').addEventListener('click', () => {
+          this.container.querySelectorAll('.searchable-select-item:not(.hidden) input').forEach(cb => {
+            cb.checked = true;
+            this.selected.add(cb.value);
+          });
+          this.updateChips();
+          this.updateCount();
+        });
+
+        this.container.querySelector('.clear-all-btn').addEventListener('click', () => {
+          this.container.querySelectorAll('.searchable-select-item input').forEach(cb => cb.checked = false);
+          this.selected.clear();
+          this.updateChips();
+          this.updateCount();
+        });
+      }
+
+      filter(query) {
+        const q = query.toLowerCase();
+        this.container.querySelectorAll('.searchable-select-item').forEach(item => {
+          const code = item.dataset.code.toLowerCase();
+          const name = item.dataset.name;
+          item.classList.toggle('hidden', q && !code.includes(q) && !name.includes(q));
+        });
+      }
+
+      updateChips() {
+        const chipsContainer = this.container.querySelector('.searchable-select-chips');
+        const prefix = this.type === 'ecc' ? '+' : '';
+        const chipClass = this.type === 'ecc' ? 'ecc' : 'jurisdiction';
+        chipsContainer.innerHTML = [...this.selected].map(code => {
+          const opt = this.options.find(o => o.code === code);
+          return `<span class="select-chip ${chipClass}">${prefix}${code}${opt ? ' ' + opt.name : ''}<button type="button" data-remove="${code}">&times;</button></span>`;
+        }).join('');
+
+        // Bind remove handlers
+        chipsContainer.querySelectorAll('[data-remove]').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const code = btn.dataset.remove;
+            this.selected.delete(code);
+            const cb = this.container.querySelector(`.searchable-select-item[data-code="${code}"] input`);
+            if (cb) cb.checked = false;
+            this.updateChips();
+            this.updateCount();
+          });
+        });
+      }
+
+      updateCount() {
+        const countEl = this.container.querySelector('.searchable-select-count');
+        countEl.textContent = `${this.selected.size} selected`;
+      }
+
+      getSelected() {
+        return [...this.selected];
+      }
     }
 
-    function updateCount(type) {
-      const selector = document.getElementById(type === 'ecc' ? 'eccSelector' : 'jurisdictionSelector');
-      const count = selector.querySelectorAll('input:checked').length;
-      document.getElementById(type === 'ecc' ? 'eccCount' : 'jurisdictionCount').textContent = `${count} selected`;
-    }
-
-    function selectAllEcc() {
-      document.querySelectorAll('#eccSelector input').forEach(cb => cb.checked = true);
-      updateCount('ecc');
-    }
-
-    function clearAllEcc() {
-      document.querySelectorAll('#eccSelector input').forEach(cb => cb.checked = false);
-      updateCount('ecc');
-    }
-
-    function selectAllJurisdiction() {
-      document.querySelectorAll('#jurisdictionSelector input').forEach(cb => cb.checked = true);
-      updateCount('jurisdiction');
-    }
-
-    function clearAllJurisdiction() {
-      document.querySelectorAll('#jurisdictionSelector input').forEach(cb => cb.checked = false);
-      updateCount('jurisdiction');
-    }
-
-    function getSelectedCodes(selectorId) {
-      const selector = document.getElementById(selectorId);
-      return Array.from(selector.querySelectorAll('input:checked')).map(cb => cb.value);
-    }
+    // Common country codes shown first
+    const COMMON_ECC = ['1', '44', '49', '33', '61', '64'];
+    const COMMON_JURISDICTION = ['USA', 'GBR', 'DEU', 'FRA', 'AUS', 'CAN'];
 
     // Load organizations for the recipient picker
     async function loadOrganizations() {
@@ -436,13 +532,7 @@
       }
     }
 
-    // Auto-fill vetter name when organization is selected
-    document.getElementById('vetterOrg').addEventListener('change', function() {
-      const selected = this.options[this.selectedIndex];
-      if (selected && selected.dataset.orgName) {
-        document.getElementById('vetterName').value = selected.dataset.orgName;
-      }
-    });
+    // (Vetter name auto-derived from org selection at submit time)
 
     // Load existing certifications
     async function loadCertifications() {
@@ -496,8 +586,8 @@
       result.innerHTML = '';
 
       try {
-        const eccTargets = getSelectedCodes('eccSelector');
-        const jurisdictionTargets = getSelectedCodes('jurisdictionSelector');
+        const eccTargets = eccSelect.getSelected();
+        const jurisdictionTargets = jurisdictionSelect.getSelected();
 
         if (eccTargets.length === 0) {
           throw new Error('Please select at least one ECC target country code');
@@ -511,9 +601,12 @@
           jurisdiction_targets: jurisdictionTargets,
         };
 
-        const vetterName = document.getElementById('vetterName').value.trim();
+        // Auto-derive vetter name from selected org
+        const orgSelect = document.getElementById('vetterOrg');
+        const selectedOpt = orgSelect.options[orgSelect.selectedIndex];
+        const vetterName = (selectedOpt && selectedOpt.dataset.orgName) ? selectedOpt.dataset.orgName : '';
         if (!vetterName) {
-          throw new Error('Please enter a vetter name');
+          throw new Error('Please select an organization');
         }
         attributes.name = vetterName;
 
@@ -575,9 +668,17 @@
       }
     });
 
-    // Initialize
-    buildSelector(document.getElementById('eccSelector'), E164_CODES, 'ecc');
-    buildSelector(document.getElementById('jurisdictionSelector'), ISO_CODES, 'jurisdiction');
+    // Initialize searchable selectors
+    const eccSelect = new SearchableMultiSelect(
+      document.getElementById('eccSearchableSelect'),
+      E164_CODES,
+      { type: 'ecc', commonCodes: COMMON_ECC }
+    );
+    const jurisdictionSelect = new SearchableMultiSelect(
+      document.getElementById('jurisdictionSearchableSelect'),
+      ISO_CODES,
+      { type: 'jurisdiction', commonCodes: COMMON_JURISDICTION }
+    );
     loadOrganizations();
     loadCertifications();
   </script>

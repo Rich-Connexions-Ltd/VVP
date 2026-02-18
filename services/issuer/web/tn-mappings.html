@@ -189,6 +189,10 @@
     let dossiers = [];
     let identities = [];
 
+    // C5: Read dossier context from query params
+    const urlParams = new URLSearchParams(window.location.search);
+    const preselectedDossierSaid = urlParams.get('dossier');
+
     async function init() {
       // Check auth
       const session = await checkAuthStatus();
@@ -206,6 +210,11 @@
       await loadMappings();
 
       document.getElementById('create-mapping-btn').addEventListener('click', showCreateMappingModal);
+
+      // C5: Auto-open create modal if dossier context provided
+      if (preselectedDossierSaid) {
+        showCreateMappingModal();
+      }
     }
 
     async function loadDossiers() {
@@ -367,6 +376,12 @@
       `;
 
       showModal(html, { title: 'Create TN Mapping' });
+
+      // C5: Pre-select dossier from query param
+      if (preselectedDossierSaid) {
+        const dossierSelect = document.getElementById('mapping-dossier');
+        if (dossierSelect) dossierSelect.value = preselectedDossierSaid;
+      }
 
       document.getElementById('create-mapping-form').addEventListener('submit', async (e) => {
         e.preventDefault();

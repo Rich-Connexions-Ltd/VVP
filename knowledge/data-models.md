@@ -455,6 +455,9 @@ class RevokeCredentialResponse(BaseModel):
 class CredentialListResponse(BaseModel):
     credentials: list[CredentialResponse]
     count: int
+    total: Optional[int] = None      # Sprint 72: total matching (all pages)
+    limit: Optional[int] = None      # Sprint 72: page size
+    offset: Optional[int] = None     # Sprint 72: starting offset
 ```
 
 #### Dossier Models

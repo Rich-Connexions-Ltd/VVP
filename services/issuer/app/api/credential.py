@@ -7,7 +7,7 @@ All KERI operations are delegated to the KERI Agent service.
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.api.models import (
@@ -183,7 +183,7 @@ async def issue_credential(
     # Sprint 61: Resolve org context for edge injection
     resolved_org = None
     resolved_org_id = None
-    if hasattr(request, "organization_id") and request.organization_id:
+    if request.organization_id:
         # Admin cross-org: explicit org_id in request
         if not principal.is_system_admin:
             if request.organization_id != principal.organization_id:
@@ -367,10 +367,12 @@ async def list_credentials(
     status: Optional[str] = None,
     schema_said: Optional[str] = None,
     org_id: Optional[str] = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     principal: Principal = require_auth,
     db: Session = Depends(get_db),
 ) -> CredentialListResponse:
-    """List issued credentials with optional filtering.
+    """List issued credentials with optional filtering and pagination.
 
     **Sprint 41:** Non-admin users only see credentials owned by their organization.
     System admins can see all credentials.
@@ -378,6 +380,10 @@ async def list_credentials(
     **Sprint 63:** Added ``schema_said`` and ``org_id`` query filters.
     ``org_id`` is admin-only and returns credentials visible to the specified org
     (issued by or targeted to that org).
+
+    **Sprint 72:** Added ``limit`` (default 50, max 200) and ``offset`` (default 0)
+    for server-side pagination. Response includes ``total`` count alongside the
+    paginated ``credentials`` array.
 
     Requires: issuer:readonly+ OR org:dossier_manager+ role
     """
@@ -491,9 +497,20 @@ async def list_credentials(
                 recipient_name=aid_to_name.get(c.recipient_aid) if c.recipient_aid else None,
             ))
 
+        # Sprint 72: Server-side pagination (in-memory slicing).
+        # Credentials are fetched from the KERI Agent HTTP API, not a SQL database,
+        # so DB-level LIMIT/OFFSET is not applicable. In-memory pagination is the
+        # correct approach here. For scale beyond ~10k credentials, push pagination
+        # into the KERI Agent API itself.
+        total = len(result)
+        paginated = result[offset:offset + limit]
+
         return CredentialListResponse(
-            credentials=result,
-            count=len(result),
+            credentials=paginated,
+            count=len(paginated),
+            total=total,
+            limit=limit,
+            offset=offset,
         )
     except KeriAgentUnavailableError as e:
         raise HTTPException(status_code=503, detail=str(e))

@@ -231,11 +231,15 @@ In addition to schema validation and edge injection, `POST /credential/issue` en
 - **Issuer binding** — org must have an AID and registry_key. Returns 400 if missing (fail-closed).
 - **Registry match** — the registry's issuer AID must match the org's AID.
 
-#### GET /credential Query Filters (Sprint 63)
+#### GET /credential Query Filters (Sprint 63, 72)
 
 - `schema_said` (optional): Filter to credentials matching this schema SAID
 - `org_id` (optional, admin-only): Scope credentials to a specific org. Non-admins receive 403. Relationship tagging is computed from the perspective of the specified org.
 - `status` (optional): Filter by credential status (e.g., `issued`)
+- `limit` (optional, default=50, range 1-200): Page size for pagination (Sprint 72)
+- `offset` (optional, default=0, ge=0): Starting offset for pagination (Sprint 72)
+
+**Pagination response fields** (Sprint 72): `total` (total matching), `limit`, `offset`, `count` (items in current page), `credentials` (array).
 
 ### Dossiers (`/dossier`)
 

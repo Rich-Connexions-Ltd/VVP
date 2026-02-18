@@ -961,6 +961,31 @@ tr.selected {
   font-size: 0.875rem;
 }
 
+/* ==========================================================================
+   Collapsible Advanced Sections
+   ========================================================================== */
+.advanced-section {
+  margin-top: 1rem;
+  border: 1px solid var(--vvp-border);
+  border-radius: 4px;
+}
+
+.advanced-section summary {
+  padding: 0.6rem 0.75rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: var(--vvp-text-muted);
+  background: #fafafa;
+}
+
+.advanced-section[open] summary {
+  border-bottom: 1px solid var(--vvp-border);
+}
+
+.advanced-section-content {
+  padding: 0 0.75rem 0.75rem;
+}
+
 /* Toast animations */
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(-10px); }
