@@ -66,11 +66,29 @@ def _mapping_to_response(mapping) -> TNMappingResponse:
     )
 
 
+def _brand_from_attrs(attrs: dict) -> tuple[Optional[str], Optional[str]]:
+    """Extract brand name and logo from a credential's attributes dict."""
+    brand_name = (
+        attrs.get("brandName")
+        or attrs.get("brandDisplayName")
+        or attrs.get("brand_name")
+        or attrs.get("LEI_name")
+        or attrs.get("entityName")
+        or attrs.get("name")
+    )
+    logo_url = (
+        attrs.get("logo_url")
+        or attrs.get("brandLogo")
+        or attrs.get("logo")
+    )
+    return brand_name, logo_url
+
+
 async def _extract_brand_info(dossier_said: str) -> tuple[Optional[str], Optional[str]]:
     """Extract brand name and logo URL from dossier credentials.
 
-    Walks the credential chain looking for brand/identity credentials
-    that contain brand_name and logo_url attributes.
+    Checks the root credential first, then walks edge credentials
+    looking for brand/identity attributes (brandName, brandDisplayName, etc.).
 
     Returns:
         Tuple of (brand_name, logo_url), either may be None
@@ -84,17 +102,30 @@ async def _extract_brand_info(dossier_said: str) -> tuple[Optional[str], Optiona
         if not root_cred:
             return None, None
 
-        # Look for brand info in root credential attributes
+        # Check root credential attributes first
         attrs = root_cred.attributes or {}
-        brand_name = (
-            attrs.get("brand_name")
-            or attrs.get("LEI_name")
-            or attrs.get("entityName")
-            or attrs.get("name")
-        )
-        logo_url = attrs.get("logo_url") or attrs.get("brandLogo") or attrs.get("logo")
+        brand_name, logo_url = _brand_from_attrs(attrs)
+        if brand_name:
+            return brand_name, logo_url
 
-        return brand_name, logo_url
+        # Walk edge credentials for brand info
+        edges = root_cred.edges or {}
+        for edge_name, edge_val in edges.items():
+            if edge_name == "d":
+                continue  # Skip SAID field
+            edge_said = edge_val.get("n") if isinstance(edge_val, dict) else None
+            if not edge_said:
+                continue
+            try:
+                edge_cred = await client.get_credential(edge_said)
+                if edge_cred and edge_cred.attributes:
+                    brand_name, logo_url = _brand_from_attrs(edge_cred.attributes)
+                    if brand_name:
+                        return brand_name, logo_url
+            except Exception:
+                continue
+
+        return None, None
     except Exception as e:
         log.warning(f"Failed to extract brand info from {dossier_said}: {e}")
         return None, None
