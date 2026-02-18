@@ -13,9 +13,10 @@ dependencies = [
   "bcrypt>=4.0.0",
   # OAuth JWT token validation
   "PyJWT[crypto]>=2.8.0",
-  # Azure SDK for Container App scaling management
+  # Azure SDK for Container App scaling and PBX VM management
   "azure-identity>=1.15.0",
   "azure-mgmt-appcontainers>=3.0.0",
+  "azure-mgmt-compute>=7.0.0",
   # Database (Sprint 41: Multi-tenancy, Sprint 46: PostgreSQL migration)
   "sqlalchemy>=2.0.0",
   "psycopg[binary]>=3.1.0",

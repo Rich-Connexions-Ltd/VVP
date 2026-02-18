@@ -60,6 +60,7 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 68c | Complete Issuer KERI Decoupling & CI/CD Split | COMPLETE | Sprint 68b |
 | 69 | Ephemeral LMDB & Zero-Downtime KERI Deploys | COMPLETE | Sprint 68c |
 | 70 | Automatic Witness Re-Publishing on Startup | COMPLETE | Sprint 69 |
+| 71 | PBX Management UI | COMPLETE | Sprint 42 |
 
 ---
 
@@ -5450,4 +5451,63 @@ Sprint 70 closes this gap by adding automatic witness re-publishing to the State
 - [x] All existing tests pass (133 keri-agent + 820 issuer + 1844 verifier)
 - [x] New tests cover Phase 2 receipt distribution and HTTP simulation
 
+---
+
+## Sprint 71: PBX Management UI (COMPLETE)
+
+**Status:** COMPLETE
+**Goal:** Replace hardcoded PBX dialplan values (extensions, API key, caller ID) with a web UI in the issuer admin, enabling push-button deployment to the PBX VM via Azure SDK.
+
+### Why This Matters
+
+The FreeSWITCH dialplan (`public-sip.xml`) previously had hardcoded extension mappings (only 1001 and 1006), a hardcoded API key, and a hardcoded caller ID. Any change required manual XML editing and a full CI/CD pipeline run. Sprint 71 adds a web UI and API that makes all these configurable and deployable with a button click.
+
+### Deliverables
+
+- [x] **DB model** — `PBXConfig` singleton table with JSON-stored extensions, raw API key, default caller ID, last deploy timestamp
+- [x] **Pydantic models** — `PBXExtension` (ext 1000-1009, E.164 CLI), `PBXConfigResponse`, `UpdatePBXConfigRequest`, `PBXDeployRequest/Response`
+- [x] **Dialplan generator** — `app/pbx/dialplan.py`: Python f-string XML generator for all 3 FreeSWITCH contexts (public/redirected/verified), dynamic per-extension inbound blocks, API key injection, catch-all default
+- [x] **Deploy service** — `app/pbx/deploy.py`: Azure VM run-command via `azure-mgmt-compute` SDK, base64 file transfer, backup + write + reload
+- [x] **API router** — `app/api/pbx.py`: GET/PUT `/pbx/config`, POST `/pbx/deploy`, GET `/pbx/dialplan-preview` (all admin-only)
+- [x] **Web UI** — `web/pbx.html`: Org/API key selection, extensions table (1000-1009), deploy with preview modal
+- [x] **Tests** — 33 tests (5 classes): dialplan generation, API endpoints, auth, deploy service, model validation
+- [x] **859 issuer tests pass** (no regressions)
+
+### Technical Notes
+
+- Extensions stored as JSON array in `extensions_json` column (max 10, always loaded atomically)
+- Raw API key stored in `api_key_value` (org_api_keys table stores only bcrypt hashes; dialplan needs plaintext for SIP header)
+- `_get_compute_client()` returns `(client, RunCommandInput)` tuple for testability without Azure SDK installed
+- Deploy script backs up current dialplan, writes new one, reloads FreeSWITCH via `fs_cli -x 'reloadxml'`
+- Disabled extensions excluded from dialplan; last enabled extension becomes catch-all default for external inbound
+
+### Key Files
+
+| File | Action | Purpose |
+|------|--------|---------|
+| `services/issuer/pyproject.toml` | Modified | Added `azure-mgmt-compute>=7.0.0` |
+| `services/issuer/app/db/models.py` | Modified | `PBXConfig` SQLAlchemy model |
+| `services/issuer/app/db/migrations/sprint71_pbx_config.py` | Created | Migration placeholder |
+| `services/issuer/app/db/session.py` | Modified | Registered sprint71 migration |
+| `services/issuer/app/api/models.py` | Modified | PBX Pydantic models |
+| `services/issuer/app/pbx/__init__.py` | Created | Package init |
+| `services/issuer/app/pbx/dialplan.py` | Created | FreeSWITCH dialplan XML generator |
+| `services/issuer/app/pbx/deploy.py` | Created | Azure VM deploy service |
+| `services/issuer/app/api/pbx.py` | Created | API router (4 endpoints) |
+| `services/issuer/app/config.py` | Modified | Added `PBX_VM_NAME`, auth exempt `/ui/pbx` |
+| `services/issuer/app/main.py` | Modified | Registered router + UI route |
+| `services/issuer/web/pbx.html` | Created | Admin web page |
+| `services/issuer/tests/test_pbx_config.py` | Created | 33 tests |
+
+### Dependencies
+
+- Sprint 42 (SIP Redirect Signing Service — PBX infrastructure)
+
+### Exit Criteria — All Met
+
+- [x] PBX config CRUD via API with admin auth
+- [x] Dialplan preview shows valid FreeSWITCH XML with configured extensions/API key
+- [x] Deploy dry-run returns generated XML
+- [x] All 33 new tests pass, 859 total issuer tests pass
+- [x] Extensions 1000-1009 configurable with E.164 CLI validation
 

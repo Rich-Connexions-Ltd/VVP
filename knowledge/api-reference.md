@@ -524,6 +524,21 @@ When found via OSP delegation, the response contains the **owner org's** data (o
 | `GET` | `/admin/settings/vetter-enforcement` | Get vetter constraint enforcement status |
 | `PUT` | `/admin/settings/vetter-enforcement` | Toggle vetter constraint enforcement (query: `enabled=true\|false`) |
 
+### PBX Management (`/pbx`) — Sprint 71
+
+All endpoints require `issuer:admin` role. Router: `app/api/pbx.py`.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/pbx/config` | Get PBX config singleton (creates with defaults if absent) |
+| `PUT` | `/pbx/config` | Update config (extensions, API key, caller ID) |
+| `POST` | `/pbx/deploy` | Generate dialplan XML and deploy to PBX via Azure VM run-command |
+| `GET` | `/pbx/dialplan-preview` | Preview generated dialplan as `application/xml` |
+
+**`PUT /pbx/config`** — Body: `UpdatePBXConfigRequest` with optional fields: `api_key_org_id`, `api_key_id`, `api_key_value` (plaintext), `extensions` (list of `PBXExtension`), `default_caller_id` (E.164). Validates: extension range 1000-1009, no duplicate ext numbers, E.164 format.
+
+**`POST /pbx/deploy`** — Body: `{ "dry_run": true|false }`. Dry run returns generated XML without deploying. Real deploy: base64-encodes XML, invokes Azure VM run-command on PBX VM (backup, write, `fs_cli reloadxml`).
+
 ### Issuer UI Pages (all `GET`, return HTML)
 
 | Method | Path | Purpose |
@@ -544,6 +559,7 @@ When found via OSP delegation, the response contains the **owner org's** data (o
 | `GET` | `/ui/help` | Help/documentation |
 | `GET` | `/ui/walkthrough` | Interactive split-pane walkthrough (Sprint 66) |
 | `GET` | `/ui/organization-detail` | Organization detail page with tabs (Sprint 67) |
+| `GET` | `/ui/pbx` | PBX management (Sprint 71) |
 | `GET` | `/organizations/ui` | Organization management |
 | `GET` | `/users/ui` | User management |
 | `GET` | `/profile` | User profile |

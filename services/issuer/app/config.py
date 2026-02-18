@@ -220,10 +220,11 @@ VVP_ISSUER_BASE_URL: str = os.getenv("VVP_ISSUER_BASE_URL", "http://localhost:80
 # AZURE CONFIGURATION
 # =============================================================================
 
-# Azure settings for Container App scaling management (admin feature)
-# These are only required if using the /admin/scaling endpoint
+# Azure settings for Container App scaling and PBX VM management
+# Required for /admin/scaling and /pbx/deploy endpoints
 AZURE_SUBSCRIPTION_ID: str | None = os.getenv("AZURE_SUBSCRIPTION_ID")
 AZURE_RESOURCE_GROUP: str = os.getenv("AZURE_RESOURCE_GROUP", "VVP")
+PBX_VM_NAME: str = os.getenv("VVP_PBX_VM_NAME", "vvp-pbx")
 
 
 # =============================================================================
@@ -396,5 +397,7 @@ def get_auth_exempt_paths() -> set[str]:
         exempt.add("/ui/walkthrough")
         # Sprint 67: Organization detail
         exempt.add("/ui/organization-detail")
+        # Sprint 71: PBX management
+        exempt.add("/ui/pbx")
 
     return exempt

@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.authentication import AuthenticationMiddleware
 
 from common.vvp.core.logging import configure_logging
-from app.api import admin, auth, credential, dashboard, dossier, health, identity, organization, org_api_key, registry, schema, session, tn, user, vetter_certification, vvp
+from app.api import admin, auth, credential, dashboard, dossier, health, identity, organization, org_api_key, pbx, registry, schema, session, tn, user, vetter_certification, vvp
 from app.auth.api_key import APIKeyBackend, get_api_key_store
 from app.auth.session import get_session_store
 from app.config import (
@@ -286,6 +286,12 @@ def ui_tn_mappings():
     return FileResponse(WEB_DIR / "tn-mappings.html", media_type="text/html")
 
 
+@app.get("/ui/pbx", response_class=FileResponse)
+def ui_pbx():
+    """Serve the PBX management web UI (Sprint 71)."""
+    return FileResponse(WEB_DIR / "pbx.html", media_type="text/html")
+
+
 @app.get("/ui/walkthrough", response_class=FileResponse)
 def ui_walkthrough():
     """Serve the interactive guided walkthrough (Sprint 66)."""
@@ -386,6 +392,7 @@ app.include_router(vvp.router)
 app.include_router(tn.router)  # Sprint 42: TN mapping for SIP redirect
 app.include_router(vetter_certification.router)  # Sprint 61: Vetter certification
 app.include_router(session.router)  # Sprint 67: Org context switching
+app.include_router(pbx.router)  # Sprint 71: PBX management
 app.include_router(admin.router)
 
 

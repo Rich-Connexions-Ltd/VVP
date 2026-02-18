@@ -1,5 +1,45 @@
 # VVP Verifier Change Log
 
+## Sprint 71: PBX Management UI
+
+**Date:** 2026-02-18
+**Status:** Complete
+
+### Summary
+
+Replaces hardcoded PBX dialplan values (extensions, API key, caller ID) with a web UI and API in the issuer admin. Extensions 1000-1009 are all configurable with E.164 CLI validation. Deploy pushes generated XML to PBX VM via Azure SDK `run-command` (backup + write + `fs_cli reloadxml`) — no CI/CD pipeline needed. 33 new tests, 859 issuer tests pass.
+
+### Key Changes
+
+- **PBXConfig DB model** — Singleton table with JSON-stored extensions, raw API key, default caller ID, deploy history
+- **Dialplan generator** — `app/pbx/dialplan.py`: Python f-string XML generator for all 3 FreeSWITCH contexts; per-extension inbound blocks; last enabled extension becomes catch-all default
+- **Deploy service** — `app/pbx/deploy.py`: Azure VM run-command via `azure-mgmt-compute` SDK, `_get_compute_client()` returns `(client, RunCommandInput)` tuple for testability
+- **API router** — `app/api/pbx.py`: GET/PUT `/pbx/config`, POST `/pbx/deploy` (dry-run supported), GET `/pbx/dialplan-preview`
+- **Web UI** — `web/pbx.html`: Org/API key selection, extensions table, deploy with XML preview modal
+- **Pydantic validation** — `PBXExtension` validates ext 1000-1009, E.164 CLI pattern; `UpdatePBXConfigRequest` rejects duplicate extensions
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `services/issuer/pyproject.toml` | Added `azure-mgmt-compute>=7.0.0` |
+| `services/issuer/app/db/models.py` | Added `PBXConfig` model |
+| `services/issuer/app/db/migrations/sprint71_pbx_config.py` | Created migration placeholder |
+| `services/issuer/app/db/session.py` | Registered sprint71 migration |
+| `services/issuer/app/api/models.py` | Added PBX Pydantic models |
+| `services/issuer/app/pbx/__init__.py` | Created package |
+| `services/issuer/app/pbx/dialplan.py` | Created dialplan generator |
+| `services/issuer/app/pbx/deploy.py` | Created deploy service |
+| `services/issuer/app/api/pbx.py` | Created API router (4 endpoints) |
+| `services/issuer/app/config.py` | Added `PBX_VM_NAME`, auth exempt `/ui/pbx` |
+| `services/issuer/app/main.py` | Registered router + UI route |
+| `services/issuer/web/pbx.html` | Created admin web page |
+| `services/issuer/tests/test_pbx_config.py` | Created 33 tests |
+| `knowledge/api-reference.md` | Added PBX endpoints + UI page |
+| `knowledge/data-models.md` | Added PBXConfig + Pydantic models |
+
+---
+
 ## Sprint 70: Automatic Witness Re-Publishing on Startup
 
 **Date:** 2026-02-17

@@ -703,3 +703,75 @@ class OrganizationConstraintsResponse(BaseModel):
     jurisdiction_targets: Optional[list[str]] = None
     certification_status: Optional[str] = None
     certification_expiry: Optional[str] = None
+
+
+# =============================================================================
+# PBX Configuration Models (Sprint 71)
+# =============================================================================
+
+
+class PBXExtension(BaseModel):
+    """Configuration for a single PBX extension."""
+
+    ext: int = Field(..., ge=1000, le=1009, description="Extension number (1000-1009)")
+    cli: str = Field(
+        ...,
+        description="E.164 Calling Line Identity",
+        pattern=r"^\+[1-9]\d{1,14}$",
+    )
+    enabled: bool = Field(True, description="Whether extension is active")
+    description: str = Field("", max_length=100, description="Human-readable label")
+
+
+class PBXConfigResponse(BaseModel):
+    """Current PBX configuration."""
+
+    api_key_org_id: Optional[str] = None
+    api_key_org_name: Optional[str] = None
+    api_key_id: Optional[str] = None
+    api_key_name: Optional[str] = None
+    api_key_preview: Optional[str] = None  # First 8 chars of raw key
+    extensions: list[PBXExtension] = Field(default_factory=list)
+    default_caller_id: str = "+441923311000"
+    last_deployed_at: Optional[str] = None
+    last_deployed_by: Optional[str] = None
+
+
+class UpdatePBXConfigRequest(BaseModel):
+    """Request to update PBX configuration."""
+
+    api_key_org_id: Optional[str] = Field(None, description="Organization ID for API key")
+    api_key_id: Optional[str] = Field(None, description="API key ID within the org")
+    api_key_value: Optional[str] = Field(None, description="Raw API key value (needed for dialplan)")
+    extensions: Optional[list[PBXExtension]] = Field(None, description="Extension configs (1000-1009)")
+    default_caller_id: Optional[str] = Field(
+        None,
+        description="Default caller ID for VVP loopback",
+        pattern=r"^\+[1-9]\d{1,14}$",
+    )
+
+    @field_validator("extensions")
+    @classmethod
+    def validate_no_duplicate_extensions(cls, v):
+        if v is None:
+            return v
+        ext_nums = [e.ext for e in v]
+        if len(ext_nums) != len(set(ext_nums)):
+            raise ValueError("Duplicate extension numbers are not allowed")
+        return v
+
+
+class PBXDeployRequest(BaseModel):
+    """Request to deploy dialplan to PBX."""
+
+    dry_run: bool = Field(False, description="If true, return generated XML without deploying")
+
+
+class PBXDeployResponse(BaseModel):
+    """Response from PBX deployment."""
+
+    success: bool
+    dialplan_xml: Optional[str] = None  # Included in dry_run mode
+    dialplan_size_bytes: int = 0
+    message: str
+    deployed_at: Optional[str] = None

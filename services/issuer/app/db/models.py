@@ -346,6 +346,35 @@ class DossierOspAssociation(Base):
         )
 
 
+class PBXConfig(Base):
+    """Singleton PBX configuration for FreeSWITCH dialplan management.
+
+    Stores the API key reference and extension definitions for the PBX.
+    There is exactly one PBX, so this table has exactly one row (id=1).
+
+    Extensions are stored as a JSON array in extensions_json:
+    [{"ext": 1001, "cli": "+441923311001", "enabled": true, "description": "Primary test"}]
+    """
+
+    __tablename__ = "pbx_config"
+
+    id = Column(Integer, primary_key=True, default=1)
+    api_key_org_id = Column(String(36), ForeignKey("organizations.id"), nullable=True)
+    api_key_id = Column(String(36), ForeignKey("org_api_keys.id"), nullable=True)
+    # Raw API key value for dialplan insertion (org_api_keys stores only bcrypt hashes)
+    api_key_value = Column(String(255), nullable=True)
+    extensions_json = Column(String(4096), default="[]", nullable=False)
+    default_caller_id = Column(String(20), default="+441923311000", nullable=False)
+    last_deployed_at = Column(DateTime, nullable=True)
+    last_deployed_by = Column(String(255), nullable=True)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return f"<PBXConfig(id={self.id}, api_key_org_id={self.api_key_org_id!r})>"
+
+
 # Event listener to normalize email to lowercase before insert/update
 @event.listens_for(User.email, "set", propagate=True)
 def normalize_email(target: User, value: str, oldvalue: str, initiator) -> str:

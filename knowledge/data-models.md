@@ -228,6 +228,18 @@ class DossierOspAssociation(Base):   # Sprint 63
     created_at: datetime
     # Unique constraint: (dossier_said, osp_org_id)
 
+class PBXConfig(Base):                # Sprint 71: PBX dialplan management singleton
+    __tablename__ = "pbx_config"
+    id: int                        # Primary key (default=1, singleton)
+    api_key_org_id: Optional[String(36)]  # FK to Organization
+    api_key_id: Optional[String(36)]      # FK to OrgAPIKey
+    api_key_value: Optional[String(255)]  # Raw API key for dialplan insertion
+    extensions_json: String(4096)  # JSON array of extension configs, default "[]"
+    default_caller_id: String(20)  # E.164, default "+441923311000"
+    last_deployed_at: Optional[datetime]
+    last_deployed_by: Optional[String(255)]
+    updated_at: datetime
+
 class MockVLEIState(Base):            # Persists mock vLEI infrastructure state
     __tablename__ = "mock_vlei_state"
     id: int                        # Primary key (single row expected)
@@ -678,6 +690,43 @@ class OrganizationConstraintsResponse(BaseModel):
     jurisdiction_targets: Optional[list[str]]
     certification_status: Optional[str]
     certification_expiry: Optional[str]
+```
+
+#### PBX Management Models (Sprint 71)
+```python
+class PBXExtension(BaseModel):
+    ext: int                       # Extension number (1000-1009)
+    cli: str                       # E.164 Calling Line Identity (pattern: ^\+[1-9]\d{1,14}$)
+    enabled: bool = True           # Whether extension is active
+    description: str = ""          # Human-readable label (max 100)
+
+class PBXConfigResponse(BaseModel):
+    api_key_org_id: Optional[str]
+    api_key_org_name: Optional[str]
+    api_key_id: Optional[str]
+    api_key_name: Optional[str]
+    api_key_preview: Optional[str]  # First 8 chars of raw key
+    extensions: list[PBXExtension]
+    default_caller_id: str = "+441923311000"
+    last_deployed_at: Optional[str]
+    last_deployed_by: Optional[str]
+
+class UpdatePBXConfigRequest(BaseModel):
+    api_key_org_id: Optional[str]
+    api_key_id: Optional[str]
+    api_key_value: Optional[str]   # Raw API key (stored plaintext for dialplan)
+    extensions: Optional[list[PBXExtension]]  # Validated: no duplicate ext numbers
+    default_caller_id: Optional[str]  # E.164 pattern
+
+class PBXDeployRequest(BaseModel):
+    dry_run: bool = False
+
+class PBXDeployResponse(BaseModel):
+    success: bool
+    dialplan_xml: Optional[str]    # Only present for dry_run
+    dialplan_size_bytes: int = 0
+    message: str
+    deployed_at: Optional[str]
 ```
 
 ---
