@@ -7,16 +7,43 @@
 // =============================================================================
 
 /**
- * Initialize navigation by marking the active link based on current URL path.
+ * Shared navigation links — single source of truth for all pages.
+ * To add a nav item, add an entry here. All pages pick it up automatically.
+ */
+const NAV_LINKS = [
+  { href: '/ui/identity',    label: 'Identities' },
+  { href: '/ui/schemas',     label: 'Schemas' },
+  { href: '/ui/credentials', label: 'Credentials' },
+  { href: '/ui/dossier',     label: 'Dossiers' },
+  { href: '/ui/vvp',         label: 'VVP Headers' },
+  { href: '/ui/tn-mappings', label: 'TN Mappings' },
+  { href: '/ui/pbx',         label: 'PBX' },
+  { href: '/ui/help',        label: 'Help' },
+  { href: '/ui/admin',       label: 'Admin' },
+  { href: '/organizations/ui', label: 'Organizations', hidden: true },
+  { href: '/users/ui',       label: 'Users', hidden: true },
+  { href: 'https://vvp-verifier.rcnx.io', label: 'Verifier \u2197', className: 'verifier-link', external: true },
+];
+
+/**
+ * Build navigation links from the shared NAV_LINKS array.
+ * Replaces any existing nav content and marks the active link.
  * Should be called on DOMContentLoaded.
  */
-function initNavigation() {
-  const path = window.location.pathname;
-  document.querySelectorAll('.nav-links a').forEach(link => {
-    const href = link.getAttribute('href');
-    if (href === path) {
-      link.classList.add('active');
-    }
+function buildNavigation() {
+  const nav = document.querySelector('.nav-links');
+  if (!nav) return;
+  nav.innerHTML = '';
+  const currentPath = window.location.pathname;
+  NAV_LINKS.forEach(item => {
+    const a = document.createElement('a');
+    a.href = item.href;
+    a.textContent = item.label;
+    if (item.hidden) a.style.display = 'none';
+    if (item.external) a.target = '_blank';
+    if (item.className) a.classList.add(item.className);
+    if (item.href === currentPath) a.classList.add('active');
+    nav.appendChild(a);
   });
 }
 
@@ -1109,7 +1136,7 @@ function showToast(message, type = 'info') {
 // =============================================================================
 
 document.addEventListener('DOMContentLoaded', async () => {
-  initNavigation();
+  buildNavigation();
 
   // Handle OAuth errors from URL parameters (e.g., after failed OAuth callback)
   handleOAuthError();
