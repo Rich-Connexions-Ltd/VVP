@@ -9,7 +9,7 @@ The Issuer manages the full lifecycle of VVP credentials: organization managemen
 |------|---------|
 | `app/main.py` | FastAPI app, router mounts, UI routes, lifespan |
 | `app/config.py` | All configuration (DB, OAuth, session, witnesses, auth) |
-| `app/api/` | API routers (15 router files — all use `get_keri_client()`) |
+| `app/api/` | API routers (16 router files — all use `get_keri_client()`) |
 | `app/api/models.py` | All Pydantic request/response models (~45 models) |
 | `app/keri_client.py` | `KeriAgentClient` — HTTP client for KERI Agent (circuit breaker, retry) |
 | `app/dossier/builder.py` | `DossierBuilder` — DFS edge walk via KeriAgentClient |
@@ -29,6 +29,7 @@ The Issuer manages the full lifecycle of VVP credentials: organization managemen
 | `app/db/session.py` | Database session management |
 | `app/audit/logger.py` | Structured audit logging |
 | `config/witnesses.json` | Witness pool configuration |
+| `web/shared.js` | Shared JS: navigation (NAV_LINKS), auth UI, toast, clipboard |
 
 ## API Routers (`app/api/`)
 
@@ -49,9 +50,10 @@ The Issuer manages the full lifecycle of VVP credentials: organization managemen
 | `tn.py` | `/tn` | mappings CRUD + lookup + test-lookup (7 endpoints) |
 | `vvp.py` | `/vvp` | `POST /vvp/create` (1 endpoint) |
 | `vetter_certification.py` | `/` | CRUD + `/organizations/{org_id}/constraints` + `/users/me/constraints` (6 endpoints) |
+| `pbx.py` | `/pbx` | config CRUD, deploy to PBX VM, dialplan preview (4 endpoints) |
 | `admin.py` | `/admin` | auth reload, status, users, config, settings, benchmarks (20 endpoints) |
 
-**Note:** `main.py` also defines ~27 direct routes for UI pages (all `/ui/*`) and legacy redirects.
+**Note:** `main.py` also defines ~28 direct routes for UI pages (all `/ui/*`) and legacy redirects.
 
 ## Authentication
 
@@ -100,7 +102,7 @@ Configured in `app/config.py:get_auth_exempt_paths()`:
 
 ## Database
 
-SQLAlchemy with PostgreSQL (SQLite for local dev). 9 models in `app/db/models.py`:
+SQLAlchemy with PostgreSQL (SQLite for local dev). 10 models in `app/db/models.py`:
 
 | Model | Purpose |
 |-------|---------|
@@ -113,6 +115,7 @@ SQLAlchemy with PostgreSQL (SQLite for local dev). 9 models in `app/db/models.py
 | `MockVLEIState` | Persists mock GLEIF/QVI/GSMA infrastructure state |
 | `TNMapping` | E.164 phone number → dossier + signing identity |
 | `DossierOspAssociation` | Dossier ↔ OSP organization visibility |
+| `PBXConfig` | PBX config singleton (API key, extensions JSON, caller ID) |
 
 ## KERI Agent Integration (Sprint 68c)
 
@@ -160,13 +163,13 @@ Uses `DYLD_LIBRARY_PATH` for libsodium. ~20 test files covering auth, credential
 
 ## Web UI Pages
 
-Located in `web/` — HTML + HTMX + vanilla JS, served as `FileResponse`:
+Located in `web/` — HTML + vanilla JS, served as `FileResponse`:
 
 | Path | Page | File |
 |------|------|------|
 | `/ui/` | Home/landing | `index.html` |
 | `/login` | Login | `login.html` |
-| `/ui/identity` | Identity management | `identity.html` |
+| `/ui/identity` | Identity management | `create.html` |
 | `/ui/registry` | Registry management | `registry.html` |
 | `/ui/schemas` | Schema browser | `schemas.html` |
 | `/ui/credentials` | Credential issuance | `credentials.html` |
@@ -176,6 +179,7 @@ Located in `web/` — HTML + HTMX + vanilla JS, served as `FileResponse`:
 | `/ui/admin` | Admin panel | `admin.html` |
 | `/ui/vetter` | Vetter certification | `vetter.html` |
 | `/ui/tn-mappings` | TN mapping management | `tn-mappings.html` |
+| `/ui/pbx` | PBX management | `pbx.html` |
 | `/ui/benchmarks` | Performance benchmarks | `benchmarks.html` |
 | `/ui/help` | Help/documentation | `help.html` |
 | `/ui/walkthrough` | Interactive split-pane walkthrough | `walkthrough.html` |
@@ -185,6 +189,14 @@ Located in `web/` — HTML + HTMX + vanilla JS, served as `FileResponse`:
 | `/profile` | User profile | `profile.html` |
 
 Legacy paths (`/create`, `/registry/ui`, `/schemas/ui`, `/credentials/ui`, `/dossier/ui`) redirect (302) to `/ui/*` equivalents.
+
+### Shared Navigation
+
+Navigation links are defined **once** in the `NAV_LINKS` array in `web/shared.js`. The `buildNavigation()` function dynamically populates the `<nav class="nav-links"></nav>` element on every page at load time. Active link highlighting and role-based visibility (Organizations, Users) are handled automatically.
+
+**To add/remove/reorder a nav item:** Edit the `NAV_LINKS` array in `shared.js` — no HTML files need to change. Each page's HTML contains only an empty `<nav class="nav-links"></nav>` tag.
+
+Three pages have no nav bar: `login.html`, `benchmarks.html`, `walkthrough.html`.
 
 ## Key Configuration (`app/config.py`)
 
