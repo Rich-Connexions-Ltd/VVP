@@ -2,6 +2,7 @@
 
 Sprint 68: KERI Agent Service Extraction.
 """
+import asyncio
 import logging
 import time
 from typing import Optional
@@ -39,6 +40,25 @@ def _info_to_response(info) -> CredentialResponse:
     )
 
 
+async def _background_publish(publisher, aid: str, event_bytes: bytes, said: str) -> None:
+    """Fire-and-forget witness publishing for credential/revocation events."""
+    t0 = time.perf_counter()
+    try:
+        result = await publisher.publish_event(aid, event_bytes)
+        elapsed = time.perf_counter() - t0
+        log.info(
+            f"PERF bg_witness_publish {said[:12]}... "
+            f"elapsed={elapsed:.3f}s "
+            f"success={result.success_count}/{result.total_count}"
+        )
+    except Exception as e:
+        elapsed = time.perf_counter() - t0
+        log.warning(
+            f"Background witness publish failed for {said[:12]}... "
+            f"after {elapsed:.3f}s: {e}"
+        )
+
+
 @router.post("/issue", response_model=CredentialResponse, status_code=201)
 async def issue_credential(request: IssueCredentialRequest):
     """Issue a new ACDC credential."""
@@ -71,31 +91,29 @@ async def issue_credential(request: IssueCredentialRequest):
 
     t_issued = time.perf_counter()
 
-    # Publish to witnesses if requested
-    t_publish = t_issued
+    # Publish to witnesses in background (fire-and-forget).
+    # Credential is already persisted in LMDB + PostgreSQL. Witnesses
+    # typically escrow credential anchor ixn events (HTTP 202) because
+    # they lack the full KEL context — retrying synchronously wastes
+    # ~14s per credential with no benefit. Background publishing lets
+    # the response return immediately (~50ms) while witnesses process
+    # the events asynchronously.
     if request.publish:
         try:
             publisher = get_witness_publisher()
             anchor_bytes = await issuer.get_anchor_ixn_bytes(info.said)
-            t_anchor = time.perf_counter()
-            await publisher.publish_event(id_info.aid, anchor_bytes)
-            t_publish = time.perf_counter()
-            log.info(
-                f"PERF witness_publish {info.said[:12]}... "
-                f"get_anchor={t_anchor - t_issued:.3f}s "
-                f"publish={t_publish - t_anchor:.3f}s"
+            asyncio.create_task(
+                _background_publish(publisher, id_info.aid, anchor_bytes, info.said)
             )
         except Exception as e:
-            t_publish = time.perf_counter()
-            log.warning(f"Failed to publish credential to witnesses: {e}")
+            log.warning(f"Failed to prepare witness publish for credential: {e}")
 
     t_end = time.perf_counter()
     log.info(
         f"PERF issue_endpoint {info.said[:12]}... "
         f"total={t_end - t_start:.3f}s "
         f"pre_check={t_pre - t_start:.3f}s "
-        f"issue={t_issued - t_pre:.3f}s "
-        f"witness={t_publish - t_issued:.3f}s"
+        f"issue={t_issued - t_pre:.3f}s"
     )
 
     return _info_to_response(info)
@@ -119,23 +137,21 @@ async def revoke_credential(said: str, request: RevokeCredentialRequest):
 
     t_revoked = time.perf_counter()
 
-    # Publish revocation to witnesses if requested
-    t_publish = t_revoked
+    # Publish revocation to witnesses in background (fire-and-forget)
     if request.publish:
         try:
             publisher = get_witness_publisher()
             anchor_bytes = await issuer.get_anchor_ixn_bytes(said)
-            await publisher.publish_event(info.issuer_aid, anchor_bytes)
-            t_publish = time.perf_counter()
+            asyncio.create_task(
+                _background_publish(publisher, info.issuer_aid, anchor_bytes, said)
+            )
         except Exception as e:
-            t_publish = time.perf_counter()
-            log.warning(f"Failed to publish revocation to witnesses: {e}")
+            log.warning(f"Failed to prepare witness publish for revocation: {e}")
 
     log.info(
         f"PERF revoke_endpoint {said[:12]}... "
         f"total={time.perf_counter() - t_start:.3f}s "
-        f"revoke={t_revoked - t_start:.3f}s "
-        f"witness={t_publish - t_revoked:.3f}s"
+        f"revoke={t_revoked - t_start:.3f}s"
     )
 
     return _info_to_response(info)
