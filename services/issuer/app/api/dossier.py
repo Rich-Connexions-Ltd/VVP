@@ -434,7 +434,7 @@ async def create_dossier(
 
     # Build dossier URL
     base_url = VVP_ISSUER_BASE_URL.rstrip("/") if VVP_ISSUER_BASE_URL else ""
-    dossier_url = f"{base_url}/api/dossier/{dossier_said}"
+    dossier_url = f"{base_url}/dossier/{dossier_said}"
 
     log.info(
         f"Created dossier {dossier_said[:16]}... for org {owner_org.name} "

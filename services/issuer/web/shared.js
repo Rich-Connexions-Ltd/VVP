@@ -20,6 +20,7 @@ const NAV_LINKS = [
   { href: '/ui/pbx',         label: 'PBX' },
   { href: '/ui/help',        label: 'Help' },
   { href: '/ui/admin',       label: 'Admin' },
+  { href: '/ui/vetter',     label: 'Vetter Certs', hidden: true },
   { href: '/organizations/ui', label: 'Organizations', hidden: true },
   { href: '/users/ui',       label: 'Users', hidden: true },
   { href: 'https://vvp-verifier.rcnx.io', label: 'Verifier \u2197', className: 'verifier-link', external: true },
@@ -767,6 +768,14 @@ function updateNavVisibility() {
   const orgsLink = document.querySelector('a[href="/organizations/ui"]');
   if (orgsLink) {
     orgsLink.style.display = isSystemAdmin ? '' : 'none';
+  }
+
+  // Vetter Certs link - visible to system admins and vetter/root authority orgs
+  const vetterLink = document.querySelector('a[href="/ui/vetter"]');
+  if (vetterLink) {
+    const isVetterOrg = currentSession.activeOrgType === 'vetter_authority'
+                     || currentSession.activeOrgType === 'root_authority';
+    vetterLink.style.display = (isSystemAdmin || isVetterOrg) ? '' : 'none';
   }
 }
 

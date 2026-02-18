@@ -61,7 +61,8 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 69 | Ephemeral LMDB & Zero-Downtime KERI Deploys | COMPLETE | Sprint 68c |
 | 70 | Automatic Witness Re-Publishing on Startup | COMPLETE | Sprint 69 |
 | 71 | PBX Management UI | COMPLETE | Sprint 42 |
-| 72 | Issuer UI Simplification | IN PROGRESS | Sprint 71, 65, 67 |
+| 72 | Issuer UI Simplification | COMPLETE | Sprint 71, 65, 67 |
+| 73 | Credential & Identity Cleanup | COMPLETE | Sprint 69 |
 
 ---
 

@@ -145,6 +145,14 @@
     }
     .target-badge.ecc { background: #d1ecf1; color: #0c5460; }
     .target-badge.jurisdiction { background: #d4edda; color: #155724; }
+    .cert-actions { margin-top: 0.75rem; display: flex; gap: 0.5rem; }
+    .cert-actions button.danger {
+      background: #e74c3c; color: white; border: none; padding: 0.3rem 0.8rem;
+      border-radius: 4px; font-size: 0.85rem; cursor: pointer;
+    }
+    .cert-actions button.danger:hover { background: #c0392b; }
+    .cert-actions button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .cert-status-revoked { color: #e74c3c; font-weight: 600; }
   </style>
 </head>
 <body>
@@ -540,19 +548,24 @@
 
         let html = '';
         for (const cert of certs) {
+          const isRevoked = cert.status === 'revoked';
           html += `
             <div class="cert-item">
               <h4>${cert.name || 'Vetter Certification'}</h4>
               <div class="cert-meta">
                 <span><strong>SAID:</strong> ${cert.said.substring(0, 16)}...</span>
                 <span><strong>Org:</strong> ${cert.organization_name || cert.organization_id.substring(0, 8) + '...'}</span>
-                <span><strong>Status:</strong> ${cert.status}</span>
+                <span><strong>Status:</strong> ${isRevoked ? '<span class="cert-status-revoked">revoked</span>' : cert.status}</span>
                 <span><strong>Issued:</strong> ${new Date(cert.created_at).toLocaleDateString()}</span>
               </div>
               <div class="cert-targets">
                 ${(cert.ecc_targets || []).map(t => `<span class="target-badge ecc">+${t}</span>`).join('')}
                 ${(cert.jurisdiction_targets || []).map(t => `<span class="target-badge jurisdiction">${t}</span>`).join('')}
               </div>
+              ${!isRevoked ? `
+              <div class="cert-actions">
+                <button class="danger" onclick="revokeCert('${cert.said}')">Revoke</button>
+              </div>` : ''}
             </div>
           `;
         }
@@ -561,6 +574,24 @@
       } catch (e) {
         container.innerHTML = '<p class="hint">Unable to load certifications.</p>';
         console.error(e);
+      }
+    }
+
+    async function revokeCert(said) {
+      if (!confirm(`Revoke vetter certification ${said.substring(0, 16)}...?\n\nThis cannot be undone.`)) return;
+      try {
+        const res = await authFetch(`/vetter-certifications/${said}`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.detail || 'Failed to revoke certification');
+        }
+        alert('Vetter certification revoked successfully.');
+        loadCertifications();
+      } catch (err) {
+        alert('Error: ' + err.message);
       }
     }
 

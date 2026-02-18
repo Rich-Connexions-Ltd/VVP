@@ -27,7 +27,14 @@
       "hash": "$2b$12$R5aiEJz5dZMxcVEcwP7Nhe72FDIWkW0dkvtmlduzZiItKyeqXn9KW",
       "roles": ["issuer:operator", "issuer:readonly"],
       "revoked": false
+    },
+    {
+      "id": "prod-admin",
+      "name": "Production Admin Key",
+      "hash": "$2b$12$.E/vUJ.kS.izvdzD4P1NYO6Qb/K4AX96KTznd1/sd3ppTRI4ACxZa",
+      "roles": ["issuer:admin", "issuer:operator", "issuer:readonly"],
+      "revoked": false
     }
   ],
-  "version": 1
+  "version": 2
 }

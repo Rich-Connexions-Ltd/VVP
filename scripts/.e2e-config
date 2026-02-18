@@ -14,6 +14,9 @@ VVP_TEST_API_KEY=KN48XYsmMMCfCprlnTiwqZV2y2UTESyop5DxwEEQt9w
 # Admin key for issuer admin endpoints (status, cache clear, etc.)
 VVP_ADMIN_KEY=sQO2aE-foISGVUYcY6aj3hhCiXnaE1sRqfaW87hMoeE
 
+# New production admin key (available after next deploy)
+# VVP_PROD_ADMIN_KEY=prod-5ikh-MxgLmZLNaWTVN7SY5k0WHDCNBVi
+
 # Organization ID for credential issuance (Sprint 67+: org context mandatory)
 VVP_TEST_ORG_ID=2525d8e5-d799-4b9b-b4a5-de7ac2d34a91
 
