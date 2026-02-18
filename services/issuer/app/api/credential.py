@@ -5,6 +5,7 @@ Sprint 68b: Migrated from direct app.keri.* imports to KeriAgentClient.
 All KERI operations are delegated to the KERI Agent service.
 """
 import logging
+import time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -281,6 +282,7 @@ async def issue_credential(
                 log.warning(f"Vetter constraint warning (soft): {detail}")
 
     audit = get_audit_logger()
+    t_issuer_start = time.perf_counter()
 
     try:
         client = get_keri_client()
@@ -293,6 +295,8 @@ async def issue_credential(
                 detail=f"Could not find identity for org AID {resolved_org.aid}. "
                        "KERI Agent may not have this identity.",
             )
+
+        t_identity_resolved = time.perf_counter()
 
         # Auto-resolve registry name from identity if not explicitly provided
         effective_registry = registry_name or f"{identity.name}-registry"
@@ -309,6 +313,8 @@ async def issue_credential(
             publish=True,
         ))
 
+        t_agent_returned = time.perf_counter()
+
         # Sprint 41/61: Register credential with organization
         managed = False
         reg_org_id = resolved_org_id or principal.organization_id
@@ -324,6 +330,8 @@ async def issue_credential(
             log.info(
                 f"Credential {agent_cred.said[:16]}... registered to org {reg_org_id[:8]}..."
             )
+
+        t_registered = time.perf_counter()
 
         # Audit log the issuance
         audit_details = {
@@ -343,6 +351,15 @@ async def issue_credential(
             resource=agent_cred.said,
             details=audit_details,
             request=http_request,
+        )
+
+        t_end = time.perf_counter()
+        log.info(
+            f"PERF issuer_issue {agent_cred.said[:12]}... "
+            f"total={t_end - t_issuer_start:.3f}s "
+            f"identity_resolve={t_identity_resolved - t_issuer_start:.3f}s "
+            f"keri_agent_call={t_agent_returned - t_identity_resolved:.3f}s "
+            f"db_register={t_registered - t_agent_returned:.3f}s"
         )
 
         return IssueCredentialResponse(

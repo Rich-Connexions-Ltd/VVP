@@ -5,6 +5,7 @@ ACDC credential lifecycle management including issuance, revocation, and retriev
 """
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
@@ -79,7 +80,12 @@ class CredentialIssuer:
         private: bool = False,
     ) -> tuple[CredentialInfo, bytes]:
         """Issue a new ACDC credential."""
+        t_start = time.perf_counter()
+        t_lock_wait = t_start
+
         async with self._lock:
+            t_lock_acquired = time.perf_counter()
+
             # 1. Validate schema exists
             if not has_embedded_schema(schema_said):
                 raise ValueError(f"Schema not found: {schema_said}")
@@ -94,11 +100,15 @@ class CredentialIssuer:
             if hab is None:
                 raise ValueError(f"Registry {registry_name} has no associated identity")
 
+            t_setup = time.perf_counter()
+
             # Sprint 69: Pre-compute topological rebuild order
             from app.keri.seed_store import get_seed_store, extract_edge_saids
             seed_store = get_seed_store()
             edge_saids = extract_edge_saids(edges)
             rebuild_order = seed_store.compute_rebuild_order(edge_saids)
+
+            t_rebuild_order = time.perf_counter()
 
             # 3. Create ACDC
             if "dt" not in attributes:
@@ -115,15 +125,21 @@ class CredentialIssuer:
                 rules=rules,
             )
 
+            t_acdc = time.perf_counter()
+
             log.info(f"Created credential: {creder.said[:16]}... schema={schema_said[:16]}...")
 
             # 4. Create TEL issuance event
             dt = attributes.get("dt", helping.nowIso8601())
             iserder = registry.issue(said=creder.said, dt=dt)
 
+            t_tel = time.perf_counter()
+
             # 5. Create KEL anchor
             rseal = eventing.SealEvent(iserder.pre, iserder.snh, iserder.said)
             anc = hab.interact(data=[dict(i=rseal.i, s=rseal.s, d=rseal.d)])
+
+            t_kel = time.perf_counter()
 
             # 6. Anchor the TEL iss event
             reger = registry_mgr.regery.reger
@@ -143,6 +159,8 @@ class CredentialIssuer:
                 saider=anc_saider,
             )
 
+            t_anchor = time.perf_counter()
+
             log.info(f"Created TEL iss event and KEL anchor for {creder.said[:16]}...")
 
             # 7. Store credential
@@ -152,6 +170,8 @@ class CredentialIssuer:
 
             reger.creds.put(keys=(creder.said,), val=creder)
             reger.cancs.pin(keys=(creder.said,), val=[prefixer, seqner, saider])
+
+            t_store = time.perf_counter()
 
             log.info(f"Stored credential {creder.said[:16]}... in reger")
 
@@ -172,8 +192,12 @@ class CredentialIssuer:
                 edge_saids=edge_saids,
             )
 
+            t_pg = time.perf_counter()
+
             # 8. Serialize credential with SealSourceTriples
             acdc_bytes = signing.serialize(creder, prefixer, seqner, saider)
+
+            t_serialize = time.perf_counter()
 
             cred_info = CredentialInfo(
                 said=creder.said,
@@ -187,6 +211,24 @@ class CredentialIssuer:
                 attributes=dict(creder.attrib) if creder.attrib else attributes,
                 edges=edges,
                 rules=rules,
+            )
+
+            t_end = time.perf_counter()
+
+            # Performance instrumentation
+            log.info(
+                f"PERF issue_credential {creder.said[:12]}... "
+                f"total={t_end - t_start:.3f}s "
+                f"lock_wait={t_lock_acquired - t_lock_wait:.3f}s "
+                f"setup={t_setup - t_lock_acquired:.3f}s "
+                f"rebuild_order={t_rebuild_order - t_setup:.3f}s "
+                f"acdc_create={t_acdc - t_rebuild_order:.3f}s "
+                f"tel_issue={t_tel - t_acdc:.3f}s "
+                f"kel_anchor={t_kel - t_tel:.3f}s "
+                f"tel_anchor={t_anchor - t_kel:.3f}s "
+                f"lmdb_store={t_store - t_anchor:.3f}s "
+                f"pg_seed={t_pg - t_store:.3f}s "
+                f"serialize={t_serialize - t_pg:.3f}s"
             )
 
             return cred_info, acdc_bytes

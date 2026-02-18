@@ -3,6 +3,7 @@
 Sprint 68: KERI Agent Service Extraction.
 """
 import logging
+import time
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -41,6 +42,8 @@ def _info_to_response(info) -> CredentialResponse:
 @router.post("/issue", response_model=CredentialResponse, status_code=201)
 async def issue_credential(request: IssueCredentialRequest):
     """Issue a new ACDC credential."""
+    t_start = time.perf_counter()
+
     issuer = await get_credential_issuer()
     identity_mgr = await get_identity_manager()
 
@@ -51,6 +54,8 @@ async def issue_credential(request: IssueCredentialRequest):
             status_code=404,
             detail=f"Identity not found: {request.identity_name}",
         )
+
+    t_pre = time.perf_counter()
 
     try:
         info, acdc_bytes = await issuer.issue_credential(
@@ -64,14 +69,34 @@ async def issue_credential(request: IssueCredentialRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    t_issued = time.perf_counter()
+
     # Publish to witnesses if requested
+    t_publish = t_issued
     if request.publish:
         try:
             publisher = get_witness_publisher()
             anchor_bytes = await issuer.get_anchor_ixn_bytes(info.said)
+            t_anchor = time.perf_counter()
             await publisher.publish_event(id_info.aid, anchor_bytes)
+            t_publish = time.perf_counter()
+            log.info(
+                f"PERF witness_publish {info.said[:12]}... "
+                f"get_anchor={t_anchor - t_issued:.3f}s "
+                f"publish={t_publish - t_anchor:.3f}s"
+            )
         except Exception as e:
+            t_publish = time.perf_counter()
             log.warning(f"Failed to publish credential to witnesses: {e}")
+
+    t_end = time.perf_counter()
+    log.info(
+        f"PERF issue_endpoint {info.said[:12]}... "
+        f"total={t_end - t_start:.3f}s "
+        f"pre_check={t_pre - t_start:.3f}s "
+        f"issue={t_issued - t_pre:.3f}s "
+        f"witness={t_publish - t_issued:.3f}s"
+    )
 
     return _info_to_response(info)
 
@@ -79,6 +104,7 @@ async def issue_credential(request: IssueCredentialRequest):
 @router.post("/{said}/revoke", response_model=CredentialResponse)
 async def revoke_credential(said: str, request: RevokeCredentialRequest):
     """Revoke an issued credential."""
+    t_start = time.perf_counter()
     issuer = await get_credential_issuer()
 
     try:
@@ -91,14 +117,26 @@ async def revoke_credential(said: str, request: RevokeCredentialRequest):
             raise HTTPException(status_code=400, detail=f"Credential already revoked: {said}")
         raise
 
+    t_revoked = time.perf_counter()
+
     # Publish revocation to witnesses if requested
+    t_publish = t_revoked
     if request.publish:
         try:
             publisher = get_witness_publisher()
             anchor_bytes = await issuer.get_anchor_ixn_bytes(said)
             await publisher.publish_event(info.issuer_aid, anchor_bytes)
+            t_publish = time.perf_counter()
         except Exception as e:
+            t_publish = time.perf_counter()
             log.warning(f"Failed to publish revocation to witnesses: {e}")
+
+    log.info(
+        f"PERF revoke_endpoint {said[:12]}... "
+        f"total={time.perf_counter() - t_start:.3f}s "
+        f"revoke={t_revoked - t_start:.3f}s "
+        f"witness={t_publish - t_revoked:.3f}s"
+    )
 
     return _info_to_response(info)
 
