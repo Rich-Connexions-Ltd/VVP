@@ -382,8 +382,14 @@ jobs:
   # No stop-before-deploy needed — standard rolling update.
   # Only redeploys when keripy, keri-agent code, or common changes.
   deploy-keri-agent:
-    needs: [changes, test-keri-agent]
-    if: needs.changes.outputs.keri-agent == 'true' && !failure()
+    needs: [changes, test-keri-agent, verify-witnesses]
+    # Deploy if keri-agent changed AND no upstream failures.
+    # When witnesses also changed, waits for verify-witnesses to complete
+    # so KERI Agent publishes to stable witnesses (not mid-restart ones).
+    # When witnesses didn't change, verify-witnesses is skipped (not failure).
+    if: |
+      needs.changes.outputs.keri-agent == 'true' && !failure() &&
+      (needs.changes.outputs.witness != 'true' || needs.verify-witnesses.result != 'failure')
     runs-on: ubuntu-latest
 
     steps:

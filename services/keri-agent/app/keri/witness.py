@@ -25,6 +25,8 @@ from app.config import (
     WITNESS_IURLS,
     WITNESS_TIMEOUT_SECONDS,
     WITNESS_RECEIPT_THRESHOLD,
+    WITNESS_RETRY_MAX_ATTEMPTS,
+    WITNESS_RETRY_BACKOFF_BASE,
 )
 
 # CESR HTTP format constants (from keripy httping)
@@ -63,10 +65,14 @@ class WitnessPublisher:
         witness_urls: Optional[list[str]] = None,
         timeout: float = WITNESS_TIMEOUT_SECONDS,
         threshold: int = WITNESS_RECEIPT_THRESHOLD,
+        max_attempts: int = WITNESS_RETRY_MAX_ATTEMPTS,
+        backoff_base: float = WITNESS_RETRY_BACKOFF_BASE,
     ):
         self._witness_urls = witness_urls or self._extract_urls_from_iurls()
         self._timeout = timeout
         self._threshold = threshold
+        self._max_attempts = max_attempts
+        self._backoff_base = backoff_base
 
     def _extract_urls_from_iurls(self) -> list[str]:
         """Extract base URLs from OOBI iurls."""
@@ -160,6 +166,19 @@ class WitnessPublisher:
         """Publish a KERI/ACDC event to witnesses."""
         return await self.publish_oobi(aid=pre, kel_bytes=event_bytes)
 
+    @staticmethod
+    def _is_retryable_error(error: Optional[str]) -> bool:
+        """Check if an error string indicates a retryable failure."""
+        if not error:
+            return False
+        # HTTP 5xx errors
+        if error.startswith("HTTP 5"):
+            return True
+        # Network errors
+        if error in ("Timeout", "ConnectError"):
+            return True
+        return False
+
     async def _publish_to_witness(
         self,
         client: httpx.AsyncClient,
@@ -167,7 +186,63 @@ class WitnessPublisher:
         aid: str,
         kel_bytes: bytes,
     ) -> tuple[WitnessResult, Optional[bytes]]:
-        """Publish to a single witness and collect receipt."""
+        """Publish to a single witness with retry on transient failures.
+
+        Retries on: HTTP 202 (escrowed), HTTP 5xx, timeout, connect error.
+        Does not retry on: HTTP 200 (success), HTTP 4xx (client error).
+        """
+        last_result: Optional[tuple[WitnessResult, Optional[bytes]]] = None
+
+        for attempt in range(self._max_attempts):
+            result, receipt = await self._try_publish(
+                client, url, aid, kel_bytes
+            )
+
+            # 200 with receipt — full success, no retry needed
+            if result.success and receipt is not None:
+                return result, receipt
+
+            # 202 escrowed — witness is up but not ready to receipt.
+            # Retry: witness may still be initializing after restart.
+            if result.success and receipt is None:
+                if attempt < self._max_attempts - 1:
+                    backoff = self._backoff_base * (2 ** attempt)
+                    log.info(
+                        f"Witness {url} escrowed {aid[:16]}..., "
+                        f"retry {attempt + 1}/{self._max_attempts} in {backoff:.1f}s"
+                    )
+                    await asyncio.sleep(backoff)
+                    continue
+                # Accept escrowed on final attempt
+                return result, receipt
+
+            # Failure — check if retryable
+            if (
+                self._is_retryable_error(result.error)
+                and attempt < self._max_attempts - 1
+            ):
+                backoff = self._backoff_base * (2 ** attempt)
+                log.warning(
+                    f"Witness {url} failed ({result.error}), "
+                    f"retry {attempt + 1}/{self._max_attempts} in {backoff:.1f}s"
+                )
+                await asyncio.sleep(backoff)
+                continue
+
+            # Non-retryable error or final attempt
+            return result, receipt
+
+        # Should not reach here, but return last result as safety net
+        return result, receipt  # type: ignore[return-value]
+
+    async def _try_publish(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        aid: str,
+        kel_bytes: bytes,
+    ) -> tuple[WitnessResult, Optional[bytes]]:
+        """Single attempt to publish to a witness. Returns (result, receipt)."""
         start = datetime.now(timezone.utc)
 
         try:
@@ -224,6 +299,9 @@ class WitnessPublisher:
         except httpx.TimeoutException:
             log.warning(f"Timeout publishing to {url}")
             return (WitnessResult(url=url, success=False, error="Timeout"), None)
+        except httpx.ConnectError:
+            log.warning(f"Connection refused publishing to {url}")
+            return (WitnessResult(url=url, success=False, error="ConnectError"), None)
         except Exception as e:
             log.error(f"Failed to publish to {url}: {e}")
             return (WitnessResult(url=url, success=False, error=str(e)), None)
@@ -326,6 +404,8 @@ class WitnessPublisher:
         The root / endpoint is used instead of /receipts because
         ReceiptEnd.on_post only accepts key events (icp/rot/ixn/dip/drt),
         not receipt events (rct).
+
+        Retries on transient failures (5xx, timeout, connect error).
         """
         msg = bytearray(rct_msg)
         serder = serdering.SerderKERI(raw=msg)
@@ -338,16 +418,51 @@ class WitnessPublisher:
             CESR_ATTACHMENT_HEADER: attachments.decode("utf-8"),
         }
 
-        response = await client.post(
-            root_url, content=event_json, headers=headers
-        )
-        if response.status_code in (200, 204):
-            log.info(f"Distributed witness receipt to {root_url}: OK")
-        else:
-            log.warning(
-                f"Distributed witness receipt to {root_url}: "
-                f"HTTP {response.status_code}"
-            )
+        for attempt in range(self._max_attempts):
+            try:
+                response = await client.post(
+                    root_url, content=event_json, headers=headers
+                )
+                if response.status_code in (200, 204):
+                    log.info(f"Distributed witness receipt to {root_url}: OK")
+                    return
+                elif response.status_code >= 500:
+                    if attempt < self._max_attempts - 1:
+                        backoff = self._backoff_base * (2 ** attempt)
+                        log.warning(
+                            f"Witness receipt to {root_url} returned {response.status_code}, "
+                            f"retry {attempt + 1}/{self._max_attempts} in {backoff:.1f}s"
+                        )
+                        await asyncio.sleep(backoff)
+                        continue
+                    log.warning(
+                        f"Distributed witness receipt to {root_url}: "
+                        f"HTTP {response.status_code} (after {self._max_attempts} attempts)"
+                    )
+                    return
+                else:
+                    log.warning(
+                        f"Distributed witness receipt to {root_url}: "
+                        f"HTTP {response.status_code}"
+                    )
+                    return
+            except (httpx.TimeoutException, httpx.ConnectError) as e:
+                if attempt < self._max_attempts - 1:
+                    backoff = self._backoff_base * (2 ** attempt)
+                    log.warning(
+                        f"Witness receipt to {root_url} failed ({type(e).__name__}), "
+                        f"retry {attempt + 1}/{self._max_attempts} in {backoff:.1f}s"
+                    )
+                    await asyncio.sleep(backoff)
+                    continue
+                log.warning(
+                    f"Distributed witness receipt to {root_url}: "
+                    f"{type(e).__name__} (after {self._max_attempts} attempts)"
+                )
+                return
+            except Exception as e:
+                log.warning(f"Failed to distribute receipt to {root_url}: {e}")
+                return
 
 
 # Module-level singleton

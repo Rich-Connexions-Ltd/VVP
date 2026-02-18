@@ -91,6 +91,8 @@ WITNESS_OOBI_BASE_URLS: list[str] = WITNESS_CONFIG.get("oobi_base_urls", [])
 # Witness interaction settings
 WITNESS_TIMEOUT_SECONDS: float = float(os.getenv("VVP_WITNESS_TIMEOUT", "10.0"))
 WITNESS_RECEIPT_THRESHOLD: int = int(os.getenv("VVP_WITNESS_THRESHOLD", "2"))
+WITNESS_RETRY_MAX_ATTEMPTS: int = int(os.getenv("VVP_WITNESS_RETRY_MAX", "4"))
+WITNESS_RETRY_BACKOFF_BASE: float = float(os.getenv("VVP_WITNESS_RETRY_BACKOFF", "2.0"))
 
 
 # =============================================================================
