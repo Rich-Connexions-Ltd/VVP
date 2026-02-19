@@ -924,7 +924,7 @@
         const healthResp = await fetch('/healthz');
         const health = await healthResp.json();
         const healthEl = document.getElementById('health-status');
-        if (health.ok === true) {
+        if (health.status === 'ok') {
           healthEl.innerHTML = '<span class="status-dot healthy"></span> Healthy';
         } else {
           healthEl.innerHTML = '<span class="status-dot error"></span> Unhealthy';
