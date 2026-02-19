@@ -316,7 +316,7 @@ def step_issue_brand_credential(base_url, org_api_key, org_aid, registry_name,
 
 def step_create_tn_mapping(base_url, org_api_key, tn, dossier_said, identity_name,
                            brand_name, brand_logo_url):
-    """Step 4: Create TN mapping."""
+    """Step 4: Create TN mapping (idempotent — updates existing if already mapped)."""
     print(f"\n[5/6] Creating TN mapping for {tn}...")
     status, body = api_call(
         "POST",
@@ -328,7 +328,35 @@ def step_create_tn_mapping(base_url, org_api_key, tn, dossier_said, identity_nam
         },
         api_key=org_api_key,
     )
-    if status != 200:
+
+    if status == 409:
+        # TN already mapped — find existing mapping and update its dossier_said
+        print(f"  TN already mapped — updating existing mapping...")
+        list_status, list_body = api_call(
+            "GET",
+            f"{base_url}/tn/mappings",
+            api_key=org_api_key,
+        )
+        if list_status != 200:
+            print(f"  FAILED to list mappings ({list_status}): {list_body}")
+            return None
+        mappings = list_body.get("mappings", [])
+        existing = next((m for m in mappings if m["tn"] == tn), None)
+        if not existing:
+            print(f"  FAILED: TN {tn} not found in mapping list despite 409")
+            return None
+        status, body = api_call(
+            "PATCH",
+            f"{base_url}/tn/mappings/{existing['id']}",
+            data={"dossier_said": dossier_said},
+            api_key=org_api_key,
+        )
+        if status != 200:
+            print(f"  FAILED to update existing mapping ({status}): {body}")
+            return None
+        print(f"  Updated existing mapping: {existing['id'][:16]}...")
+
+    elif status != 200:
         print(f"  FAILED ({status}): {body.get('detail', body)}")
         return None
 
