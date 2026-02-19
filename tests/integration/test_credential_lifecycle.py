@@ -98,6 +98,7 @@ class TestSingleCredentialLifecycle:
 
     @pytest.mark.asyncio
     @pytest.mark.issuer
+    @pytest.mark.smoke
     async def test_credential_has_required_fields(
         self,
         issuer_client: IssuerClient,
@@ -129,6 +130,7 @@ class TestSingleCredentialLifecycle:
 
     @pytest.mark.asyncio
     @pytest.mark.issuer
+    @pytest.mark.smoke
     async def test_dossier_contains_credential(
         self,
         issuer_client: IssuerClient,

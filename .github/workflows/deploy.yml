@@ -1023,15 +1023,40 @@ jobs:
           echo "api_key=$API_KEY" >> $GITHUB_OUTPUT
           echo "Bootstrap: org_id=$ORG_ID"
 
-      - name: Run integration tests
+      - name: Smoke tests (fast critical-path check)
+        id: smoke_tests
+        env:
+          VVP_TEST_API_KEY: ${{ steps.bootstrap.outputs.api_key }}
+          VVP_TEST_ORG_ID: ${{ steps.bootstrap.outputs.org_id }}
+          VVP_TEST_ADMIN_KEY: ${{ secrets.VVP_SYSTEM_ADMIN_KEY }}
+        run: |
+          # Run only smoke-marked tests first. These cover the critical path
+          # (credential issuance + dossier) and give fast signal if deployment is broken.
+          # -x stops on first failure so we don't wait for all smoke tests to finish.
+          SMOKE_MARKERS="${{ steps.suite.outputs.markers }} and smoke"
+          echo "Smoke markers: $SMOKE_MARKERS"
+
+          set +e
+          set -o pipefail
+          python -m pytest tests/integration/ \
+            -v \
+            --tb=short \
+            -x \
+            -m "$SMOKE_MARKERS" \
+            --ignore=tests/integration/benchmarks/ \
+            2>&1 | tee smoke_output.txt
+          echo "exit_code=$?" >> $GITHUB_OUTPUT
+
+      - name: Full integration tests
         id: integration_tests
+        if: steps.smoke_tests.outputs.exit_code == '0'
         env:
           VVP_TEST_API_KEY: ${{ steps.bootstrap.outputs.api_key }}
           VVP_TEST_ORG_ID: ${{ steps.bootstrap.outputs.org_id }}
           VVP_TEST_ADMIN_KEY: ${{ secrets.VVP_SYSTEM_ADMIN_KEY }}
           VVP_AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
         run: |
-          echo "Test suite: ${{ steps.suite.outputs.suite_name }}"
+          echo "Smoke passed. Running full suite: ${{ steps.suite.outputs.suite_name }}"
           START_TIME=$(date +%s)
           set +e
           set -o pipefail
@@ -1039,7 +1064,7 @@ jobs:
           python -m pytest tests/integration/ \
             -v \
             --tb=short \
-            -m "${{ steps.suite.outputs.markers }}" \
+            -m "${{ steps.suite.outputs.markers }} and not smoke" \
             --ignore=tests/integration/benchmarks/ \
             2>&1 | tee test_output.txt
 
@@ -1047,32 +1072,46 @@ jobs:
           END_TIME=$(date +%s)
           DURATION=$((END_TIME - START_TIME))
 
-          # Parse test results
-          PASSED=$(grep -oP '\d+(?= passed)' test_output.txt | tail -1 || echo "0")
-          FAILED=$(grep -oP '\d+(?= failed)' test_output.txt | tail -1 || echo "0")
+          # Combine smoke + full counts for reporting
+          SMOKE_PASSED=$(grep -oP '\d+(?= passed)' smoke_output.txt | tail -1 || echo "0")
+          FULL_PASSED=$(grep -oP '\d+(?= passed)' test_output.txt | tail -1 || echo "0")
+          FULL_FAILED=$(grep -oP '\d+(?= failed)' test_output.txt | tail -1 || echo "0")
+          PASSED=$((SMOKE_PASSED + FULL_PASSED))
+          FAILED=$FULL_FAILED
           TOTAL=$((PASSED + FAILED))
 
-          # Set outputs
           echo "passed=$PASSED" >> $GITHUB_OUTPUT
           echo "failed=$FAILED" >> $GITHUB_OUTPUT
           echo "total=$TOTAL" >> $GITHUB_OUTPUT
           echo "duration=$DURATION" >> $GITHUB_OUTPUT
           echo "exit_code=$TEST_EXIT_CODE" >> $GITHUB_OUTPUT
 
-          # Capture errors for reporting
           if [ $TEST_EXIT_CODE -ne 0 ]; then
             grep -A 5 "FAILED\|ERROR" test_output.txt > errors.txt || true
           fi
 
           exit $TEST_EXIT_CODE
 
+      - name: Collect smoke failure details
+        if: steps.smoke_tests.outputs.exit_code != '0'
+        run: |
+          grep -A 5 "FAILED\|ERROR" smoke_output.txt > errors.txt || true
+          echo "exit_code=1" >> $GITHUB_OUTPUT
+          echo "passed=0" >> $GITHUB_OUTPUT
+          echo "failed=1" >> $GITHUB_OUTPUT
+          echo "total=1" >> $GITHUB_OUTPUT
+          echo "duration=0" >> $GITHUB_OUTPUT
+        id: smoke_failure
+
       - name: Submit test results to admin endpoint
         if: always()
         env:
           VVP_TEST_API_KEY: ${{ secrets.VVP_ADMIN_API_KEY }}
         run: |
-          # Determine pass/fail status
-          if [ "${{ steps.integration_tests.outputs.exit_code }}" = "0" ]; then
+          # Determine overall pass/fail: both smoke and full must pass
+          SMOKE_OK="${{ steps.smoke_tests.outputs.exit_code }}"
+          FULL_OK="${{ steps.integration_tests.outputs.exit_code }}"
+          if [ "$SMOKE_OK" = "0" ] && [ "$FULL_OK" = "0" ]; then
             PASSED_STATUS=true
           else
             PASSED_STATUS=false
@@ -1092,10 +1131,10 @@ jobs:
           {
             "git_sha": "${{ github.sha }}",
             "passed": ${PASSED_STATUS},
-            "total_tests": ${{ steps.integration_tests.outputs.total || 0 }},
-            "passed_tests": ${{ steps.integration_tests.outputs.passed || 0 }},
-            "failed_tests": ${{ steps.integration_tests.outputs.failed || 0 }},
-            "duration_seconds": ${{ steps.integration_tests.outputs.duration || 0 }},
+            "total_tests": ${{ steps.integration_tests.outputs.total || steps.smoke_failure.outputs.total || 0 }},
+            "passed_tests": ${{ steps.integration_tests.outputs.passed || steps.smoke_failure.outputs.passed || 0 }},
+            "failed_tests": ${{ steps.integration_tests.outputs.failed || steps.smoke_failure.outputs.failed || 0 }},
+            "duration_seconds": ${{ steps.integration_tests.outputs.duration || steps.smoke_failure.outputs.duration || 0 }},
             "issuer_url": "${VVP_ISSUER_URL}",
             "verifier_url": "${VVP_VERIFIER_URL}",
             "errors": ${ERRORS}
@@ -1123,6 +1162,7 @@ jobs:
         with:
           name: integration-test-results
           path: |
+            smoke_output.txt
             test_output.txt
             errors.txt
           retention-days: 7

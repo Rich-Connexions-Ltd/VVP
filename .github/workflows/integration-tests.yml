@@ -106,7 +106,26 @@ jobs:
             echo "org_id=$ORG_ID" >> $GITHUB_OUTPUT
           fi
 
-      - name: Run integration tests
+      - name: Smoke tests (fast critical-path check)
+        id: smoke_tests
+        env:
+          VVP_TEST_MODE: local
+          VVP_ISSUER_URL: http://localhost:8001
+          VVP_VERIFIER_URL: http://localhost:8000
+          VVP_TEST_API_KEY: test-admin-key-12345
+          VVP_TEST_ORG_ID: ${{ steps.bootstrap.outputs.org_id }}
+        run: |
+          set +e
+          python -m pytest tests/integration/ \
+            -v \
+            --tb=short \
+            -x \
+            -m "integration and not azure and smoke" \
+            2>&1 | tee smoke_output.txt
+          echo "exit_code=$?" >> $GITHUB_OUTPUT
+
+      - name: Full integration tests
+        if: steps.smoke_tests.outputs.exit_code == '0'
         env:
           VVP_TEST_MODE: local
           VVP_ISSUER_URL: http://localhost:8001
@@ -119,7 +138,7 @@ jobs:
           python -m pytest tests/integration/ \
             -v \
             --tb=short \
-            -m "integration and not azure" \
+            -m "integration and not azure and not smoke" \
             --junitxml=test-results.xml
 
       - name: Upload test results
@@ -127,7 +146,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: integration-test-results
-          path: test-results.xml
+          path: |
+            smoke_output.txt
+            test-results.xml
 
       - name: Upload benchmark results
         if: always()
