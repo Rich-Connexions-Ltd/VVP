@@ -1,4 +1,4 @@
-# VVP Witness Docker Image
+# VVP Witness Docker Image (linux/amd64 — required by Azure Container Apps)
 # Runs a single KERI witness with deterministic salt for consistent AIDs
 #
 # Environment Variables:
