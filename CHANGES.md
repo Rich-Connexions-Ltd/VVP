@@ -1,5 +1,40 @@
 # VVP Verifier Change Log
 
+## Sprint 75: Vetter Jurisdiction Constraints + UX Polish
+
+**Date:** 2026-02-19
+**Status:** Complete
+
+### Summary
+
+Added `WARNING` overall_status (§8.4) for non-blocking vetter scope mismatches: when a VetterCert is found but the vetter is not authorised for the TN's jurisdiction, `overall_status=WARNING` with `vetter_warning_reason="vetter_not_authorised_for_jurisdiction"` — call still delivers. WARNING propagates through the full SIP stack via `X-VVP-Warning-Reason` header and PBX dialplan. UX improvements: identity admin page shows witness receipt status badge (green ✓ / red ⚠) with one-click re-publish; dossier wizard Step 4 review shows vetter scope tile (ECC targets, jurisdiction, expiry). New KERI Agent endpoint `GET /identities/{name}/witness-status`. 9 new tests; 190+900+1848+43=2,981 tests pass.
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `services/verifier/app/vvp/api_models.py` | Add `WARNING` to `ClaimStatus` enum; add `vetter_warning_reason` to `VerifyResponse` |
+| `services/verifier/app/vvp/verify.py` | Post-derivation WARNING upgrade when `_vetter_scope_mismatch=True` and status is not already INVALID |
+| `common/common/vvp/sip/models.py` | Add `warning_reason` field to `SIPResponse`; emit `X-VVP-Warning-Reason` header |
+| `common/common/vvp/sip/builder.py` | Add `warning_reason` param to `build_302_redirect()` |
+| `services/sip-verify/app/verify/client.py` | Add `warning_reason` to `VerifyResult`; cache brand on WARNING status |
+| `services/sip-verify/app/verify/handler.py` | Pass `warning_reason` to redirect builder; add to monitor events and log |
+| `services/pbx/config/public-sip.xml` | Extract and forward `X-VVP-Warning-Reason` in `verified` and `vvp-loopback-inbound` contexts |
+| `common/common/vvp/models/keri_agent.py` | Add `witness_receipts_present: bool` to `IdentityResponse` |
+| `services/keri-agent/app/api/identity.py` | Add `GET /identities/{name}/witness-status` endpoint (uses `hab.iserder.saidb` + `getWigs`) |
+| `services/issuer/app/keri_client.py` | Add `get_witness_status(name)` method |
+| `services/issuer/app/api/admin.py` | Add `GET /admin/witness-status/{name}` proxy endpoint |
+| `services/issuer/web/create.html` | Witness receipt status badge + "Publish to Witnesses" button per identity |
+| `services/issuer/web/dossier.html` | Step 4 vetter scope tile (ECC targets, jurisdiction, expiry, warning if no cert) |
+| `services/verifier/tests/test_models.py` | Fix `test_claim_status_count` (3→4); add `TestWARNINGStatus` (4 tests) |
+| `common/tests/vvp/sip/test_builder.py` | Add 3 WARNING propagation tests |
+| `services/keri-agent/tests/test_identity.py` | Add 2 witness-status endpoint tests |
+
+**Commit:**
+- `3c68648` — Sprint 75: Vetter jurisdiction constraints + UX polish
+
+---
+
 ## Sprint 74: KERI Identity Stability — Fix Bulk Cleanup Passthrough & Identity Tagging
 
 **Date:** 2026-02-19

@@ -10,6 +10,7 @@ class ClaimStatus(str, Enum):
     VALID = "VALID"                # Proven by evidence
     INVALID = "INVALID"            # Contradicted by evidence
     INDETERMINATE = "INDETERMINATE"  # Insufficient evidence
+    WARNING = "WARNING"            # Valid but vetter scope mismatch (§8.4, Sprint 75)
 ```
 
 #### Request Models
@@ -55,7 +56,7 @@ class ErrorDetail(BaseModel):
 
 class VerifyResponse(BaseModel):
     request_id: str                # UUID
-    overall_status: ClaimStatus    # Final status
+    overall_status: ClaimStatus    # Final status (VALID/INVALID/INDETERMINATE/WARNING)
     claims: Optional[List[ClaimNode]]
     errors: Optional[List[ErrorDetail]]
     has_variant_limitations: bool  # Compact/partial ACDCs present?
@@ -66,6 +67,7 @@ class VerifyResponse(BaseModel):
     vetter_constraints: Optional[Dict[str, VetterConstraintInfo]]
     brand_name: Optional[str]     # From PASSporT card claim
     brand_logo_url: Optional[str] # From PASSporT card claim
+    vetter_warning_reason: Optional[str]  # Sprint 75: e.g. "vetter_not_authorised_for_jurisdiction"
 
 class DelegationChainResponse(BaseModel):
     chain: List[DelegationNodeResponse]
@@ -302,6 +304,7 @@ class IdentityResponse(BaseModel):
     key_count: int
     sequence_number: int
     transferable: bool
+    witness_receipts_present: bool = False  # Sprint 75: True if LMDB wigs has inception receipts
 
 class OobiResponse(BaseModel):
     aid: str

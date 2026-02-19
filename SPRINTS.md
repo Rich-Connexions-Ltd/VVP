@@ -5695,3 +5695,29 @@ The current DELETE endpoints only remove items from KERI Agent LMDB. Because Pos
 - [x] KERI Agent refuses cleanup requests with no filter criteria (400 Bad Request)
 - [x] `test_registry` uses org's own registry — no AID mismatch 403
 - [x] All tests pass — 188+900+1844=2,932 tests pass
+
+
+## Sprint 75: Vetter Jurisdiction Constraints + UX Polish
+
+**Status:** COMPLETE
+**Goal:** End-to-end vetter jurisdiction enforcement: TN Allocation credentials auto-get a `certification` edge, dossiers bundle the VetterCert, verifier returns `WARNING` (not INDETERMINATE) when a vetter's scope excludes the TN's country code. Bundled UX improvements: dossier wizard vetter status tile, witness publish badge, verification preview.
+
+### Deliverables
+
+- [x] TN Allocation issuance auto-injects `certification` edge → issuing vetter's active VetterCert SAID (Sprint 61, already done)
+- [x] DossierBuilder follows `certification` edges and includes VetterCert ACDCs in CESR bundle (Sprint 61, already done)
+- [x] New `WARNING` VVPStatus: vetter found but scope mismatch → `overall_status=WARNING` + `vetter_warning_reason`
+- [x] SIP verify service handles `WARNING` → `X-VVP-Status: WARNING` + `X-VVP-Warning-Reason` header
+- [x] PBX dialplan extracts and forwards `X-VVP-Warning-Reason` to B-leg
+- [x] Dossier wizard: per-TN vetter constraint status tile (green/amber/red)
+- [x] Identity admin: witness publish status badge + one-click re-publish
+- [x] KERI Agent: `GET /identities/{name}/witness-status` endpoint + issuer proxy `/admin/witness-status/{name}`
+
+### Exit Criteria
+
+- [x] `overall_status=WARNING` when VetterCert found but scope excludes TN country code
+- [x] `vetter_warning_reason="vetter_not_authorised_for_jurisdiction"` propagated through SIP stack
+- [x] SIP WARNING call delivers with `X-VVP-Status: WARNING` + `X-VVP-Warning-Reason` headers
+- [x] Witness status badge on identity admin page (green ✓ / red ⚠ + publish button)
+- [x] Dossier wizard Step 4: vetter scope tile shows ECC targets, jurisdiction, expiry
+- [x] All tests pass — 190+900+1848+43=2,981 tests pass

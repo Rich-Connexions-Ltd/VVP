@@ -179,13 +179,19 @@ Evaluates whether each credential in the dossier was issued by a vetter authoriz
 2. Extract `ecc_targets` (E.164 country codes) and `jurisdiction_targets` (ISO 3166-1 alpha-3) from VetterCert
 3. For TN credentials: check calling TN's country code against `ecc_targets`
 4. For Identity/Brand credentials: check jurisdiction against `jurisdiction_targets`
-5. Derive overall status: VALID (all pass), INVALID (hard auth failure), INDETERMINATE (cert missing)
+5. Derive overall status: VALID (all pass), INVALID (cert found but scope mismatch → triggers WARNING), INDETERMINATE (cert missing)
 
-**Claim**: `vetter_constraints` (OPTIONAL — does not block overall VALID when INDETERMINATE)
+**WARNING status (Sprint 75, §8.4)**:
+- When vetter_status == INVALID AND `ENFORCE_VETTER_CONSTRAINTS=false` (default): overall_status is upgraded to WARNING post-derivation (not INDETERMINATE or VALID) if no other claim produced INVALID.
+- WARNING is non-blocking: the call is still delivered; callee sees `X-VVP-Status: WARNING` and `X-VVP-Warning-Reason: vetter_not_authorised_for_jurisdiction`.
+- Priority: INVALID > WARNING > INDETERMINATE > VALID. WARNING cannot override INVALID from other phases.
+- `vetter_warning_reason` field in VerifyResponse carries the machine-readable reason string.
 
-**Response field**: `vetter_constraints: Dict[str, VetterConstraintInfo]` keyed by credential SAID
+**Claim**: `vetter_constraints` (OPTIONAL — required=False, does not block overall VALID when INDETERMINATE)
 
-**SIP propagation**: `X-VVP-Vetter-Status` header (PASS / FAIL-ECC / FAIL-JURISDICTION / FAIL-ECC-JURISDICTION / INDETERMINATE)
+**Response field**: `vetter_constraints: Dict[str, VetterConstraintInfo]` keyed by credential SAID; `vetter_warning_reason: Optional[str]`
+
+**SIP propagation**: `X-VVP-Vetter-Status` header (PASS / FAIL-ECC / FAIL-JURISDICTION / FAIL-ECC-JURISDICTION / INDETERMINATE); `X-VVP-Warning-Reason` header when WARNING
 
 **Errors**: `VETTER_ECC_UNAUTHORIZED`, `VETTER_JURISDICTION_UNAUTHORIZED`, `VETTER_CERTIFICATION_MISSING`
 

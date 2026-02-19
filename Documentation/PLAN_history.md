@@ -21216,3 +21216,467 @@ CI cleanup step
 |-------|------|---------|
 | R1 | 2026-02-19 | Initial draft |
 
+
+---
+
+# Sprint 75: Vetter Jurisdiction Constraints + UX Polish
+
+_Archived: 2026-02-19_
+
+# Sprint 75: Vetter Jurisdiction Constraints + UX Polish
+
+## Problem Statement
+
+The VVP verifier has complete logic for validating vetter jurisdiction constraints
+(`validate_ecc_constraint()`, `validate_jurisdiction_constraint()`, `find_vetter_certification()`)
+but it invariably returns `vetter_constraints_valid=INDETERMINATE`. The root cause is that
+TN Allocation credentials are issued without a `certification` edge, so the verifier's DFS
+walk never finds a VetterCert to evaluate against.
+
+This sprint closes that gap end-to-end:
+1. TN Allocation issuance auto-injects a `certification` edge pointing to the issuing
+   vetter's active VetterCert SAID.
+2. The DossierBuilder follows `certification` edges so VetterCert ACDCs are bundled in
+   CESR dossiers.
+3. When a vetter's VetterCert scope does not cover the TN's country code, the verifier
+   returns `overall_status=WARNING` rather than `INVALID` — the call still delivers but
+   the caller sees a distinct amber indicator.
+4. Three UX improvements discovered during Sprint 74b E2E testing are shipped in the same
+   deployment.
+
+**Rationale for bundling UX features:** The three UX items (Components 7–9) are directly
+diagnostic for the new constraint feature. Without the dossier wizard vetter tile (7),
+operators cannot see whether a dossier will produce `VALID`, `WARNING`, or `INDETERMINATE`
+before going live — making the constraint work invisible to non-API users. Without the
+verification preview (9), they cannot confirm the expected verifier outcome without making
+a test call. Without the witness publish badge (8), an unpublished org AID (which causes
+`passport_verified=INDETERMINATE`) is indistinguishable from a published one in the UI.
+Deploying constraint enforcement without these diagnostics would result in silent failures
+and support burden. The UX additions each touch one file and introduce no architectural
+complexity; the scope risk is low and is outweighed by the operational risk of shipping
+constraint enforcement blind.
+
+## Spec References
+
+- VVP Spec §6.3: "The VetterCertification credential MUST be linked from each TN credential
+  via a `certification` edge."
+- VVP Spec §7.1: "A vetter MAY have jurisdiction constraints expressed as `ecc_targets`
+  (E.164 country codes) and `jurisdiction_targets` (ISO 3166-1 alpha-3)."
+- VVP Spec §8.4: "When vetter constraint validation fails due to scope mismatch, the
+  verification result SHOULD be WARNING to allow call delivery with degraded trust."
+
+## Current State
+
+| Component | Current behaviour | Expected behaviour |
+|-----------|------------------|-------------------|
+| TN Allocation issuance | No `certification` edge in credential edges block | `certification` edge pointing to vetter's VetterCert SAID |
+| DossierBuilder | VetterCert included only as manual brand edge in bootstrap | Auto-followed from `certification` edges on TN/identity creds |
+| Verifier constraint check | Returns `INDETERMINATE` (no VetterCert found) | Returns `VALID` / `INVALID` / `WARNING` based on actual scope |
+| `overall_status` on constraint failure | Falls through to `INDETERMINATE` | `WARNING` when vetter found but out of scope |
+| SIP verification service | Handles `VALID` and `INVALID` only | Also handles `WARNING` with `X-VVP-Warning-Reason` header |
+| Dossier wizard | No vetter constraint indicator | Per-number vetter scope readiness tile |
+| Identity admin page | No witness publish status | Publish status badge + one-click re-publish |
+
+## Proposed Solution
+
+### Approach
+
+**Option A — New `WARNING` status (chosen)**
+
+When `vetter_constraints_valid=INVALID` (VetterCert found but scope excludes the TN's
+country code), the overall verification result becomes `WARNING`. The call is delivered via
+SIP 302 exactly as for `VALID`, but `X-VVP-Status: WARNING` and a new
+`X-VVP-Warning-Reason: vetter_not_authorised_for_jurisdiction` header are added. WebRTC
+clients and physical phones that support X-VVP-* headers display an amber / warning state
+rather than green.
+
+Rationale: Blocking the call entirely (`INVALID`) would be too aggressive for a first
+deployment — vetters may have legitimate but misconfigured VetterCerts. A `WARNING` state
+preserves call delivery while making the constraint failure visible and actionable.
+
+`INDETERMINATE` behaviour (VetterCert missing entirely) is unchanged: the call delivers,
+`vetter_constraints_valid=INDETERMINATE` appears in the verification response, no warning
+header is set.
+
+### Alternatives Considered
+
+| Alternative | Pros | Cons | Why Rejected |
+|-------------|------|------|--------------|
+| **Option B** — `INDETERMINATE` with sub-status | No new enum value | Ambiguous — "missing cert" and "wrong scope" look the same | Rejected: caller cannot distinguish "not checked" from "checked and failed" |
+| **Option C** — `INVALID` blocks call | Strict enforcement | Too aggressive; breaks calls for legitimate scope mismatches on launch | Rejected: reserved for future `ENFORCE_VETTER_CONSTRAINTS=True` mode |
+
+### Detailed Design
+
+---
+
+#### Component 1: TN Allocation credential schema — `certification` edge
+
+**Purpose**: Declare the `certification` edge field in the TN Allocation ACDC schema so
+the issuer can embed the backlink and the verifier can traverse it.
+
+**Discovery step**: Read the TN Allocation schema JSON
+(`services/issuer/app/schema/schemas/tn-allocation-credential.json` or equivalent) to
+confirm whether a `certification` edge is already defined. If it is, only the issuance
+code needs updating. If it is not, the schema's `e` (edges) block must be extended.
+
+**Expected edge structure** (within the credential's edges block):
+```json
+"e": {
+  "d": "<edges SAID>",
+  "certification": {
+    "n": "<VetterCert ACDC SAID>",
+    "s": "EOefmhWU2qTpMiEQhXohE6z3xRXkpLloZdhTYIenlD4H"
+  }
+}
+```
+
+**Note**: The `certification` edge is an i2i (issuer-to-issuee) link: the edge points to
+the VetterCert ACDC whose `i` attribute equals the vetter's AID (the issuer of the TN
+Allocation).
+
+---
+
+#### Component 2: TN Allocation issuance — auto-inject `certification` edge
+
+**Location**: `services/issuer/app/api/tn_allocation.py` and/or the underlying issuance
+service.
+
+**Behaviour**:
+1. When a vetter org issues a TN Allocation (`POST /tn-allocations`), the issuer looks up
+   the vetter org's active VetterCert SAID via `resolve_active_vetter_cert(org_id)` (this
+   function already exists in `services/issuer/app/vetter/service.py`).
+2. If a VetterCert is found, the `certification` edge is constructed and included in the
+   credential edges block before SAID computation and issuance.
+3. If no VetterCert exists for the issuing org, issuance proceeds without the edge (no
+   hard failure) and a warning is logged. This preserves backwards compatibility.
+
+**Interface**:
+```python
+async def build_tn_allocation_edges(
+    org_id: str,
+    keri_client: KeriAgentClient,
+) -> dict:
+    """
+    Returns the edges dict for a TN Allocation credential.
+    Includes 'certification' edge if an active VetterCert exists for the issuer org.
+    """
+```
+
+---
+
+#### Component 3: DossierBuilder — follow `certification` edges
+
+**Location**: `services/issuer/app/dossier/builder.py`
+
+**Current behaviour**: DFS edge walk follows edges defined in `_EDGE_SCHEMAS_TO_FOLLOW`.
+`certification` edges are not in this set (or the set is dynamic — confirm during
+implementation).
+
+**Change**: Ensure `certification` edges on TN Allocation credentials are followed and the
+referenced VetterCert ACDCs are fetched from the KERI Agent and included in the CESR bundle.
+
+Two strategies (choose based on current DossierBuilder structure):
+- **Strategy A** (if `_EDGE_SCHEMAS_TO_FOLLOW` is schema-based): Add the VetterCert schema
+  SAID `EOefmhWU2qTpMiEQhXohE6z3xRXkpLloZdhTYIenlD4H` to the follow-set.
+- **Strategy B** (if the builder iterates credential edges generically): The `certification`
+  edge will be followed automatically once it exists in the credential.
+
+---
+
+#### Component 4: Verifier — `WARNING` status
+
+**Location**: `services/verifier/app/vvp/api_models.py`, `verify.py`, `vetter/constraints.py`
+
+**4a — Extend `VVPStatus` enum**:
+```python
+class VVPStatus(str, Enum):
+    VALID = "VALID"
+    WARNING = "WARNING"          # NEW: vetter found but scope mismatch
+    INVALID = "INVALID"
+    INDETERMINATE = "INDETERMINATE"
+```
+
+**4b — Add `vetter_warning_reason` claim** to the verification result model:
+```python
+class VVPVerificationResult(BaseModel):
+    ...
+    vetter_warning_reason: Optional[str] = None   # e.g. "vetter_not_authorised_for_jurisdiction"
+```
+
+**4c — Update `verify_vetter_constraints()`** (`verify.py` ~line 1627):
+
+The function produces two independent outputs:
+- `vetter_constraints_claim` — the per-claim status set on the `VVPVerificationResult`
+- `vetter_warning_reason` — an optional string set on the result when a scope mismatch is
+  detected (VetterCert found but country code excluded)
+
+```
+# Step 1: run existing constraint check per credential
+scope_results = [check_scope(cred) for cred in credentials]
+#   scope_result.cert_found  → bool: VetterCert was located via certification edge
+#   scope_result.authorised  → bool: VetterCert ecc_targets covers TN country code
+
+# Step 2: set the vetter_constraints_valid claim
+if all scope_results have cert_found=True and authorised=True:
+    vetter_constraints_claim = VALID
+elif any scope_result has cert_found=True and authorised=False:
+    vetter_constraints_claim = INVALID          # cert found, scope excluded
+elif any scope_result has cert_found=False:
+    vetter_constraints_claim = INDETERMINATE    # cert missing (unchanged behaviour)
+
+# Step 3: set the warning reason (separate from the claim)
+if vetter_constraints_claim == INVALID:
+    result.vetter_warning_reason = "vetter_not_authorised_for_jurisdiction"
+```
+
+**4d — Update `get_overall_status()`** to derive `overall_status` from all claims:
+
+```
+# Priority ladder (highest wins):
+# INVALID  → any claim is INVALID  AND  vetter_constraints_claim is NOT the sole INVALID
+# WARNING  → vetter_constraints_claim == INVALID  AND  all other claims VALID/INDETERMINATE
+# INDETERMINATE → any claim is INDETERMINATE, all others VALID
+# VALID    → all claims VALID
+```
+
+Concretely: if the only INVALID claim is `vetter_constraints_valid`, set
+`overall_status=WARNING`. If any other claim is INVALID (e.g. `passport_verified`,
+`brand_verified`), `overall_status=INVALID` takes precedence and no warning reason is
+emitted. This ensures the WARNING state never masks a genuine verification failure.
+
+---
+
+#### Component 5: SIP verification service — `WARNING` propagation
+
+**Location**: `services/sip-verify/` (confirm exact path during implementation).
+
+**Current behaviour**: Translates `VALID` → `X-VVP-Status: VALID`, `INVALID` → `X-VVP-Status: INVALID`.
+
+**Change**:
+- Add `WARNING` case: returns SIP 302 (same as VALID) with:
+  - `X-VVP-Status: WARNING`
+  - `X-VVP-Warning-Reason: {vetter_warning_reason}` (new header, only set when present)
+- Call is delivered — 302 redirect proceeds to the extension.
+
+---
+
+#### Component 6: PBX dialplan — extract and forward warning headers
+
+**Location**: `services/pbx/config/public-sip.xml`, `redirected` and `verified` contexts.
+
+**Change**: In the `redirected` and `verified` contexts, extract and forward
+`X-VVP-Warning-Reason` alongside existing VVP headers:
+```xml
+<action application="set" data="vvp_warning_reason=${sip_rh_X-VVP-Warning-Reason}"/>
+<action application="export" data="nolocal:sip_h_X-VVP-Warning-Reason=${vvp_warning_reason}"/>
+```
+
+---
+
+#### Component 7 (UX): Dossier wizard — vetter constraint status tile
+
+**Location**: `services/issuer/web/dossier.html`
+
+**Where**: After the credential selection step (Step 3/4 depending on wizard structure),
+add a "Vetter Authorisation" readiness panel before the "Create Dossier" button.
+
+**Behaviour**:
+- For each TN credential selected in the dossier, resolve the issuing vetter's VetterCert
+  (via a new API call or by inspecting the credential's `certification` edge SAID).
+- Check whether the vetter's `ecc_targets` covers the TN's country code (client-side or
+  via a new `GET /vetter-certifications/{said}/scope-check?tn={tn}` endpoint).
+- Display per-TN status:
+  - ✓ Green: VetterCert found, country code covered
+  - ⚠ Amber: VetterCert found, country code NOT covered (call will deliver with WARNING)
+  - ✗ Red: No VetterCert found (vetter_constraints_valid will be INDETERMINATE)
+
+**API addition** (if needed):
+```
+GET /vetter-certifications/active?org_id={org_id}
+→ Returns the active VetterCert for an org including ecc_targets/jurisdiction_targets
+```
+(May already exist — confirm during implementation.)
+
+---
+
+#### Component 8 (UX): Identity admin — witness publish status badge
+
+**Location**: `services/issuer/web/identity.html` (or wherever the identity list/detail
+page lives).
+
+**New KERI Agent endpoint**:
+```
+GET /admin/identities/{prefix}/witness-status
+→ {
+    "published": true/false,
+    "witness_receipts": N,     # number of witnesses that have issued receipts
+    "total_witnesses": 3
+  }
+```
+Implementation: check `db.wigs.get(snKey(pre, sn))` for sn=0 (inception event); if wigers
+list is non-empty, the identity has been published.
+
+**UI change**: Each identity in the management list shows a small badge:
+- "3/3 witnesses" (green) — fully published
+- "0/3 witnesses" (amber) — not published, show "Publish" button
+- Clicking "Publish" calls existing `POST /admin/publish-identity/{identity_id}`
+
+---
+
+#### Component 9 (UX): Dossier wizard — verification preview
+
+**Location**: `services/issuer/web/dossier.html`
+
+**Where**: Final confirmation step, below the credential list.
+
+**Behaviour**: A collapsible "Expected Verification Result" section that calls the existing
+dossier readiness endpoint (or a new dry-run endpoint) and renders the expected check
+outcomes in a table:
+
+| Check | Expected |
+|-------|---------|
+| brand_verified | VALID |
+| tn_rights_valid | VALID |
+| vetter_constraints_valid | ⚠ WARNING (Deutsche Vetters not authorised for +44) |
+| dossier_verified | VALID |
+
+This is a best-effort preview — actual verification depends on live KERI state.
+
+---
+
+### Data Flow (end-to-end)
+
+```
+Vetter issues TN Allocation
+  └─ certification edge → VetterCert SAID
+
+DossierBuilder fetches TN Allocation
+  └─ follows certification edge → fetches VetterCert ACDC
+  └─ bundles both in CESR dossier
+
+Verifier receives CESR dossier
+  └─ find_vetter_certification() finds VetterCert via certification edge
+  └─ validate_ecc_constraint() checks ecc_targets against TN country code
+  └─ VALID   → overall_status = VALID
+  └─ INVALID → overall_status = WARNING + vetter_warning_reason set
+
+SIP verify service
+  └─ WARNING → SIP 302 with X-VVP-Status: WARNING + X-VVP-Warning-Reason
+
+PBX dialplan
+  └─ extracts X-VVP-Warning-Reason, forwards to B-leg
+
+Callee WebRTC client
+  └─ X-VVP-Status: WARNING → amber brand display
+```
+
+### Error Handling
+
+| Scenario | Behaviour |
+|----------|-----------|
+| Vetter has no active VetterCert | `certification` edge omitted from TN Alloc (logged as warning); `vetter_constraints_valid=INDETERMINATE` at verification |
+| VetterCert SAID not resolvable from dossier | `find_vetter_certification()` returns None; INDETERMINATE as today |
+| `overall_status=WARNING`, other checks VALID | SIP 302 delivered; warning headers set |
+| Any check `INVALID` (e.g. signature) | `overall_status=INVALID` regardless of vetter constraints; call not delivered |
+| `X-VVP-Warning-Reason` header missing from SIP 302 | PBX dialplan falls back to empty string; no B-leg warning header |
+
+### Test Strategy
+
+**Unit tests (verifier)**:
+- `test_vetter_constraints_warning.py`: scenario where VetterCert found but `ecc_targets`
+  excludes TN country code → `overall_status=WARNING`, `vetter_warning_reason` set
+- `test_vetter_constraints_valid.py`: scenario where VetterCert found and `ecc_targets`
+  includes TN country code → `overall_status=VALID`
+- Update existing INDETERMINATE tests to confirm they still return INDETERMINATE when
+  VetterCert missing
+
+**Unit tests (issuer — TN Allocation issuance)**:
+- Vetter org has active VetterCert → `certification` edge present in issued credential
+- Vetter org has no VetterCert → credential issued without `certification` edge, no error
+
+**Unit tests (issuer — DossierBuilder)**:
+- Dossier containing TN Alloc with `certification` edge includes VetterCert ACDC in bundle
+
+**Unit tests (KERI Agent)**:
+- `GET /admin/identities/{prefix}/witness-status` returns correct published/unpublished state
+
+**Integration tests**:
+- Full chain: issue VetterCert with `ecc_targets=["44"]`, issue TN Alloc with certification
+  edge, build dossier, verify → `vetter_constraints_valid=VALID`
+- Full chain: issue VetterCert with `ecc_targets=["49"]`, issue TN Alloc with certification
+  edge, build dossier, verify TN in +44 range → `overall_status=WARNING`
+
+## Files to Create/Modify
+
+| File | Action | Purpose |
+|------|--------|---------|
+| `services/issuer/app/schema/schemas/tn-allocation-credential.json` | Modify (if needed) | Add `certification` edge to schema `e` block |
+| `services/issuer/app/api/tn_allocation.py` | Modify | Auto-inject `certification` edge at issuance time |
+| `services/issuer/app/vetter/service.py` | Modify (minor) | Expose `resolve_active_vetter_cert()` for use in TN Alloc issuance |
+| `services/issuer/app/dossier/builder.py` | Modify | Follow `certification` edges in DFS walk |
+| `services/verifier/app/vvp/api_models.py` | Modify | Add `WARNING` to `VVPStatus`; add `vetter_warning_reason` field |
+| `services/verifier/app/vvp/verify.py` | Modify | Update `verify_vetter_constraints()` and `get_overall_status()` |
+| `services/verifier/app/vvp/vetter/constraints.py` | Modify | `get_overall_constraint_status()` returns WARNING info |
+| `services/sip-verify/app/…` | Modify | Handle WARNING status; emit `X-VVP-Warning-Reason` header |
+| `services/pbx/config/public-sip.xml` | Modify | Extract/forward `X-VVP-Warning-Reason` in redirected + verified contexts |
+| `services/keri-agent/app/api/admin.py` | Modify | Add `GET /admin/identities/{prefix}/witness-status` |
+| `services/issuer/app/api/admin.py` | Modify | Proxy witness-status to KERI Agent |
+| `services/issuer/web/dossier.html` | Modify | Vetter constraint tile + verification preview panel |
+| `services/issuer/web/identity.html` | Modify | Witness publish status badge + Publish button |
+| `services/issuer/tests/test_tn_allocation_certification_edge.py` | Create | Tests for certification edge injection |
+| `services/issuer/tests/test_dossier_builder_vetter.py` | Create | Tests for VetterCert inclusion in dossier |
+| `services/verifier/tests/test_vetter_constraints_warning.py` | Create | WARNING status tests |
+| `services/keri-agent/tests/test_witness_status.py` | Create | Witness publish status endpoint tests |
+
+## Open Questions
+
+1. **TN Allocation schema `certification` edge**: Sprint 72 CHANGES.md references
+   "Auto-injected `certification` edge hidden from credential form" — the edge is almost
+   certainly already declared in the schema (the Sprint 72 work hid it from the UI, not
+   created it). Confirm by reading the schema file; expect only the issuance logic
+   (Component 2) to need changes, not the schema itself.
+
+2. **DossierBuilder edge-follow mechanism**: Is `_EDGE_SCHEMAS_TO_FOLLOW` a static set of
+   schema SAIDs, or does the builder walk all edges generically? Determines whether adding
+   VetterCert schema SAID is sufficient (Strategy A) or no change needed (Strategy B).
+
+3. **SIP verify service location**: Where is the sip-verify service source in this repo?
+   (`services/sip-verify/`? Check during implementation.) The WARNING propagation change is
+   minor once the location is confirmed.
+
+4. **Dossier wizard vetter scope check**: Does a suitable API endpoint already exist for
+   resolving an org's active VetterCert with its `ecc_targets`? If not, add
+   `GET /vetter-certifications/active?org_id={org_id}`.
+
+## Risks and Mitigations
+
+| Risk | Likelihood | Impact | Mitigation |
+|------|------------|--------|------------|
+| TN Allocation schema SAID change | Medium | High (breaks existing credentials) | Schema SAID changes only if `certification` edge is truly new. Existing credentials without the edge continue to produce INDETERMINATE (no regression). New credentials get the edge. |
+| `get_overall_status()` priority logic error | Low | High (WARNING masks INVALID) | Explicit unit tests covering INVALID + WARNING combination; INVALID must win. |
+| DossierBuilder fetches same VetterCert multiple times | Low | Low (performance) | Cache by SAID within a single dossier build. |
+| SIP verify location unknown | Low | Medium (delays implementation) | Confirm path at sprint start; `services/sip-verify/` is the expected location. |
+| UI vetter scope check adds latency to dossier wizard | Low | Low | Scope check is a lightweight attribute comparison; async non-blocking call. |
+
+## Exit Criteria
+
+- [ ] TN Allocation credentials issued by vetters with an active VetterCert contain a `certification` edge pointing to the VetterCert SAID
+- [ ] CESR dossiers built from such credentials include the VetterCert ACDC in the bundle
+- [ ] Verifier returns `vetter_constraints_valid=VALID` when VetterCert `ecc_targets` covers the TN's country code
+- [ ] Verifier returns `overall_status=WARNING` + `vetter_warning_reason` when VetterCert found but scope excludes the country code
+- [ ] Verifier returns `vetter_constraints_valid=INDETERMINATE` (unchanged) when no VetterCert found
+- [ ] SIP verification service returns `X-VVP-Status: WARNING` and `X-VVP-Warning-Reason` header for WARNING result
+- [ ] PBX dialplan forwards `X-VVP-Warning-Reason` to B-leg
+- [ ] Dossier wizard shows per-TN vetter constraint status (green/amber/red)
+- [ ] Identity management page shows witness publish status badge + Publish button
+- [ ] Dossier wizard shows verification preview on final step
+- [ ] All existing tests pass (no regressions)
+- [ ] New tests cover: certification edge injection, DossierBuilder VetterCert inclusion, WARNING status, witness status endpoint
+
+## Revision History
+
+| Round | Date | Changes |
+|-------|------|---------|
+| R1 | 2026-02-19 | Initial draft |
+| R2 | 2026-02-19 | Added UX bundling rationale to Problem Statement; refined Component 4c pseudo-code to separate scope-check result from claim state and warning reason; updated Open Question 1 with Sprint 72 evidence |
+

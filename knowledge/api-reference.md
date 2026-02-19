@@ -529,6 +529,7 @@ When found via OSP delegation, the response contains the **owner org's** data (o
 | `PUT` | `/admin/settings/vetter-enforcement` | Toggle vetter constraint enforcement (query: `enabled=true\|false`) |
 | `POST` | `/admin/cleanup/credentials` | Bulk delete credentials by org, schema, or date. Requires admin. Sends batch to KERI Agent (Sprint 73) |
 | `POST` | `/admin/cleanup/identities` | Bulk delete identities. Requires admin. Forwards to KERI Agent (Sprint 73) |
+| `GET` | `/admin/witness-status/{name}` | Proxy to KERI Agent `/identities/{name}/witness-status` (Sprint 75) |
 
 ### PBX Management (`/pbx`) — Sprint 71
 
@@ -676,12 +677,31 @@ Bulk delete identities matching filter criteria. Deletes from both KERI state (H
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `POST` | `/identity` | Create KERI identity (inception) |
-| `GET` | `/identity` | List identities |
-| `GET` | `/identity/{aid}` | Get identity details |
-| `GET` | `/identity/{aid}/oobi` | Get OOBI URL |
-| `POST` | `/identity/{aid}/rotate` | Rotate keys |
-| `DELETE` | `/identity/{aid}` | Delete identity (cascades to `keri_identity_seeds` + `keri_rotation_seeds`, Sprint 73) |
+| `POST` | `/identities` | Create KERI identity (inception) |
+| `GET` | `/identities` | List identities (optional `?aid=` filter) |
+| `GET` | `/identities/{name}` | Get identity details by name |
+| `GET` | `/identities/{name}/oobi` | Get OOBI URL |
+| `GET` | `/identities/{name}/kel` | Get KEL in CESR format |
+| `GET` | `/identities/{name}/witness-status` | Check witness receipt presence (Sprint 75) |
+| `POST` | `/identities/{name}/rotate` | Rotate keys |
+| `POST` | `/identities/{name}/publish` | Publish inception to witnesses |
+| `DELETE` | `/identities/{name}` | Delete identity (cascades to `keri_identity_seeds` + `keri_rotation_seeds`, Sprint 73) |
+
+#### GET /identities/{name}/witness-status (Sprint 75)
+
+Returns whether the identity's inception event has witness receipts in the LMDB `wigs` database.
+
+**Response:**
+```json
+{
+  "aid": "E...",
+  "name": "my-identity",
+  "witness_receipts_present": true,
+  "receipt_count": 3
+}
+```
+
+`witness_receipts_present=true` indicates the inception event was successfully acknowledged by at least one witness. Uses `hab.iserder.saidb` for inception digest lookup (resilient to LMDB sn=0 corruption).
 
 ### Registry
 
