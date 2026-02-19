@@ -52,7 +52,7 @@
         <!-- Route signing 302 through redirected context (not directly to Contact URI) -->
         <action application="set" data="sip_redirect_context=redirected"/>
         <!-- Route through signing service with org API key -->
-        <action application="export" data="nolocal:sip_h_X-VVP-API-Key=CWoTBn0qF14OLmL0fsWuE_J-leS6XBzJq_bCEJG4dK8"/>
+        <action application="export" data="nolocal:sip_h_X-VVP-API-Key=KyGs1suZJR0dQAL0kymkhSvSeJQo4Dh11eWE6YrQXTs"/>
         <action application="log" data="INFO [VVP] Routing to signing service: ${loopback_dest_tn}"/>
         <action application="bridge" data="sofia/external/${loopback_dest_tn}@127.0.0.1:5070"/>
       </condition>
