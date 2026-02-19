@@ -1101,6 +1101,8 @@ jobs:
           echo "failed=1" >> $GITHUB_OUTPUT
           echo "total=1" >> $GITHUB_OUTPUT
           echo "duration=0" >> $GITHUB_OUTPUT
+          echo "##[error]Smoke tests FAILED — see smoke_output.txt for details"
+          exit 1
         id: smoke_failure
 
       - name: Submit test results to admin endpoint

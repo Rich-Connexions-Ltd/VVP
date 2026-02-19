@@ -124,6 +124,13 @@ jobs:
             2>&1 | tee smoke_output.txt
           echo "exit_code=$?" >> $GITHUB_OUTPUT
 
+      - name: Fail if smoke tests failed
+        if: steps.smoke_tests.outputs.exit_code != '0'
+        run: |
+          echo "##[error]Smoke tests FAILED — see smoke_output.txt for details"
+          cat smoke_output.txt | tail -30 || true
+          exit 1
+
       - name: Full integration tests
         if: steps.smoke_tests.outputs.exit_code == '0'
         env:
