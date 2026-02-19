@@ -1200,12 +1200,51 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Package service
+      - name: Package service and common
         run: |
           VERSION="${{ github.sha }}"
           tar -czf "sip-redirect-${VERSION}.tar.gz" -C services/sip-redirect app/ pyproject.toml
           echo "Created package: sip-redirect-${VERSION}.tar.gz"
           ls -la "sip-redirect-${VERSION}.tar.gz"
+          # Also package common so PBX gets updated SIP models/builder (Sprint 75 fix)
+          tar -czf "common-${VERSION}.tar.gz" -C common common/ pyproject.toml
+          echo "Created common package: common-${VERSION}.tar.gz"
+
+      - name: Deploy common package to PBX
+        run: |
+          VERSION="${{ github.sha }}"
+          # Upload common package
+          az storage blob upload \
+            --account-name ${{ secrets.AZURE_STORAGE_ACCOUNT }} \
+            --container-name deployments \
+            --name "common/common-${VERSION}.tar.gz" \
+            --file "common-${VERSION}.tar.gz" \
+            --auth-mode login \
+            --overwrite
+          # Generate 5-min SAS URL
+          EXPIRY=$(date -u -d "+5 minutes" '+%Y-%m-%dT%H:%MZ')
+          SAS_URL=$(az storage blob generate-sas \
+            --account-name ${{ secrets.AZURE_STORAGE_ACCOUNT }} \
+            --container-name deployments \
+            --name "common/common-${VERSION}.tar.gz" \
+            --permissions r \
+            --expiry "$EXPIRY" \
+            --auth-mode login \
+            --as-user \
+            --full-uri \
+            --output tsv)
+          # Deploy to PBX: extract over existing common-pkg directory
+          az vm run-command invoke \
+            --resource-group VVP --name vvp-pbx \
+            --command-id RunShellScript \
+            --scripts "
+              set -e
+              curl -sSL -o /tmp/common-${VERSION}.tar.gz '${SAS_URL}'
+              tar -xzf /tmp/common-${VERSION}.tar.gz -C /opt/vvp/common-pkg
+              rm -rf /opt/vvp/common-pkg/common/common/vvp/sip/__pycache__
+              rm -f /tmp/common-${VERSION}.tar.gz
+              echo 'Common package updated: ${VERSION}'
+            "
 
       - name: Upload to Azure Blob
         run: |
