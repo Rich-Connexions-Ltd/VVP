@@ -750,14 +750,10 @@ jobs:
   # Build the custom witness image once, then deploy to all witnesses
   # Only runs when witness code changes
   build-witness-image:
-    needs: [changes, test-verifier, test-issuer]
-    # always() forces evaluation even when test jobs are skipped (witness-only change).
-    # We then explicitly guard against test failures.
-    if: >-
-      always() &&
-      needs.changes.outputs.witness == 'true' &&
-      needs.test-verifier.result != 'failure' &&
-      needs.test-issuer.result != 'failure'
+    needs: [changes]
+    # Witness builds are independent of verifier/issuer tests.
+    # Only gate on witness path changes being detected.
+    if: needs.changes.outputs.witness == 'true'
     runs-on: ubuntu-latest
     outputs:
       image: ${{ steps.build.outputs.image }}
