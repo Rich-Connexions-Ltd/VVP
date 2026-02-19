@@ -1162,18 +1162,11 @@ jobs:
           DELETED=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('deleted_count',0))" 2>/dev/null || echo "unknown")
           echo "Deleted $DELETED test identities"
 
-          # 2. Delete credentials issued under the test org during this run.
-          #    Integration tests issue credentials under the ACME Inc bootstrap org
-          #    (not under test-tagged identities), so they survive identity cleanup.
-          if [ -n "$VVP_TEST_ORG_ID" ]; then
-            echo "Cleaning up credentials for test org $VVP_TEST_ORG_ID..."
-            CRED_RESULT=$(curl -s -X POST "${VVP_ISSUER_URL}/admin/cleanup/credentials" \
-              -H "X-API-Key: ${VVP_TEST_ADMIN_KEY}" \
-              -H "Content-Type: application/json" \
-              -d "{\"organization_id\": \"${VVP_TEST_ORG_ID}\"}")
-            CRED_DELETED=$(echo "$CRED_RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('deleted_count',0))" 2>/dev/null || echo "unknown")
-            echo "Deleted $CRED_DELETED credentials for test org"
-          fi
+          # NOTE: We do NOT bulk-delete credentials for the test org here.
+          # Doing so destroys core dossier infrastructure (VetterCerts, TN Allocs,
+          # brand credentials) that the bootstrap created and that TN mappings
+          # reference. Integration tests should tag credentials as metadata_type=test
+          # so they are caught by step 1 above.
 
       - name: Upload test artifacts
         if: failure()
