@@ -17,7 +17,7 @@
 # Run:
 #   docker run -e WITNESS_NAME=wan -e HTTP_PORT=5642 -e TCP_PORT=5632 -p 5642:5642 vvp-witness
 #
-# Note: Built for linux/amd64 — required by Azure Container Apps
+# Note: Built for linux/amd64 — required by Azure Container Apps (amd64 pinned)
 
 FROM --platform=linux/amd64 gleif/keri:1.2.10
 

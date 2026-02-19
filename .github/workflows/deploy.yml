@@ -751,10 +751,13 @@ jobs:
   # Only runs when witness code changes
   build-witness-image:
     needs: [changes, test-verifier, test-issuer]
-    if: |
+    # always() forces evaluation even when test jobs are skipped (witness-only change).
+    # We then explicitly guard against test failures.
+    if: >-
+      always() &&
       needs.changes.outputs.witness == 'true' &&
-      (needs.test-verifier.result == 'success' || needs.test-verifier.result == 'skipped') &&
-      (needs.test-issuer.result == 'success' || needs.test-issuer.result == 'skipped')
+      needs.test-verifier.result != 'failure' &&
+      needs.test-issuer.result != 'failure'
     runs-on: ubuntu-latest
     outputs:
       image: ${{ steps.build.outputs.image }}
