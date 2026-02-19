@@ -776,7 +776,7 @@ jobs:
         run: |
           IMAGE="${{ secrets.ACR_LOGIN_SERVER }}/vvp-witness:${{ github.sha }}"
           echo "Building witness image: $IMAGE"
-          docker build -t "$IMAGE" -f services/witness/Dockerfile .
+          docker build --platform linux/amd64 -t "$IMAGE" -f services/witness/Dockerfile .
           docker push "$IMAGE"
           echo "image=$IMAGE" >> $GITHUB_OUTPUT
 
