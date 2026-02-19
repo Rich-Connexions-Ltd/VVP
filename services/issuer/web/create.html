@@ -181,8 +181,9 @@
               ? `<button onclick="rotateIdentity('${identity.aid}', '${identity.name}')" style="margin-top:0.5rem;margin-left:0.5rem;padding:0.25rem 0.5rem;font-size:0.85rem;background:#ffc107;color:#000;">Rotate Keys</button>`
               : `<button disabled style="margin-top:0.5rem;margin-left:0.5rem;padding:0.25rem 0.5rem;font-size:0.85rem;background:#ccc;color:#666;cursor:not-allowed;" title="Non-transferable identities cannot rotate keys">Rotate Keys</button>`;
 
+            const escapedName = encodeURIComponent(identity.name);
             html += `<div class="identity-item">
-              <h4>${identity.name} ${badge}</h4>
+              <h4>${identity.name} ${badge} <span id="witness-badge-${escapedName}" style="font-size:0.8rem;margin-left:0.4rem;color:#888;">checking witnesses...</span></h4>
               <div class="aid">${identity.aid}</div>
               <div class="identity-meta">
                 <span>Keys: ${identity.key_count}</span>
@@ -192,12 +193,18 @@
               <div>
                 <button onclick="showOobi('${identity.aid}')" style="margin-top:0.5rem;padding:0.25rem 0.5rem;font-size:0.85rem;background:#17a2b8;">View OOBI URLs</button>
                 ${rotateBtn}
+                <button id="publish-btn-${escapedName}" onclick="publishIdentity('${escapedName}')" style="margin-top:0.5rem;margin-left:0.5rem;padding:0.25rem 0.5rem;font-size:0.85rem;background:#28a745;">Publish to Witnesses</button>
                 <button onclick="deleteIdentity('${identity.aid}', '${identity.name}')" style="margin-top:0.5rem;margin-left:0.5rem;padding:0.25rem 0.5rem;font-size:0.85rem;background:#dc3545;">Delete</button>
               </div>
             </div>`;
           }
           html += '</div>';
           identityList.innerHTML = html;
+
+          // Asynchronously load witness status badges
+          for (const identity of data.identities) {
+            loadWitnessStatus(identity.name);
+          }
 
         } catch (err) {
           identityList.innerHTML = `<div class="error">Failed to load: ${err.message}</div>`;
@@ -375,6 +382,55 @@
             <div class="error">Network error: ${err.message}</div>
             <button onclick="this.closest('div').parentElement.remove()" style="margin-top:1rem;background:#6c757d;">Close</button>
           </div>`;
+        }
+      }
+
+      // Load witness status badge for a single identity
+      async function loadWitnessStatus(name) {
+        const encodedName = encodeURIComponent(name);
+        const badge = document.getElementById(`witness-badge-${encodedName}`);
+        if (!badge) return;
+        try {
+          const res = await authFetch(`/admin/witness-status/${encodedName}`);
+          if (!res.ok) {
+            badge.textContent = '⚠ status unavailable';
+            badge.style.color = '#888';
+            return;
+          }
+          const data = await res.json();
+          if (data.witness_receipts_present) {
+            badge.innerHTML = `<span style="color:#28a745;font-weight:bold;" title="${data.receipt_count} witness receipt(s)">✓ witnessed (${data.receipt_count})</span>`;
+          } else {
+            badge.innerHTML = `<span style="color:#dc3545;font-weight:bold;" title="Inception event has no witness receipts — publish to witnesses">⚠ not witnessed</span>`;
+          }
+        } catch (err) {
+          badge.textContent = '? (check failed)';
+          badge.style.color = '#888';
+        }
+      }
+
+      // Publish identity to witnesses
+      async function publishIdentity(encodedName) {
+        const btn = document.getElementById(`publish-btn-${encodedName}`);
+        const name = decodeURIComponent(encodedName);
+        if (btn) { btn.textContent = 'Publishing...'; btn.disabled = true; }
+        try {
+          const res = await authFetch(`/admin/publish-identity/${encodedName}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+          });
+          const data = await res.json();
+          if (res.ok) {
+            if (btn) { btn.textContent = 'Publish to Witnesses'; btn.disabled = false; }
+            // Refresh the witness status badge
+            loadWitnessStatus(name);
+          } else {
+            if (btn) { btn.textContent = 'Publish Failed'; btn.disabled = false; btn.style.background = '#dc3545'; }
+            alert(`Publish failed: ${data.detail || res.statusText}`);
+          }
+        } catch (err) {
+          if (btn) { btn.textContent = 'Publish to Witnesses'; btn.disabled = false; }
+          alert(`Publish error: ${err.message}`);
         }
       }
 

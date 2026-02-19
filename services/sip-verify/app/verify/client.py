@@ -42,6 +42,7 @@ class VerifyResult:
     error_message: Optional[str] = None
     request_id: Optional[str] = None
     vetter_status: Optional[str] = None  # Sprint 62: PASS/FAIL-ECC/FAIL-JURISDICTION/...
+    warning_reason: Optional[str] = None  # Sprint 75: vetter_not_authorised_for_jurisdiction when status=WARNING
 
 
 @dataclass
@@ -228,8 +229,9 @@ class VerifierClient:
                                 c = child.get("node", {})
                                 log.info(f"    child: {c.get('name')}={c.get('status')}, reasons={c.get('reasons', [])}")
                     result = self._parse_response(data)
-                    # Cache brand info from successful verifications
-                    if result.status == "VALID" and evd:
+                    # Cache brand info from VALID and WARNING verifications
+                    # WARNING = valid but vetter not authorised for jurisdiction — brand still deliverable
+                    if result.status in ("VALID", "WARNING") and evd:
                         self._cache_brand(evd, result.brand_name, result.brand_logo_url)
                     return result
                 else:
@@ -372,6 +374,9 @@ class VerifierClient:
         # Sprint 62: Map vetter_constraints dict → single status string
         vetter_status = self._derive_vetter_status(data.get("vetter_constraints"))
 
+        # Sprint 75: Extract warning reason for WARNING status
+        warning_reason = data.get("vetter_warning_reason") if status == "WARNING" else None
+
         return VerifyResult(
             status=status,
             brand_name=brand_name,
@@ -381,6 +386,7 @@ class VerifierClient:
             error_message=error_message,
             request_id=request_id,
             vetter_status=vetter_status,
+            warning_reason=warning_reason,
         )
 
 

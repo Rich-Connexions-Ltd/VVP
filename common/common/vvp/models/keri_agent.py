@@ -39,6 +39,7 @@ class IdentityResponse(BaseModel):
     key_count: int = Field(..., description="Number of signing keys")
     sequence_number: int = Field(..., description="Current key event sequence number")
     transferable: bool = Field(..., description="Whether keys can be rotated")
+    witness_receipts_present: bool = Field(False, description="True if inception event has witness receipts in LMDB")
 
 
 class RotateKeysRequest(BaseModel):

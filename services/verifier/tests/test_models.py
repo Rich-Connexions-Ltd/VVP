@@ -42,8 +42,8 @@ class TestClaimStatus:
         assert ClaimStatus.INDETERMINATE.value == "INDETERMINATE"
 
     def test_claim_status_count(self):
-        """Exactly 3 status values per §3.2"""
-        assert len(ClaimStatus) == 3
+        """4 status values: VALID, INVALID, INDETERMINATE, WARNING (Sprint 75 §8.4)"""
+        assert len(ClaimStatus) == 4
 
     def test_claim_status_json_serialization(self):
         """Enum serializes to string value"""
@@ -252,6 +252,51 @@ class TestDeriveOverallStatus:
             ClaimNode(name="c", status=ClaimStatus.VALID)
         ]
         assert derive_overall_status(claims, None) == ClaimStatus.INVALID
+
+
+# =============================================================================
+# WARNING Status Tests (Sprint 75)
+# =============================================================================
+
+class TestWARNINGStatus:
+    """Tests for WARNING status per spec §8.4 — vetter scope mismatch (non-blocking)."""
+
+    def test_warning_status_in_claim_status_enum(self):
+        """WARNING is a valid ClaimStatus value."""
+        assert ClaimStatus.WARNING == "WARNING"
+        assert ClaimStatus("WARNING") == ClaimStatus.WARNING
+
+    def test_warning_status_priority_over_valid(self):
+        """WARNING priority: INVALID > WARNING > INDETERMINATE > VALID.
+        derive_overall_status does not itself produce WARNING (it's applied post-derivation
+        in verify.py), so we test that WARNING is a valid VerifyResponse overall_status.
+        """
+        response = VerifyResponse(
+            request_id="test-id",
+            overall_status=ClaimStatus.WARNING,
+            vetter_warning_reason="vetter_not_authorised_for_jurisdiction",
+        )
+        assert response.overall_status == ClaimStatus.WARNING
+        assert response.vetter_warning_reason == "vetter_not_authorised_for_jurisdiction"
+
+    def test_verify_response_warning_reason_optional(self):
+        """vetter_warning_reason is optional and defaults to None."""
+        response = VerifyResponse(
+            request_id="test-id",
+            overall_status=ClaimStatus.VALID,
+        )
+        assert response.vetter_warning_reason is None
+
+    def test_verify_response_serialisation(self):
+        """VerifyResponse with WARNING status serialises correctly."""
+        response = VerifyResponse(
+            request_id="test-id",
+            overall_status=ClaimStatus.WARNING,
+            vetter_warning_reason="vetter_not_authorised_for_jurisdiction",
+        )
+        data = response.model_dump()
+        assert data["overall_status"] == "WARNING"
+        assert data["vetter_warning_reason"] == "vetter_not_authorised_for_jurisdiction"
 
 
 # =============================================================================

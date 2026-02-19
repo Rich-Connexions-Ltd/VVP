@@ -122,6 +122,9 @@ class SIPResponse:
     # Sprint 62: Vetter constraint status
     vetter_status: Optional[str] = None  # PASS | FAIL-ECC | FAIL-JURISDICTION | FAIL-ECC-JURISDICTION | INDETERMINATE
 
+    # Sprint 75: Vetter scope warning reason (when overall_status=WARNING)
+    warning_reason: Optional[str] = None  # e.g. "vetter_not_authorised_for_jurisdiction"
+
     # Error info (for non-2xx responses)
     error_reason: Optional[str] = None
     error_code: Optional[str] = None  # Sprint 44: X-VVP-Error code
@@ -167,6 +170,10 @@ class SIPResponse:
         # Sprint 62: Vetter constraint status
         if self.vetter_status:
             lines.append(f"X-VVP-Vetter-Status: {self.vetter_status}")
+
+        # Sprint 75: Vetter scope warning reason
+        if self.warning_reason:
+            lines.append(f"X-VVP-Warning-Reason: {self.warning_reason}")
 
         # Error code for INVALID status (Sprint 44)
         if self.error_code:

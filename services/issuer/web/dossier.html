@@ -547,7 +547,7 @@
           loadOspOrganizations();
         }
         if (step === 4) {
-          renderReviewPanel();
+          renderReviewPanel();  // async — panel renders progressively
         }
 
         currentStep = step;
@@ -880,7 +880,7 @@
       // Step 4: Review & Create
       // =================================================================
 
-      function renderReviewPanel() {
+      async function renderReviewPanel() {
         const panel = document.getElementById('reviewPanel');
         const dossierName = document.getElementById('dossierName').value.trim();
         const ospSelect = document.getElementById('ospOrgSelect');
@@ -918,6 +918,51 @@
           </div>`;
         }
         html += '</div>';
+
+        // Vetter scope tile: show active VetterCert scope for the AP org (Sprint 75)
+        if (selectedApOrgId) {
+          html += '<div class="review-section"><h4>Vetter Jurisdiction Scope</h4>';
+          try {
+            const certRes = await authFetch(`/vetter-certifications?organization_id=${selectedApOrgId}`);
+            if (certRes.ok) {
+              const certData = await certRes.json();
+              const activeCerts = (certData.certifications || []).filter(c => !c.status || c.status === 'issued');
+              if (activeCerts.length > 0) {
+                const cert = activeCerts[0];
+                const eccList = (cert.ecc_targets || []).join(', ') || '(none)';
+                const jurList = (cert.jurisdiction_targets || []).join(', ') || '(none)';
+                html += `<div class="review-row">
+                  <span class="review-label" style="color:#28a745;">✓ VetterCert</span>
+                  <span class="review-value">${esc(cert.name || cert.said.substring(0, 24) + '...')}</span>
+                </div>
+                <div class="review-row">
+                  <span class="review-label">ECC Targets</span>
+                  <span class="review-value" style="font-family:monospace;">${esc(eccList)}</span>
+                </div>
+                <div class="review-row">
+                  <span class="review-label">Jurisdiction Targets</span>
+                  <span class="review-value" style="font-family:monospace;">${esc(jurList)}</span>
+                </div>`;
+                if (cert.certification_expiry) {
+                  html += `<div class="review-row">
+                    <span class="review-label">Expires</span>
+                    <span class="review-value">${esc(cert.certification_expiry)}</span>
+                  </div>`;
+                }
+              } else {
+                html += `<div class="review-row">
+                  <span class="review-label" style="color:#dc3545;">⚠ No VetterCert</span>
+                  <span class="review-value" style="color:#dc3545;">No active VetterCertification for this org. Calls will receive WARNING status if vetter scope cannot be verified.</span>
+                </div>`;
+              }
+            } else {
+              html += `<div class="review-row"><span style="color:#888;">Vetter scope check unavailable</span></div>`;
+            }
+          } catch (e) {
+            html += `<div class="review-row"><span style="color:#888;">Vetter scope check failed</span></div>`;
+          }
+          html += '</div>';
+        }
 
         panel.innerHTML = html;
 

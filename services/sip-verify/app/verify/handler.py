@@ -118,6 +118,8 @@ async def _capture_event(
             response_vvp_headers["X-VVP-Error"] = response.error_code
         if response.vetter_status:
             response_vvp_headers["X-VVP-Vetter-Status"] = response.vetter_status
+        if response.warning_reason:
+            response_vvp_headers["X-VVP-Warning-Reason"] = response.warning_reason
 
     event_data = {
         "service": "VERIFICATION",
@@ -330,13 +332,15 @@ async def handle_verify_invite(request: SIPRequest) -> Optional[SIPResponse]:
         caller_id=result.caller_id,
         error_code=result.error_code if result.status == "INVALID" else None,
         vetter_status=result.vetter_status,  # Sprint 62
+        warning_reason=result.warning_reason,  # Sprint 75: vetter scope mismatch
     )
 
+    warning_suffix = f", warning={result.warning_reason}" if result.warning_reason else ""
     log.info(
         f"Verification complete: call_id={request.call_id}, "
         f"status={result.status}, "
         f"brand={result.brand_name or 'none'}, "
-        f"time_ms={processing_time_ms:.1f}"
+        f"time_ms={processing_time_ms:.1f}{warning_suffix}"
     )
 
     await _capture_event(request, response, 302, result.status)

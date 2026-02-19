@@ -200,6 +200,39 @@ async def publish_identity(name: str):
     }
 
 
+@router.get("/{name}/witness-status")
+async def get_witness_status(name: str):
+    """Check whether the identity's inception event has witness receipts.
+
+    Returns witness_receipts_present=True when the LMDB wigs database has
+    at least one witness indexed signature for the inception event (sn=0).
+    This indicates the identity has been successfully published to and receipted
+    by at least one witness.
+    """
+    from keri.db.dbing import dgKey
+    mgr = await get_identity_manager()
+    info = await mgr.get_identity_by_name(name)
+    if info is None:
+        raise HTTPException(status_code=404, detail=f"Identity not found: {name}")
+
+    hab = mgr.hby.habByPre(info.aid)
+    if hab is None:
+        raise HTTPException(status_code=404, detail=f"HAB not found for: {name}")
+
+    # Use hab.iserder.saidb for inception digest (resilient to LMDB sn=0 corruption)
+    icp_digest = hab.iserder.saidb
+    dgkey = dgKey(hab.pre.encode("utf-8"), icp_digest)
+    wigs = list(hab.db.getWigs(dgkey))
+    receipt_count = len(wigs)
+
+    return {
+        "aid": info.aid,
+        "name": name,
+        "witness_receipts_present": receipt_count > 0,
+        "receipt_count": receipt_count,
+    }
+
+
 @router.delete("/{name}", status_code=204)
 async def delete_identity(name: str):
     """Delete an identity by name."""

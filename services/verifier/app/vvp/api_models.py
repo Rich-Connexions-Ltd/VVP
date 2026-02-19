@@ -14,10 +14,11 @@ from pydantic import BaseModel, Field
 # =============================================================================
 
 class ClaimStatus(str, Enum):
-    """Three-valued claim status per spec §3.2"""
+    """Claim status per spec §3.2 with WARNING extension for vetter scope (§8.4)"""
     VALID = "VALID"              # Proven by evidence
     INVALID = "INVALID"          # Contradicted by evidence
     INDETERMINATE = "INDETERMINATE"  # Insufficient or unverifiable evidence
+    WARNING = "WARNING"          # Valid but vetter not authorised for TN jurisdiction (non-blocking)
 
 
 # =============================================================================
@@ -367,6 +368,7 @@ class VerifyResponse(BaseModel):
     brand_logo_url: Optional[str] = None
     revocation_pending: bool = False
     cache_hit: bool = False
+    vetter_warning_reason: Optional[str] = None
 
 
 # =============================================================================
@@ -379,9 +381,10 @@ def derive_overall_status(
 ) -> ClaimStatus:
     """
     Derive overall_status per §4.3A precedence rules:
-    - INVALID > INDETERMINATE > VALID
+    - INVALID > WARNING > INDETERMINATE > VALID
     - Non-recoverable errors force INVALID
     - Recoverable errors alone yield INDETERMINATE
+    - WARNING is applied post-derivation by verify.py for vetter scope mismatches (§8.4)
     """
     worst = ClaimStatus.VALID
 

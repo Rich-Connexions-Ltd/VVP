@@ -61,6 +61,7 @@ def build_302_redirect(
     caller_id: Optional[str] = None,
     error_code: Optional[str] = None,
     vetter_status: Optional[str] = None,
+    warning_reason: Optional[str] = None,
 ) -> SIPResponse:
     """Build 302 Moved Temporarily response with VVP headers.
 
@@ -90,6 +91,7 @@ def build_302_redirect(
         caller_id: Caller's phone number
         error_code: Error code if INVALID
         vetter_status: Vetter constraint status (Sprint 62)
+        warning_reason: Machine-readable warning reason when status=WARNING (Sprint 75)
 
     Returns:
         SIPResponse ready to send
@@ -107,6 +109,7 @@ def build_302_redirect(
         caller_id=caller_id,
         error_code=error_code,
         vetter_status=vetter_status,
+        warning_reason=warning_reason,
     )
     _copy_transaction_headers(request, response)
     return response

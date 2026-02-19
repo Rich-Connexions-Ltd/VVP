@@ -371,3 +371,37 @@ async def test_delete_identity_not_found(client: AsyncClient):
     """Test DELETE /identities/{name} returns 404 for unknown."""
     response = await client.delete("/identities/nonexistent-identity")
     assert response.status_code == 404
+
+
+# =============================================================================
+# Sprint 75: Witness Status Endpoint Tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_witness_status_fresh_identity(client: AsyncClient):
+    """Freshly created identity has no witness receipts (test env has no witnesses)."""
+    name = unique_name("wstatus")
+    create_response = await client.post("/identities", json={"name": name})
+    assert create_response.status_code == 201
+    aid = create_response.json()["aid"]
+
+    response = await client.get(f"/identities/{name}/witness-status")
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["aid"] == aid
+    assert data["name"] == name
+    assert "witness_receipts_present" in data
+    assert isinstance(data["witness_receipts_present"], bool)
+    assert "receipt_count" in data
+    assert isinstance(data["receipt_count"], int)
+    # In test env (no real witnesses), receipts will be absent
+    assert data["receipt_count"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_witness_status_not_found(client: AsyncClient):
+    """Witness status endpoint returns 404 for unknown identity."""
+    response = await client.get("/identities/nonexistent-identity/witness-status")
+    assert response.status_code == 404

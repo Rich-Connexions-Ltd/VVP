@@ -407,6 +407,11 @@ class KeriAgentClient:
         """Publish identity to witnesses."""
         await self._post(f"/identities/{name}/publish")
 
+    async def get_witness_status(self, name: str) -> dict:
+        """Check if identity inception event has witness receipts."""
+        resp = await self._get(f"/identities/{name}/witness-status")
+        return resp.json()
+
     async def get_identity_by_aid(self, aid: str) -> IdentityResponse | None:
         """Look up identity by AID. Returns None if not found."""
         resp = await self._get("/identities", params={"aid": aid})

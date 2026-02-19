@@ -314,3 +314,39 @@ class TestSIPResponseSerialization:
         identity_pos = text.index("Identity:")
         pvvp_pos = text.index("P-VVP-Identity:")
         assert identity_pos < pvvp_pos
+
+    def test_302_with_warning_reason(self, sample_request):
+        """Sprint 75: Build 302 redirect with WARNING status and warning_reason."""
+        response = build_302_redirect(
+            sample_request,
+            contact_uri="sip:dest@pbx.example.com",
+            vvp_status="WARNING",
+            warning_reason="vetter_not_authorised_for_jurisdiction",
+        )
+
+        assert response.vvp_status == "WARNING"
+        assert response.warning_reason == "vetter_not_authorised_for_jurisdiction"
+
+    def test_302_warning_reason_in_bytes(self, sample_request):
+        """Sprint 75: X-VVP-Warning-Reason header appears in serialised response."""
+        response = build_302_redirect(
+            sample_request,
+            contact_uri="sip:dest@pbx.example.com",
+            vvp_status="WARNING",
+            warning_reason="vetter_not_authorised_for_jurisdiction",
+        )
+
+        text = response.to_bytes().decode("utf-8")
+        assert "X-VVP-Warning-Reason: vetter_not_authorised_for_jurisdiction" in text
+        assert "X-VVP-Status: WARNING" in text
+
+    def test_302_no_warning_reason_when_none(self, sample_request):
+        """Sprint 75: X-VVP-Warning-Reason header is absent when warning_reason is None."""
+        response = build_302_redirect(
+            sample_request,
+            contact_uri="sip:dest@pbx.example.com",
+            vvp_status="VALID",
+        )
+
+        text = response.to_bytes().decode("utf-8")
+        assert "X-VVP-Warning-Reason" not in text

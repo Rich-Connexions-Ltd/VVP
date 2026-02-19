@@ -1410,6 +1410,27 @@ class MockVLEIReinitializeResponse(BaseModel):
     message: str
 
 
+@router.get("/witness-status/{name}")
+async def get_witness_status(
+    name: str,
+    request: Request,
+    principal: Principal = require_admin,
+):
+    """Check whether an identity's inception event has witness receipts.
+
+    Returns witness_receipts_present=True if the identity has been published
+    to and receipted by at least one witness.
+    Requires: issuer:admin role.
+    """
+    from app.keri_client import get_keri_client
+
+    client = get_keri_client()
+    try:
+        return await client.get_witness_status(name)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Witness status check failed: {e}")
+
+
 @router.post("/publish-identity/{name}")
 async def publish_identity(
     name: str,

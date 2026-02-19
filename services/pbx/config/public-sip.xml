@@ -67,18 +67,21 @@
         <action application="set" data="vvp_brand_name=${sip_rh_X-VVP-Brand-Name}"/>
         <action application="set" data="vvp_brand_logo=${sip_rh_X-VVP-Brand-Logo}"/>
         <action application="set" data="vvp_status=${sip_rh_X-VVP-Status}"/>
+        <action application="set" data="vvp_warning_reason=${sip_rh_X-VVP-Warning-Reason}"/>
         <!-- Fallback to request headers if response headers not available -->
         <action application="set" data="vvp_brand_name=${vvp_brand_name:${sip_h_X-VVP-Brand-Name}}"/>
         <action application="set" data="vvp_brand_logo=${vvp_brand_logo:${sip_h_X-VVP-Brand-Logo}}"/>
         <action application="set" data="vvp_status=${vvp_status:${sip_h_X-VVP-Status}}"/>
+        <action application="set" data="vvp_warning_reason=${vvp_warning_reason:${sip_h_X-VVP-Warning-Reason}}"/>
         <!-- URL decode -->
         <action application="set" data="vvp_brand_name=${url_decode(${vvp_brand_name})}"/>
         <action application="set" data="vvp_brand_logo=${url_decode(${vvp_brand_logo})}"/>
-        <action application="log" data="INFO [VVP] Loopback: brand=${vvp_brand_name}, status=${vvp_status}"/>
+        <action application="log" data="INFO [VVP] Loopback: brand=${vvp_brand_name}, status=${vvp_status}, warning=${vvp_warning_reason}"/>
         <!-- Export to B-leg for WebRTC client -->
         <action application="export" data="nolocal:sip_h_X-VVP-Brand-Name=${vvp_brand_name}"/>
         <action application="export" data="nolocal:sip_h_X-VVP-Brand-Logo=${vvp_brand_logo}"/>
         <action application="export" data="nolocal:sip_h_X-VVP-Status=${vvp_status}"/>
+        <action application="export" data="nolocal:sip_h_X-VVP-Warning-Reason=${vvp_warning_reason}"/>
         <action application="ring_ready"/>
         <action application="set" data="hangup_after_bridge=true"/>
         <!-- Bridge to destination extension -->
@@ -230,18 +233,21 @@
         <action application="set" data="vvp_brand_name=${sip_rh_X-VVP-Brand-Name}"/>
         <action application="set" data="vvp_brand_logo=${sip_rh_X-VVP-Brand-Logo}"/>
         <action application="set" data="vvp_status=${sip_rh_X-VVP-Status}"/>
+        <action application="set" data="vvp_warning_reason=${sip_rh_X-VVP-Warning-Reason}"/>
         <!-- Fallback to request headers -->
         <action application="set" data="vvp_brand_name=${vvp_brand_name:${sip_h_X-VVP-Brand-Name}}"/>
         <action application="set" data="vvp_brand_logo=${vvp_brand_logo:${sip_h_X-VVP-Brand-Logo}}"/>
         <action application="set" data="vvp_status=${vvp_status:${sip_h_X-VVP-Status}}"/>
+        <action application="set" data="vvp_warning_reason=${vvp_warning_reason:${sip_h_X-VVP-Warning-Reason}}"/>
         <!-- URL decode -->
         <action application="set" data="vvp_brand_name=${url_decode(${vvp_brand_name})}"/>
         <action application="set" data="vvp_brand_logo=${url_decode(${vvp_brand_logo})}"/>
-        <action application="log" data="INFO [VVP] Delivering: brand=${vvp_brand_name}, status=${vvp_status}"/>
+        <action application="log" data="INFO [VVP] Delivering: brand=${vvp_brand_name}, status=${vvp_status}, warning=${vvp_warning_reason}"/>
         <!-- Export VVP headers to B-leg for WebRTC client -->
         <action application="export" data="nolocal:sip_h_X-VVP-Brand-Name=${vvp_brand_name}"/>
         <action application="export" data="nolocal:sip_h_X-VVP-Brand-Logo=${vvp_brand_logo}"/>
         <action application="export" data="nolocal:sip_h_X-VVP-Status=${vvp_status}"/>
+        <action application="export" data="nolocal:sip_h_X-VVP-Warning-Reason=${vvp_warning_reason}"/>
         <action application="ring_ready"/>
         <action application="set" data="hangup_after_bridge=true"/>
         <action application="set" data="target_ext=10$1"/>

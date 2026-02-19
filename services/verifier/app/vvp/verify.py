@@ -1563,6 +1563,8 @@ async def verify_vvp(
 
     vetter_constraints_claim = ClaimBuilder("vetter_constraints_valid")
     vetter_constraint_results: Dict[str, VetterConstraintInfo] = {}
+    _vetter_scope_mismatch = False  # True when cert found but not authorised for TN jurisdiction
+    _vetter_warning_reason: Optional[str] = None
 
     if dag is not None and passport is not None and not passport_fatal:
         # Extract orig.tn and dest.tn from passport for constraint validation
@@ -1660,6 +1662,10 @@ async def verify_vvp(
             # Determine vetter constraint claim status
             vetter_status = get_overall_constraint_status(constraint_results)
             if vetter_status == ClaimStatus.INVALID:
+                # Cert was found but vetter is not authorised for the TN's jurisdiction.
+                # Flag for WARNING upgrade post-derivation (spec §8.4).
+                _vetter_scope_mismatch = True
+                _vetter_warning_reason = "vetter_not_authorised_for_jurisdiction"
                 vetter_constraints_claim.fail(
                     ClaimStatus.INVALID,
                     "Vetter constraint violation: credential issuer not authorized for region"
@@ -1825,6 +1831,11 @@ async def verify_vvp(
     claims = [root_claim]
     overall_status = derive_overall_status(claims, errors if errors else None)
 
+    # Apply WARNING upgrade for vetter scope mismatch (spec §8.4).
+    # INVALID from other checks takes precedence over WARNING.
+    if _vetter_scope_mismatch and overall_status != ClaimStatus.INVALID:
+        overall_status = ClaimStatus.WARNING
+
     # Convert ToIP warnings from dag to API response format
     toip_warnings = None
     if dag and dag.warnings:
@@ -1908,4 +1919,5 @@ async def verify_vvp(
         brand_logo_url=response_brand_logo_url,
         revocation_pending=_revocation_pending,
         cache_hit=_verification_cache_hit,
+        vetter_warning_reason=_vetter_warning_reason if overall_status == ClaimStatus.WARNING else None,
     )
