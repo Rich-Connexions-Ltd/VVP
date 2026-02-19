@@ -1460,6 +1460,7 @@ async def reinitialize_mock_vlei(
         User,
         UserOrgRole,
         DossierOspAssociation,
+        OrgType,
     )
     import app.org.mock_vlei as mock_vlei_module
     from app.org.mock_vlei import get_mock_vlei_manager
@@ -1467,33 +1468,104 @@ async def reinitialize_mock_vlei(
     audit = get_audit_logger()
     tables_cleared = []
 
-    # 1. Clear Postgres tables in dependency order (children before parents)
+    # System org types that belong to the mock vLEI hierarchy (always recreated)
+    SYSTEM_ORG_TYPES = {
+        OrgType.ROOT_AUTHORITY.value,
+        OrgType.QVI.value,
+        OrgType.VETTER_AUTHORITY.value,
+    }
+
+    # 1. Clear only system-level mock vLEI data — preserve regular orgs and their data
     try:
         with get_db_session() as db:
-            count = db.query(DossierOspAssociation).delete()
-            tables_cleared.append(f"dossier_osp_associations ({count})")
+            # Collect IDs of system orgs (root_authority, qvi, vetter_authority)
+            system_org_ids = [
+                row.id
+                for row in db.query(Organization.id).filter(
+                    Organization.org_type.in_(SYSTEM_ORG_TYPES)
+                )
+            ]
 
-            count = db.query(TNMapping).delete()
-            tables_cleared.append(f"tn_mappings ({count})")
+            if system_org_ids:
+                # Delete dossier-osp associations for system orgs' credentials
+                system_cred_ids = [
+                    row.id
+                    for row in db.query(ManagedCredential.id).filter(
+                        ManagedCredential.org_id.in_(system_org_ids)
+                    )
+                ]
+                if system_cred_ids:
+                    count = (
+                        db.query(DossierOspAssociation)
+                        .filter(DossierOspAssociation.credential_id.in_(system_cred_ids))
+                        .delete(synchronize_session=False)
+                    )
+                    tables_cleared.append(f"dossier_osp_associations (system, {count})")
 
-            count = db.query(ManagedCredential).delete()
-            tables_cleared.append(f"managed_credentials ({count})")
+                # Delete TN mappings for system orgs
+                count = (
+                    db.query(TNMapping)
+                    .filter(TNMapping.org_id.in_(system_org_ids))
+                    .delete(synchronize_session=False)
+                )
+                tables_cleared.append(f"tn_mappings (system, {count})")
 
-            count = db.query(OrgAPIKeyRole).delete()
-            tables_cleared.append(f"org_api_key_roles ({count})")
+                # Delete credentials for system orgs
+                count = (
+                    db.query(ManagedCredential)
+                    .filter(ManagedCredential.org_id.in_(system_org_ids))
+                    .delete(synchronize_session=False)
+                )
+                tables_cleared.append(f"managed_credentials (system, {count})")
 
-            count = db.query(OrgAPIKey).delete()
-            tables_cleared.append(f"org_api_keys ({count})")
+                # Delete API key roles for system orgs
+                system_key_ids = [
+                    row.id
+                    for row in db.query(OrgAPIKey.id).filter(
+                        OrgAPIKey.org_id.in_(system_org_ids)
+                    )
+                ]
+                if system_key_ids:
+                    count = (
+                        db.query(OrgAPIKeyRole)
+                        .filter(OrgAPIKeyRole.api_key_id.in_(system_key_ids))
+                        .delete(synchronize_session=False)
+                    )
+                    tables_cleared.append(f"org_api_key_roles (system, {count})")
 
-            count = db.query(UserOrgRole).delete()
-            tables_cleared.append(f"user_org_roles ({count})")
+                # Delete API keys for system orgs
+                count = (
+                    db.query(OrgAPIKey)
+                    .filter(OrgAPIKey.org_id.in_(system_org_ids))
+                    .delete(synchronize_session=False)
+                )
+                tables_cleared.append(f"org_api_keys (system, {count})")
 
-            count = db.query(User).delete()
-            tables_cleared.append(f"users ({count})")
+                # Delete user-org roles for system orgs
+                count = (
+                    db.query(UserOrgRole)
+                    .filter(UserOrgRole.org_id.in_(system_org_ids))
+                    .delete(synchronize_session=False)
+                )
+                tables_cleared.append(f"user_org_roles (system, {count})")
 
-            count = db.query(Organization).delete()
-            tables_cleared.append(f"organizations ({count})")
+                # Delete users whose primary org is a system org
+                count = (
+                    db.query(User)
+                    .filter(User.organization_id.in_(system_org_ids))
+                    .delete(synchronize_session=False)
+                )
+                tables_cleared.append(f"users (system, {count})")
 
+                # Delete system orgs themselves
+                count = (
+                    db.query(Organization)
+                    .filter(Organization.id.in_(system_org_ids))
+                    .delete(synchronize_session=False)
+                )
+                tables_cleared.append(f"organizations (system, {count})")
+
+            # Always clear mock vLEI state (will be rebuilt by initialize())
             count = db.query(MockVLEIStateModel).delete()
             tables_cleared.append(f"mock_vlei_state ({count})")
 
