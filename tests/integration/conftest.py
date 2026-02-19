@@ -204,12 +204,16 @@ async def dossier_server(
 # Test Identity and Registry Fixtures
 # =============================================================================
 
-@pytest_asyncio.fixture(loop_scope="session")
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def test_identity(
     admin_issuer_client: IssuerClient,
     environment_config: EnvironmentConfig,
 ) -> AsyncGenerator[dict, None]:
     """Create a dedicated test identity for credential issuance.
+
+    Session-scoped: shared across all tests in the session to avoid
+    hammering the KERI Agent with repeated identity creations (which causes
+    ReadTimeout under load after ~20 creations at 30s timeout).
 
     Always creates a fresh identity with a 'test-' prefix name so it can
     be identified and cleaned up. Uses admin_issuer_client for the

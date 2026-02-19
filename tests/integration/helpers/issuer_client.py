@@ -35,7 +35,7 @@ class IssuerClient:
         return httpx.AsyncClient(
             base_url=self.base_url,
             headers={"X-API-Key": self.api_key},
-            timeout=30.0,
+            timeout=120.0,  # KERI Agent operations can be slow under load
         )
 
     async def close(self) -> None:
