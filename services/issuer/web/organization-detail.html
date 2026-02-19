@@ -130,6 +130,44 @@
     .modal-result { margin-top: 0.75rem; font-size: 0.85rem; }
     .modal-result.success { color: #059669; }
     .modal-result.error { color: #dc2626; }
+    .section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+    .section-header h3 { margin: 0; font-size: 1rem; }
+    .api-key-raw {
+      background: #f0fdf4;
+      border: 1px solid #86efac;
+      border-radius: 6px;
+      padding: 0.75rem;
+      margin-top: 0.75rem;
+      font-family: monospace;
+      font-size: 0.8rem;
+      word-break: break-all;
+    }
+    .api-key-raw .label { font-weight: 600; color: #059669; display: block; margin-bottom: 0.25rem; }
+    .revoke-btn {
+      padding: 0.2rem 0.5rem;
+      font-size: 0.75rem;
+      background: #fee2e2;
+      color: #dc2626;
+      border: 1px solid #fca5a5;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .revoke-btn:hover { background: #fca5a5; }
+    .revoked-badge {
+      display: inline-block;
+      padding: 0.1rem 0.4rem;
+      font-size: 0.7rem;
+      background: #fee2e2;
+      color: #dc2626;
+      border-radius: 3px;
+    }
+    .role-checkbox-group { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 0.25rem; }
+    .role-checkbox-group label { display: flex; align-items: center; gap: 0.35rem; font-weight: normal; font-size: 0.875rem; cursor: pointer; }
   </style>
 </head>
 <body>
@@ -156,6 +194,7 @@
   <script>
     const params = new URLSearchParams(window.location.search);
     const orgId = params.get('id');
+    let currentSession = null;
 
     async function init() {
       const session = await checkAuthStatus();
@@ -163,6 +202,7 @@
         window.location.href = '/login?redirect=' + encodeURIComponent(window.location.href);
         return;
       }
+      currentSession = session;
       if (!orgId) {
         document.getElementById('org-detail').innerHTML = '<div class="empty-state">No organization ID specified.</div>';
         return;
@@ -226,12 +266,18 @@
         </div>
 
         <div class="tab-bar">
-          <button class="tab-btn active" onclick="switchTab('users')">Users</button>
+          <button class="tab-btn active" onclick="switchTab('api-keys')">API Keys</button>
           <button class="tab-btn" onclick="switchTab('credentials')">Credentials</button>
+          <button class="tab-btn" onclick="switchTab('users')">Users</button>
           ${orgType === 'vetter_authority' ? '<button class="tab-btn" onclick="switchTab(\'vetter\')">Vetter Certs</button>' : ''}
         </div>
 
-        <div id="tab-users" class="tab-panel active">
+        <div id="tab-api-keys" class="tab-panel active">
+          <div class="section-panel" id="api-keys-panel">
+            <div class="empty-state">Loading API keys...</div>
+          </div>
+        </div>
+        <div id="tab-users" class="tab-panel">
           <div class="section-panel" id="users-panel">
             <div class="empty-state">Loading users...</div>
           </div>
@@ -251,6 +297,7 @@
       `;
 
       // Load tab data
+      loadApiKeys();
       loadUsers();
       loadCredentials();
       if (orgType === 'vetter_authority') loadVetterCerts();
@@ -370,6 +417,147 @@
         `;
       } catch (err) {
         panel.innerHTML = `<div class="empty-state">Error: ${escapeHtml(err.message)}</div>`;
+      }
+    }
+
+    async function loadApiKeys() {
+      const panel = document.getElementById('api-keys-panel');
+      try {
+        const response = await authFetch(`/organizations/${orgId}/api-keys`, {
+          headers: { 'X-Requested-With': 'XMLHttpRequest' }
+        });
+        if (!response.ok) {
+          panel.innerHTML = '<div class="empty-state">Failed to load API keys.</div>';
+          return;
+        }
+        const data = await response.json();
+        const keys = data.api_keys || [];
+        const canManage = currentSession.roles.includes('issuer:admin') ||
+          (currentSession.roles.includes('org:administrator') && currentSession.organizationId === orgId);
+
+        panel.innerHTML = `
+          <div class="section-header">
+            <h3>API Keys (${keys.length})</h3>
+            ${canManage ? '<button class="primary small" onclick="showCreateApiKeyModal()">+ Create Key</button>' : ''}
+          </div>
+          ${keys.length === 0
+            ? '<div class="empty-state">No API keys yet.</div>'
+            : `<table>
+                <thead><tr><th>Name</th><th>Roles</th><th>Status</th><th>Created</th>${canManage ? '<th>Actions</th>' : ''}</tr></thead>
+                <tbody>
+                  ${keys.map(k => `
+                    <tr>
+                      <td>${escapeHtml(k.name)}</td>
+                      <td style="font-size:0.8rem;">${k.roles.map(r => escapeHtml(r)).join(', ')}</td>
+                      <td>${k.revoked ? '<span class="revoked-badge">Revoked</span>' : '<span class="status-badge enabled">Active</span>'}</td>
+                      <td style="font-size:0.8rem;">${k.created_at ? new Date(k.created_at).toLocaleDateString() : 'N/A'}</td>
+                      ${canManage ? `<td>${!k.revoked ? `<button class="revoke-btn" onclick="revokeApiKey('${escapeHtml(k.id)}', '${escapeHtml(k.name)}')">Revoke</button>` : ''}</td>` : ''}
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>`
+          }
+        `;
+      } catch (err) {
+        panel.innerHTML = `<div class="empty-state">Error: ${escapeHtml(err.message)}</div>`;
+      }
+    }
+
+    function showCreateApiKeyModal() {
+      const overlay = document.createElement('div');
+      overlay.className = 'modal-overlay';
+      overlay.innerHTML = `
+        <div class="modal-box">
+          <h3>Create API Key</h3>
+          <div class="form-group">
+            <label for="keyName">Name</label>
+            <input type="text" id="keyName" placeholder="e.g. pbx-signing, dashboard, ci-test"/>
+          </div>
+          <div class="form-group">
+            <label>Roles</label>
+            <div class="role-checkbox-group">
+              <label><input type="checkbox" name="keyRole" value="org:dossier_manager" checked> dossier_manager</label>
+              <label><input type="checkbox" name="keyRole" value="org:administrator"> administrator</label>
+            </div>
+          </div>
+          <div id="createKeyResult" class="modal-result"></div>
+          <div id="createdKeyDisplay" style="display:none;"></div>
+          <div class="modal-actions">
+            <button class="btn-cancel" onclick="this.closest('.modal-overlay').remove()">Close</button>
+            <button class="btn-confirm" id="createKeyBtn" onclick="submitCreateApiKey()">Create</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+      overlay.querySelector('#keyName').focus();
+    }
+
+    async function submitCreateApiKey() {
+      const name = document.getElementById('keyName').value.trim();
+      const roles = [...document.querySelectorAll('input[name="keyRole"]:checked')].map(cb => cb.value);
+      const resultEl = document.getElementById('createKeyResult');
+      const btn = document.getElementById('createKeyBtn');
+      const displayEl = document.getElementById('createdKeyDisplay');
+
+      if (!name) {
+        resultEl.className = 'modal-result error';
+        resultEl.textContent = 'Name is required.';
+        return;
+      }
+      if (roles.length === 0) {
+        resultEl.className = 'modal-result error';
+        resultEl.textContent = 'Select at least one role.';
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = 'Creating...';
+      resultEl.textContent = '';
+
+      try {
+        const res = await authFetch(`/organizations/${orgId}/api-keys`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+          body: JSON.stringify({ name, roles }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Failed to create key');
+
+        resultEl.className = 'modal-result success';
+        resultEl.textContent = 'Key created. Copy it now — it will not be shown again.';
+        displayEl.style.display = 'block';
+        displayEl.innerHTML = `
+          <div class="api-key-raw">
+            <span class="label">API Key (copy now)</span>
+            ${escapeHtml(data.raw_key)}
+          </div>
+        `;
+        btn.style.display = 'none';
+        document.querySelector('.btn-cancel').textContent = 'Done';
+        loadApiKeys();
+      } catch (err) {
+        resultEl.className = 'modal-result error';
+        resultEl.textContent = err.message;
+        btn.disabled = false;
+        btn.textContent = 'Create';
+      }
+    }
+
+    async function revokeApiKey(keyId, keyName) {
+      if (!confirm(`Revoke key "${keyName}"? This cannot be undone.`)) return;
+      try {
+        const res = await authFetch(`/organizations/${orgId}/api-keys/${keyId}`, {
+          method: 'DELETE',
+          headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          alert('Failed to revoke: ' + (data.detail || res.status));
+          return;
+        }
+        loadApiKeys();
+      } catch (err) {
+        alert('Error: ' + err.message);
       }
     }
 

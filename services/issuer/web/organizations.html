@@ -216,6 +216,10 @@
 
   <script src="/static/shared.js"></script>
   <script>
+    // Module-level auth state — set in init(), used by callbacks
+    let _isSystemAdmin = false;
+    let _myOrgId = null;
+
     async function init() {
       // Check auth
       const session = await checkAuthStatus();
@@ -224,43 +228,61 @@
         return;
       }
 
-      // Only system admins can access this page
-      if (!session.roles.includes('issuer:admin')) {
+      const isSystemAdmin = session.roles.includes('issuer:admin');
+      const isOrgAdmin = session.roles.includes('org:administrator') && session.organizationId;
+
+      // Block users who are neither system admin nor org admin
+      if (!isSystemAdmin && !isOrgAdmin) {
         document.getElementById('orgs-container').innerHTML = `
           <div class="empty-state">
             You do not have permission to manage organizations.
-            Only system administrators can access this page.
           </div>
         `;
         document.getElementById('create-org-btn').style.display = 'none';
         return;
       }
 
-      await loadOrganizations();
+      // Hide create-org for non-system-admins (org admins can't create orgs)
+      if (!isSystemAdmin) {
+        document.getElementById('create-org-btn').style.display = 'none';
+      } else {
+        document.getElementById('create-org-btn').addEventListener('click', showCreateOrgModal);
+      }
 
-      document.getElementById('create-org-btn').addEventListener('click', showCreateOrgModal);
+      _isSystemAdmin = isSystemAdmin;
+      _myOrgId = session.organizationId;
+      await loadOrganizations(isSystemAdmin, session.organizationId);
     }
 
-    async function loadOrganizations() {
+    async function loadOrganizations(isSystemAdmin, myOrgId) {
       const container = document.getElementById('orgs-container');
 
       try {
-        const response = await authFetch('/organizations', {
-          headers: { 'X-Requested-With': 'XMLHttpRequest' }
-        });
-
-        if (!response.ok) {
-          throw new Error('Failed to load organizations');
+        let orgs;
+        if (isSystemAdmin) {
+          // System admins: fetch all orgs
+          const response = await authFetch('/organizations', {
+            headers: { 'X-Requested-With': 'XMLHttpRequest' }
+          });
+          if (!response.ok) throw new Error('Failed to load organizations');
+          const data = await response.json();
+          orgs = data.organizations || [];
+        } else {
+          // Org admins: fetch only their own org
+          const response = await authFetch(`/organizations/${myOrgId}`, {
+            headers: { 'X-Requested-With': 'XMLHttpRequest' }
+          });
+          if (!response.ok) throw new Error('Failed to load organization');
+          const org = await response.json();
+          orgs = [org];
         }
-
-        const data = await response.json();
-        renderOrganizations(data.organizations || []);
+        renderOrganizations(orgs, isSystemAdmin);
       } catch (err) {
         container.innerHTML = `<div class="empty-state error">Error: ${escapeHtml(err.message)}</div>`;
       }
     }
 
-    function renderOrganizations(orgs) {
+    function renderOrganizations(orgs, isSystemAdmin) {
       const container = document.getElementById('orgs-container');
 
       if (orgs.length === 0) {
@@ -307,12 +329,13 @@
               <div class="api-keys-list" id="api-keys-${escapeHtml(org.id)}">Loading...</div>
             </div>
           </div>
+          ${isSystemAdmin ? `
           <div class="org-card-actions">
             <button class="secondary" onclick="showAddUserModal('${escapeHtml(org.id)}', '${escapeHtml(org.name)}')">+ Add User</button>
             <button class="secondary" onclick="toggleOrg('${escapeHtml(org.id)}', ${!org.enabled})">
               ${org.enabled ? 'Disable' : 'Enable'}
             </button>
-          </div>
+          </div>` : ''}
         </div>
       `}).join('');
 
@@ -458,13 +481,13 @@
           // Org was created but user failed — tell the user
           closeModal(document.querySelector('.modal-overlay'));
           showToast(`Organization created, but admin user failed: ${data.detail || 'Unknown error'}`, 'error');
-          loadOrganizations();
+          loadOrganizations(_isSystemAdmin, _myOrgId);
           return;
         }
 
         closeModal(document.querySelector('.modal-overlay'));
         showOrgCreatedModal(org.name, adminEmail, adminPassword);
-        loadOrganizations();
+        loadOrganizations(_isSystemAdmin, _myOrgId);
       } catch (err) {
         showToast('Network error: ' + err.message, 'error');
         submitBtn.disabled = false;
@@ -533,7 +556,7 @@
 
         if (response.ok) {
           showToast(`Organization ${enable ? 'enabled' : 'disabled'}`, 'success');
-          loadOrganizations();
+          loadOrganizations(_isSystemAdmin, _myOrgId);
         } else {
           const data = await response.json();
           showToast(data.detail || 'Failed to update organization', 'error');
