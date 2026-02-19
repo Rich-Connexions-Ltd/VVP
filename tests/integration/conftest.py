@@ -233,26 +233,22 @@ async def test_identity(
 async def test_registry(
     admin_issuer_client: IssuerClient,
     test_identity: dict,
-    environment_config: EnvironmentConfig,
 ) -> dict:
-    """Get or create a test registry linked to test identity.
+    """Create a fresh test registry linked to test_identity.
 
-    When VVP_TEST_ORG_ID is set, returns the org's registry (the org's
-    credential issuance uses its own registry). Otherwise creates a fresh
-    registry for the test identity.
+    Always creates a fresh registry using test_identity as the signing
+    identity, even in Azure mode. This ensures integration tests work
+    regardless of whether the org's main KERI identity is in the agent
+    (the org's org-{id}-registry requires org-{id} identity to be in LMDB,
+    which may be absent after container restarts if the seed rebuild fails).
     """
-    if environment_config.org_id:
-        # Org registry name follows the pattern: org-{org_id[:8]}-registry
-        org_identity_name = f"org-{environment_config.org_id[:8]}"
-        return {"name": f"{org_identity_name}-registry"}
-    else:
-        import uuid
-        name = f"test-registry-{uuid.uuid4().hex[:8]}"
-        result = await admin_issuer_client.create_registry(
-            name=name,
-            identity_name=test_identity["name"],
-        )
-        return result["registry"]
+    import uuid
+    name = f"test-registry-{uuid.uuid4().hex[:8]}"
+    result = await admin_issuer_client.create_registry(
+        name=name,
+        identity_name=test_identity["name"],
+    )
+    return result["registry"]
 
 
 # =============================================================================
