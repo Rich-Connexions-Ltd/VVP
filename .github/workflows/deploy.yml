@@ -753,8 +753,8 @@ jobs:
     needs: [changes, test-verifier, test-issuer]
     if: |
       needs.changes.outputs.witness == 'true' &&
-      !contains(needs.*.result, 'failure') &&
-      !contains(needs.*.result, 'cancelled')
+      (needs.test-verifier.result == 'success' || needs.test-verifier.result == 'skipped') &&
+      (needs.test-issuer.result == 'success' || needs.test-issuer.result == 'skipped')
     runs-on: ubuntu-latest
     outputs:
       image: ${{ steps.build.outputs.image }}
