@@ -1432,9 +1432,15 @@ async def publish_identity(
     return {"name": name, "published": True}
 
 
+class MockVLEIReinitializeRequest(BaseModel):
+    """Request body for mock vLEI re-initialization."""
+    clear_regular_orgs: bool = False
+
+
 @router.post("/mock-vlei/reinitialize", response_model=MockVLEIReinitializeResponse)
 async def reinitialize_mock_vlei(
     request: Request,
+    body: MockVLEIReinitializeRequest = None,
     principal: Principal = require_admin,
 ) -> MockVLEIReinitializeResponse:
     """Clear stale mock vLEI state and re-initialize from scratch.
@@ -1444,8 +1450,13 @@ async def reinitialize_mock_vlei(
     2. Resets the in-memory MockVLEIManager singleton
     3. Re-creates mock-gleif, mock-qvi identities, registries, and QVI credential
 
-    WARNING: This deletes ALL organizations, API keys, credentials, and TN mappings.
-    Use only when LMDB has been wiped and Postgres state is stale.
+    By default, only system org types (root_authority, qvi, vetter_authority) are
+    cleared. Pass clear_regular_orgs=true to also delete regular orgs and all their
+    data (API keys, credentials, TN mappings). Use this for a full clean restart
+    when KERI Agent seeds have been wiped.
+
+    WARNING: clear_regular_orgs=true deletes ALL organizations and their data.
+    Use only when the KERI Agent has been wiped and issuer org data is stale.
 
     Requires: issuer:admin role
     """
@@ -1464,6 +1475,9 @@ async def reinitialize_mock_vlei(
     )
     import app.org.mock_vlei as mock_vlei_module
     from app.org.mock_vlei import get_mock_vlei_manager
+
+    if body is None:
+        body = MockVLEIReinitializeRequest()
 
     audit = get_audit_logger()
     tables_cleared = []
@@ -1557,6 +1571,49 @@ async def reinitialize_mock_vlei(
                     .delete(synchronize_session=False)
                 )
                 tables_cleared.append(f"organizations (system, {count})")
+
+            # Optionally clear regular orgs and all their data
+            if body.clear_regular_orgs:
+                regular_org_ids = [
+                    row.id
+                    for row in db.query(Organization.id).filter(
+                        Organization.org_type.notin_(SYSTEM_ORG_TYPES)
+                    )
+                ]
+                if regular_org_ids:
+                    db.query(DossierOspAssociation).filter(
+                        DossierOspAssociation.owner_org_id.in_(regular_org_ids)
+                    ).delete(synchronize_session=False)
+                    db.query(TNMapping).filter(
+                        TNMapping.organization_id.in_(regular_org_ids)
+                    ).delete(synchronize_session=False)
+                    db.query(ManagedCredential).filter(
+                        ManagedCredential.organization_id.in_(regular_org_ids)
+                    ).delete(synchronize_session=False)
+                    regular_key_ids = [
+                        row.id
+                        for row in db.query(OrgAPIKey.id).filter(
+                            OrgAPIKey.organization_id.in_(regular_org_ids)
+                        )
+                    ]
+                    if regular_key_ids:
+                        db.query(OrgAPIKeyRole).filter(
+                            OrgAPIKeyRole.api_key_id.in_(regular_key_ids)
+                        ).delete(synchronize_session=False)
+                    db.query(OrgAPIKey).filter(
+                        OrgAPIKey.organization_id.in_(regular_org_ids)
+                    ).delete(synchronize_session=False)
+                    db.query(UserOrgRole).filter(
+                        UserOrgRole.org_id.in_(regular_org_ids)
+                    ).delete(synchronize_session=False)
+                    db.query(User).filter(
+                        User.organization_id.in_(regular_org_ids)
+                    ).delete(synchronize_session=False)
+                    count = db.query(Organization).filter(
+                        Organization.id.in_(regular_org_ids)
+                    ).delete(synchronize_session=False)
+                    tables_cleared.append(f"organizations (regular, {count})")
+                    log.info(f"Cleared {count} regular orgs and all their data")
 
             # Always clear mock vLEI state (will be rebuilt by initialize())
             count = db.query(MockVLEIStateModel).delete()
