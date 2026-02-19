@@ -1487,25 +1487,18 @@ async def reinitialize_mock_vlei(
             ]
 
             if system_org_ids:
-                # Delete dossier-osp associations for system orgs' credentials
-                system_cred_ids = [
-                    row.id
-                    for row in db.query(ManagedCredential.id).filter(
-                        ManagedCredential.org_id.in_(system_org_ids)
-                    )
-                ]
-                if system_cred_ids:
-                    count = (
-                        db.query(DossierOspAssociation)
-                        .filter(DossierOspAssociation.credential_id.in_(system_cred_ids))
-                        .delete(synchronize_session=False)
-                    )
-                    tables_cleared.append(f"dossier_osp_associations (system, {count})")
+                # Delete dossier-osp associations owned by system orgs
+                count = (
+                    db.query(DossierOspAssociation)
+                    .filter(DossierOspAssociation.owner_org_id.in_(system_org_ids))
+                    .delete(synchronize_session=False)
+                )
+                tables_cleared.append(f"dossier_osp_associations (system, {count})")
 
                 # Delete TN mappings for system orgs
                 count = (
                     db.query(TNMapping)
-                    .filter(TNMapping.org_id.in_(system_org_ids))
+                    .filter(TNMapping.organization_id.in_(system_org_ids))
                     .delete(synchronize_session=False)
                 )
                 tables_cleared.append(f"tn_mappings (system, {count})")
@@ -1513,16 +1506,16 @@ async def reinitialize_mock_vlei(
                 # Delete credentials for system orgs
                 count = (
                     db.query(ManagedCredential)
-                    .filter(ManagedCredential.org_id.in_(system_org_ids))
+                    .filter(ManagedCredential.organization_id.in_(system_org_ids))
                     .delete(synchronize_session=False)
                 )
                 tables_cleared.append(f"managed_credentials (system, {count})")
 
-                # Delete API key roles for system orgs
+                # Delete API key roles for system orgs' keys
                 system_key_ids = [
                     row.id
                     for row in db.query(OrgAPIKey.id).filter(
-                        OrgAPIKey.org_id.in_(system_org_ids)
+                        OrgAPIKey.organization_id.in_(system_org_ids)
                     )
                 ]
                 if system_key_ids:
@@ -1536,7 +1529,7 @@ async def reinitialize_mock_vlei(
                 # Delete API keys for system orgs
                 count = (
                     db.query(OrgAPIKey)
-                    .filter(OrgAPIKey.org_id.in_(system_org_ids))
+                    .filter(OrgAPIKey.organization_id.in_(system_org_ids))
                     .delete(synchronize_session=False)
                 )
                 tables_cleared.append(f"org_api_keys (system, {count})")
