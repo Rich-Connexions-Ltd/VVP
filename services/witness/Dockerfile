@@ -17,7 +17,7 @@
 # Run:
 #   docker run -e WITNESS_NAME=wan -e HTTP_PORT=5642 -e TCP_PORT=5632 -p 5642:5642 vvp-witness
 
-FROM gleif/keri:1.2.10
+FROM --platform=linux/amd64 gleif/keri:1.2.10
 
 # Copy the Python startup script
 COPY services/witness/start-witness.py /app/start-witness.py
