@@ -21,7 +21,7 @@ Fixed root cause of post-deployment integration test failures: the CI cleanup st
 | `services/issuer/tests/test_cleanup_metadata.py` | New: 2 issuer metadata_type passthrough tests |
 | `services/keri-agent/tests/test_admin_cleanup.py` | New: 9 KERI Agent filter safety + metadata filter tests |
 
-**Commit:** (pending)
+**Commit:** e6ecedb
 
 ---
 
