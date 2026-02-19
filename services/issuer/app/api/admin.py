@@ -1682,6 +1682,83 @@ async def reinitialize_mock_vlei(
         )
 
 
+class ReissueLEResponse(BaseModel):
+    """Response for LE credential re-issue."""
+    org_id: str
+    org_name: str
+    le_credential_said: str
+
+
+@router.post("/orgs/{org_id}/reissue-le", response_model=ReissueLEResponse)
+async def reissue_le_credential(
+    org_id: str,
+    request: Request,
+    principal: Principal = require_admin,
+) -> ReissueLEResponse:
+    """Re-issue the Legal Entity credential for an existing organization.
+
+    Issues a fresh LE credential from the current mock-QVI to the org and
+    updates org.le_credential_said in the database.
+
+    Use this after a mock vLEI reinitialize when regular orgs are preserved
+    but their LE credentials reference the old (now-gone) mock-QVI AID.
+
+    Requires: issuer:admin role
+    """
+    from app.db.session import get_db_session
+    from app.db.models import ManagedCredential, Organization
+    from app.keri_client import KeriAgentUnavailableError
+    from app.org.mock_vlei import get_mock_vlei_manager
+    from app.org.trust_anchors import get_trust_anchor_manager
+
+    with get_db_session() as db:
+        org = db.query(Organization).filter(Organization.id == org_id).first()
+        if not org:
+            raise HTTPException(status_code=404, detail=f"Organization {org_id} not found")
+        if not org.aid:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Organization {org_id} has no AID — cannot issue LE credential",
+            )
+
+        manager = get_mock_vlei_manager()
+        try:
+            le_said = await manager.issue_le_credential(org.name, org.aid, org.pseudo_lei)
+        except KeriAgentUnavailableError as e:
+            raise HTTPException(status_code=503, detail=str(e))
+        except RuntimeError as e:
+            raise HTTPException(status_code=503, detail=str(e))
+
+        org.le_credential_said = le_said
+
+        # Record the new LE credential as managed by this org
+        tam_state = get_trust_anchor_manager().get_mock_vlei_state()
+        managed_cred = ManagedCredential(
+            said=le_said,
+            organization_id=org_id,
+            schema_said="ENPXp1vQzRF6JwIuS-mp2U8Uf1MoADoP_GqQ62VsDZWY",
+            issuer_aid=tam_state.qvi_aid if tam_state else "",
+        )
+        db.add(managed_cred)
+        db.commit()
+
+        audit = get_audit_logger()
+        audit.log_access(
+            principal_id=principal.key_id,
+            resource=f"admin/orgs/{org_id}/reissue-le",
+            action="reissue_le_credential",
+            request=request,
+            details={"org_name": org.name, "le_credential_said": le_said},
+        )
+        log.info(f"Re-issued LE credential for {org.name}: {le_said[:16]}...")
+
+        return ReissueLEResponse(
+            org_id=org_id,
+            org_name=org.name,
+            le_credential_said=le_said,
+        )
+
+
 # =============================================================================
 # Sprint 73: Bulk Cleanup Endpoints
 # =============================================================================

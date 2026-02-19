@@ -111,8 +111,34 @@ def step_reinitialize(base_url, admin_key):
     return body
 
 
+def step_reissue_le_credential(base_url, admin_key, org_id):
+    """Re-issue LE credential from current mock-QVI for an existing org.
+
+    Called after mock vLEI reinitialize when regular orgs are preserved but
+    their LE credentials reference the old (now-gone) mock-QVI AID.
+    """
+    print(f"  Re-issuing LE credential from current mock-QVI...")
+    status, body = api_call(
+        "POST",
+        f"{base_url}/admin/orgs/{org_id}/reissue-le",
+        api_key=admin_key,
+        timeout=120,
+    )
+    if status != 200:
+        print(f"  WARNING: Failed to re-issue LE credential ({status}): {body.get('detail', body)}")
+        return None
+    le_said = body["le_credential_said"]
+    print(f"  New LE Credential: {le_said[:24]}...")
+    return le_said
+
+
 def step_find_or_create_org(base_url, admin_key, org_name):
-    """Step 2: Find existing org by name or create a new one."""
+    """Step 2: Find existing org by name or create a new one.
+
+    When an existing org is found, always re-issues the LE credential from the
+    current mock-QVI. This ensures the LE credential is valid after a mock vLEI
+    reinitialize (which creates a new mock-QVI AID, invalidating old LE creds).
+    """
     # Try to find existing org with this name
     status, body = api_call("GET", f"{base_url}/organizations", api_key=admin_key)
     if status == 200:
@@ -123,6 +149,10 @@ def step_find_or_create_org(base_url, admin_key, org_name):
                 org["_identity_name"] = f"org-{org['id'][:8]}"
                 print(f"  Org ID:         {org['id']}")
                 print(f"  Org AID:        {org.get('aid', 'N/A')}")
+                # Always re-issue LE from current mock-QVI (handles post-reinitialize case)
+                new_le_said = step_reissue_le_credential(base_url, admin_key, org["id"])
+                if new_le_said:
+                    org["le_credential_said"] = new_le_said
                 return org
 
     return step_create_org(base_url, admin_key, org_name)
@@ -498,11 +528,8 @@ def main():
     else:
         print("\n[1/6] Skipping mock vLEI re-initialization (--skip-reinit)")
 
-    # Step 2: Create organization (find existing if --skip-reinit, else create fresh)
-    if args.skip_reinit:
-        org = step_find_or_create_org(base_url, args.admin_key, args.org_name)
-    else:
-        org = step_create_org(base_url, args.admin_key, args.org_name)
+    # Step 2: Find existing org by name or create fresh (always idempotent)
+    org = step_find_or_create_org(base_url, args.admin_key, args.org_name)
     if org is None:
         print("\nFATAL: Organization creation failed")
         sys.exit(1)
