@@ -231,28 +231,23 @@ async def test_identity(
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def test_registry(
-    issuer_client: IssuerClient,
     environment_config: EnvironmentConfig,
 ) -> dict:
-    """Return the test org's default registry.
+    """Return the test org's default registry by name.
 
-    Uses the organization's own registry (registry_key from org record).
-    Avoids AID mismatch: org-scoped client can only issue credentials
-    in registries belonging to its own identity.
+    Derives the registry name from the org ID using the VVP naming
+    convention: org-{org_id[:8]}-registry.
 
-    After Sprint 74 fixes 1-4, the org's KERI identity + registry survive
-    deployments and are properly rebuilt from PostgreSQL seeds on restart.
+    The org's KERI identity + registry survive deployments after Sprint 74
+    (seeded in PostgreSQL, rebuilt by StateBuilder on startup).
+
+    Avoids AID mismatch: org-scoped issuer_client can only issue credentials
+    in registries belonging to its own identity (org-{id}).
     """
     if not environment_config.org_id:
         pytest.skip("VVP_TEST_ORG_ID not set")
-    async with issuer_client._get_client() as client:
-        response = await client.get(f"/organizations/{environment_config.org_id}")
-        response.raise_for_status()
-        org = response.json()
-    registry_name = org.get("registry_key")
-    if not registry_name:
-        pytest.skip("Test org has no registry_key — bootstrap may not have run")
-    return {"name": registry_name}
+    org_identity_name = f"org-{environment_config.org_id[:8]}"
+    return {"name": f"{org_identity_name}-registry"}
 
 
 # =============================================================================
