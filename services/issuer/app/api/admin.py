@@ -1535,7 +1535,7 @@ async def reinitialize_mock_vlei(
                 if system_key_ids:
                     count = (
                         db.query(OrgAPIKeyRole)
-                        .filter(OrgAPIKeyRole.api_key_id.in_(system_key_ids))
+                        .filter(OrgAPIKeyRole.key_id.in_(system_key_ids))
                         .delete(synchronize_session=False)
                     )
                     tables_cleared.append(f"org_api_key_roles (system, {count})")
@@ -1598,7 +1598,7 @@ async def reinitialize_mock_vlei(
                     ]
                     if regular_key_ids:
                         db.query(OrgAPIKeyRole).filter(
-                            OrgAPIKeyRole.api_key_id.in_(regular_key_ids)
+                            OrgAPIKeyRole.key_id.in_(regular_key_ids)
                         ).delete(synchronize_session=False)
                     db.query(OrgAPIKey).filter(
                         OrgAPIKey.organization_id.in_(regular_org_ids)
