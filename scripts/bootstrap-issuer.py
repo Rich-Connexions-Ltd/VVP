@@ -111,6 +111,23 @@ def step_reinitialize(base_url, admin_key):
     return body
 
 
+def step_find_or_create_org(base_url, admin_key, org_name):
+    """Step 2: Find existing org by name or create a new one."""
+    # Try to find existing org with this name
+    status, body = api_call("GET", f"{base_url}/organizations", api_key=admin_key)
+    if status == 200:
+        orgs = body.get("organizations", [])
+        for org in orgs:
+            if org.get("name") == org_name and org.get("org_type", "regular") == "regular":
+                print(f"\n[2/6] Found existing organization '{org_name}'")
+                org["_identity_name"] = f"org-{org['id'][:8]}"
+                print(f"  Org ID:         {org['id']}")
+                print(f"  Org AID:        {org.get('aid', 'N/A')}")
+                return org
+
+    return step_create_org(base_url, admin_key, org_name)
+
+
 def step_create_org(base_url, admin_key, org_name):
     """Step 2: Create organization with LE credential."""
     print(f"\n[2/6] Creating organization '{org_name}'...")
@@ -420,7 +437,13 @@ def main():
         "--json",
         action="store_true",
         dest="json_output",
-        help="Output final summary as JSON",
+        help="Output final summary as JSON (to stdout, replaces human-readable output)",
+    )
+    parser.add_argument(
+        "--json-file",
+        dest="json_file",
+        default=None,
+        help="Write JSON summary to this file (human-readable output still shown)",
     )
 
     args = parser.parse_args()
@@ -447,8 +470,11 @@ def main():
     else:
         print("\n[1/6] Skipping mock vLEI re-initialization (--skip-reinit)")
 
-    # Step 2: Create organization
-    org = step_create_org(base_url, args.admin_key, args.org_name)
+    # Step 2: Create organization (find existing if --skip-reinit, else create fresh)
+    if args.skip_reinit:
+        org = step_find_or_create_org(base_url, args.admin_key, args.org_name)
+    else:
+        org = step_create_org(base_url, args.admin_key, args.org_name)
     if org is None:
         print("\nFATAL: Organization creation failed")
         sys.exit(1)
@@ -556,6 +582,11 @@ def main():
         },
         "dossier_verified": dossier_info is not None,
     }
+
+    if args.json_file:
+        with open(args.json_file, "w") as f:
+            json.dump(summary, f, indent=2)
+        print(f"\nJSON summary written to: {args.json_file}")
 
     if args.json_output:
         print(json.dumps(summary, indent=2))

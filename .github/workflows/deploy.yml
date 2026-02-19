@@ -1003,11 +1003,30 @@ jobs:
             sleep 10
           done
 
+      - name: Bootstrap test org (self-healing)
+        id: bootstrap
+        env:
+          VVP_SYSTEM_ADMIN_KEY: ${{ secrets.VVP_SYSTEM_ADMIN_KEY }}
+        run: |
+          # Ensure ACME Inc org and API key exist. Uses --skip-reinit so it never
+          # wipes production data — finds existing org or creates one if absent.
+          python3 scripts/bootstrap-issuer.py \
+            --url "$VVP_ISSUER_URL" \
+            --admin-key "$VVP_SYSTEM_ADMIN_KEY" \
+            --org-name "ACME Inc" \
+            --skip-reinit \
+            --json-file bootstrap_summary.json
+          ORG_ID=$(python3 -c "import json; d=json.load(open('bootstrap_summary.json')); print(d['organization']['id'])")
+          API_KEY=$(python3 -c "import json; d=json.load(open('bootstrap_summary.json')); print(d['org_api_key']['raw_key'])")
+          echo "org_id=$ORG_ID" >> $GITHUB_OUTPUT
+          echo "api_key=$API_KEY" >> $GITHUB_OUTPUT
+          echo "Bootstrap: org_id=$ORG_ID"
+
       - name: Run integration tests
         id: integration_tests
         env:
-          VVP_TEST_API_KEY: ${{ secrets.VVP_ADMIN_API_KEY }}
-          VVP_TEST_ORG_ID: ${{ secrets.VVP_TEST_ORG_ID }}
+          VVP_TEST_API_KEY: ${{ steps.bootstrap.outputs.api_key }}
+          VVP_TEST_ORG_ID: ${{ steps.bootstrap.outputs.org_id }}
           VVP_TEST_ADMIN_KEY: ${{ secrets.VVP_SYSTEM_ADMIN_KEY }}
           VVP_AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
         run: |
