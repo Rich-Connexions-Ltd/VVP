@@ -490,6 +490,9 @@ The Dossiers page also includes a **Dossier Readiness** tool below the wizard:
 | Credential issuance returns 503 | KERI Agent is unavailable | Wait a moment and retry; check system health via Admin page |
 | c_proto rejects "sip" with "Match the requested format" | Schema pattern requires `protocol: roles` format | Enter `sip: originator` or leave empty (optional field) |
 | Issuer edge shows Brand/TNAlloc instead of LE | LE credential is a mock vLEI placeholder (not in KERI Agent) | Leave issuer edge empty — credential issuance works without it |
+| Verifier returns `dossier_verified=INDETERMINATE` | TEL events missing — credentials issued before Sprint 74, or in a previous KERI Agent session | Re-issue credentials to get fresh TEL in current KERI Agent LMDB. For the test org use `scripts/bootstrap-issuer.py --skip-reinit` |
+| Verifier returns `vetter_constraints_valid=INDETERMINATE` | VetterCert not reachable from dossier root (DFS edge walk) | Ensure issuing org has an active VetterCert **before** issuing Brand/TNAlloc/GCD — the `certification` edge is auto-injected server-side for Extended schemas |
+| All credentials gone after KERI Agent restart | KERI Agent LMDB is ephemeral (`/tmp`) — cleared on container restart | Re-issue credentials. The bootstrap script handles stale LE and VetterCert pointers automatically with `--skip-reinit` |
 
 ---
 

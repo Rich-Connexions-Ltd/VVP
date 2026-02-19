@@ -700,6 +700,7 @@ Bulk delete identities matching filter criteria. Deletes from both KERI state (H
 | `GET` | `/credential` | List credentials |
 | `GET` | `/credential/{said}` | Get credential details |
 | `GET` | `/credential/{said}/cesr` | Get credential in CESR format |
+| `GET` | `/credential/{said}/tel` | Get TEL issuance event (CESR) for dossier inline TEL (Sprint 74) |
 | `POST` | `/credential/{said}/revoke` | Revoke credential |
 | `DELETE` | `/credential/{said}` | Delete credential (cascades to `keri_credential_seeds`, Sprint 73) |
 

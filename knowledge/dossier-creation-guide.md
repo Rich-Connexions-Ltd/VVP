@@ -179,4 +179,27 @@ For development/recovery, `scripts/bootstrap-issuer.py` automates the full chain
 python3 scripts/bootstrap-issuer.py --url https://vvp-issuer.rcnx.io --admin-key <key>
 ```
 
-Creates: mock vLEI infrastructure → test org → org API key → TN allocation credentials → TN mappings.
+Creates: mock vLEI infrastructure → test org → org API key → VetterCert → TN allocation credentials → brand credential (with `certification` + `vetterCert` edges) → TN mappings.
+
+**Important — run after KERI Agent restarts:** The KERI Agent LMDB is ephemeral (`/tmp`). Any credentials (LE, VetterCert, TN Allocs, Brand) from a previous session are gone after container restart. Use `--skip-reinit` to skip the mock vLEI reinitialization and just recreate test credentials:
+
+```bash
+python3 scripts/bootstrap-issuer.py --url https://vvp-issuer.rcnx.io --admin-key <key> --skip-reinit
+```
+
+The bootstrap handles stale pointers automatically:
+- **Stale LE credential**: `reissue-le` endpoint re-issues LE from current mock-QVI
+- **Stale VetterCert**: The vetter service auto-clears stale pointers (KERI Agent 404) and issues a new one
+- **Stale TN Allocs/Brand**: New credentials issued; TN mappings updated to new dossier root SAID
+
+---
+
+## TEL Events in Dossiers (Sprint 74)
+
+VVP dossiers include inline TEL (Transaction Event Log) issuance events for all credentials the KERI Agent has issued. The verifier uses inline TEL to check revocation status without fetching the issuer's TEL registry separately.
+
+**Why it matters:** Without inline TEL, the verifier cannot determine if credentials are revoked → it returns `INDETERMINATE` instead of `TRUSTED`. This applies to the brand credential, TN Allocation, and any other credential in the dossier chain where the issuer's TEL is accessible.
+
+**Coverage:** Only credentials whose TEL the KERI Agent holds (credentials it issued) get inline TEL. Externally-issued credentials (e.g. LE credential issued by mock-QVI) do not have inline TEL in the dossier — the verifier handles these via KERI OOBI resolution of the issuer registry.
+
+**Technical implementation:** KERI Agent exposes `GET /credentials/{said}/tel` returning the iss event bytes (CESR). The issuer's `DossierBuilder._get_tel_event()` calls this for each credential in the DFS walk.
