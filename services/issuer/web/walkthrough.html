@@ -331,6 +331,8 @@
             <li>An OOBI (Out-of-Band Introduction) URL is generated for discovery</li>
             <li>A credential registry (TEL) is automatically created for the organization</li>
           </ul>
+          <p>Each identity in the list shows a <strong>witness receipt badge</strong> — a green ✓ if the inception event has been acknowledged by witnesses, or a red ⚠ if not. Use the <strong>Publish to Witnesses</strong> button to re-publish if the badge shows an issue (e.g. after a system restart or witness outage).</p>
+          <div class="tip"><strong>Tip:</strong> Verifiers rely on witness receipts to resolve AIDs. If an identity is missing witness receipts, verifications will fail with a KERI resolution error.</div>
         `,
         uiPath: "/ui/identity"
       },
@@ -379,6 +381,7 @@
             <li><strong>Step 3:</strong> Configure access policies for each edge</li>
             <li><strong>Step 4:</strong> Review and create the dossier</li>
           </ul>
+          <p>Step 4 shows a <strong>vetter scope tile</strong> — if the organisation has an active VetterCertification, it displays the authorised ECC country codes, jurisdiction targets, and expiry date. If no active cert is found, an amber warning is shown so you know vetter scope checks will return WARNING status on calls.</p>
           <div class="tip"><strong>Tip:</strong> Use the <strong>Readiness Check</strong> button to verify all required credentials are in place before starting the wizard. It shows which edges are satisfied and which are missing.</div>
         `,
         uiPath: "/ui/dossier"
@@ -421,9 +424,11 @@
             <li>Credentials are issued with <strong>extended schemas</strong> that include a <code>certification</code> edge</li>
             <li>The certification edge links back to the vetter's authorization credential</li>
             <li>The verifier checks <strong>ECC targets</strong> (country codes) and <strong>jurisdiction targets</strong> against the caller's TN and organization</li>
-            <li>Failed constraint checks result in <strong>INDETERMINATE</strong> status (not INVALID)</li>
+            <li>If the vetter is authorised for the TN's country &mdash; overall status stays <strong>VALID</strong></li>
+            <li>If the vetter cert exists but its scope does not cover the TN's country &mdash; overall status is <strong>WARNING</strong> (non-blocking: call still delivers, callee sees <code>X-VVP-Warning-Reason</code>)</li>
+            <li>If no vetter cert is found &mdash; the vetter claim is <strong>INDETERMINATE</strong> (does not block VALID)</li>
           </ul>
-          <div class="tip"><strong>Tip:</strong> Most deployments don't need vetter certification. It's designed for telecom regulatory compliance scenarios.</div>
+          <div class="tip"><strong>Tip:</strong> Most deployments don't need vetter certification. It's designed for telecom regulatory compliance scenarios where vetters are authorised only for certain countries.</div>
         `,
         uiPath: "/ui/vetter"
       },
