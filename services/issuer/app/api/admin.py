@@ -1541,6 +1541,14 @@ async def reinitialize_mock_vlei(
                     )
                     tables_cleared.append(f"org_api_key_roles (system, {count})")
 
+                    # Null out PBX config references before deleting API keys
+                    db.query(PBXConfig).filter(
+                        PBXConfig.api_key_id.in_(system_key_ids)
+                    ).update(
+                        {"api_key_id": None, "api_key_org_id": None, "api_key_value": None},
+                        synchronize_session=False,
+                    )
+
                 # Delete API keys for system orgs
                 count = (
                     db.query(OrgAPIKey)
