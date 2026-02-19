@@ -1472,6 +1472,7 @@ async def reinitialize_mock_vlei(
         UserOrgRole,
         DossierOspAssociation,
         OrgType,
+        PBXConfig,
     )
     import app.org.mock_vlei as mock_vlei_module
     from app.org.mock_vlei import get_mock_vlei_manager
@@ -1600,6 +1601,13 @@ async def reinitialize_mock_vlei(
                         db.query(OrgAPIKeyRole).filter(
                             OrgAPIKeyRole.key_id.in_(regular_key_ids)
                         ).delete(synchronize_session=False)
+                        # Null out PBX config API key reference to avoid FK violation
+                        db.query(PBXConfig).filter(
+                            PBXConfig.api_key_id.in_(regular_key_ids)
+                        ).update(
+                            {"api_key_id": None, "api_key_org_id": None, "api_key_value": None},
+                            synchronize_session=False,
+                        )
                     db.query(OrgAPIKey).filter(
                         OrgAPIKey.organization_id.in_(regular_org_ids)
                     ).delete(synchronize_session=False)
