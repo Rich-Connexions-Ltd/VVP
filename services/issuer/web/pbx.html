@@ -591,7 +591,8 @@
           showToast('Dialplan deployed successfully!', 'success');
           await loadConfig();
         } else {
-          showToast('Deployment failed: ' + data.message, 'error');
+          const msg = data.message || data.detail || 'Unknown error';
+          showToast('Deployment failed: ' + msg, 'error');
         }
       } catch (err) {
         showToast('Deployment error: ' + err.message, 'error');

@@ -709,6 +709,7 @@ jobs:
             "VVP_POSTGRES_DB=${{ secrets.POSTGRES_DB }}"
             "VVP_ISSUER_BASE_URL=https://vvp-issuer.rcnx.io"
             "VVP_KERI_AGENT_URL=$KERI_AGENT_URL"
+            "AZURE_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}"
           )
 
           # Only reference secret if it was set
