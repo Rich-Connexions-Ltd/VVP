@@ -231,24 +231,28 @@ async def test_identity(
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def test_registry(
-    admin_issuer_client: IssuerClient,
-    test_identity: dict,
+    issuer_client: IssuerClient,
+    environment_config: EnvironmentConfig,
 ) -> dict:
-    """Create a fresh test registry linked to test_identity.
+    """Return the test org's default registry.
 
-    Always creates a fresh registry using test_identity as the signing
-    identity, even in Azure mode. This ensures integration tests work
-    regardless of whether the org's main KERI identity is in the agent
-    (the org's org-{id}-registry requires org-{id} identity to be in LMDB,
-    which may be absent after container restarts if the seed rebuild fails).
+    Uses the organization's own registry (registry_key from org record).
+    Avoids AID mismatch: org-scoped client can only issue credentials
+    in registries belonging to its own identity.
+
+    After Sprint 74 fixes 1-4, the org's KERI identity + registry survive
+    deployments and are properly rebuilt from PostgreSQL seeds on restart.
     """
-    import uuid
-    name = f"test-registry-{uuid.uuid4().hex[:8]}"
-    result = await admin_issuer_client.create_registry(
-        name=name,
-        identity_name=test_identity["name"],
-    )
-    return result["registry"]
+    if not environment_config.org_id:
+        pytest.skip("VVP_TEST_ORG_ID not set")
+    async with issuer_client._get_client() as client:
+        response = await client.get(f"/organizations/{environment_config.org_id}")
+        response.raise_for_status()
+        org = response.json()
+    registry_name = org.get("registry_key")
+    if not registry_name:
+        pytest.skip("Test org has no registry_key — bootstrap may not have run")
+    return {"name": registry_name}
 
 
 # =============================================================================

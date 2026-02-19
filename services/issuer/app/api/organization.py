@@ -135,6 +135,7 @@ async def create_organization(
             org_identity = await client.create_identity(AgentCreateIdentityRequest(
                 name=org_identity_name,
                 transferable=True,
+                metadata={"type": "org", "org_id": org_id},
             ))
             org.aid = org_identity.aid
             log.info(f"Created org identity: {org_identity.aid[:16]}...")

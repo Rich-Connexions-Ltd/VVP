@@ -5649,3 +5649,49 @@ The current DELETE endpoints only remove items from KERI Agent LMDB. Because Pos
 - [x] Dry-run mode reports what would be deleted
 - [x] All existing tests pass (no regressions) — 179+898+1844=2,921 tests pass
 
+
+## Sprint 74: KERI Identity Stability — Fix Bulk Cleanup Passthrough & Identity Tagging
+
+**Status:** COMPLETE
+**Goal:** Fix the root cause of post-deployment integration test failures: the CI cleanup step was silently deleting ALL KERI identities (including system and org identities) because the issuer's bulk cleanup endpoint was missing the `metadata_type` filter field, causing it to forward an empty filter to the KERI Agent, which then matched everything.
+
+### Root Causes Fixed
+
+| # | Bug | Location |
+|---|-----|----------|
+| 1 | `metadata_type` silently ignored — not in issuer's `BulkIdentityCleanupRequest` | `services/issuer/app/api/admin.py` |
+| 2 | No filter = match all — KERI Agent had no safety guard for empty filter criteria | `services/keri-agent/app/api/admin.py` |
+| 3 | System org identities created without metadata — `PROTECTED_METADATA_TYPES` never worked | `services/keri-agent/app/mock_vlei.py` |
+| 4 | Regular org identities created without metadata — vulnerable to accidental deletion | `services/issuer/app/api/organization.py` |
+| 5 | `test_registry` regression — creating registry under wrong identity → AID mismatch 403 | `tests/integration/conftest.py` |
+
+### Deliverables
+
+- [x] Add `metadata_type` field to issuer's `BulkIdentityCleanupRequest` + forward to KERI Agent
+- [x] KERI Agent: require at least one filter criterion (400 guard) to prevent "delete all" accidents
+- [x] Tag mock-gleif/qvi/gsma identities with `metadata={"type": "mock_gleif/mock_qvi/mock_gsma"}` on creation
+- [x] Tag regular org identities with `metadata={"type": "org", "org_id": ...}` on creation
+- [x] Revert `test_registry` fixture to use org's own registry (resolves AID mismatch 403)
+- [x] New tests: issuer metadata_type passthrough (2 tests)
+- [x] New tests: KERI Agent filter safety guard + metadata filter correctness (9 tests)
+
+### Key Files
+
+| File | Action | Change |
+|------|--------|--------|
+| `services/issuer/app/api/admin.py` | Modify | Add `metadata_type` to request model + forward to agent |
+| `services/keri-agent/app/api/admin.py` | Modify | Add safety guard for empty filter criteria |
+| `services/keri-agent/app/mock_vlei.py` | Modify | Pass `metadata` to 3 system identity creation calls |
+| `services/issuer/app/api/organization.py` | Modify | Pass `metadata={"type":"org","org_id":...}` to org identity creation |
+| `tests/integration/conftest.py` | Modify | Revert `test_registry` to use org's own registry |
+| `services/issuer/tests/test_cleanup_metadata.py` | Create | Issuer metadata_type passthrough tests |
+| `services/keri-agent/tests/test_admin_cleanup.py` | Create | KERI Agent filter safety + metadata filter tests |
+
+### Exit Criteria
+
+- [x] CI cleanup with `metadata_type=test` deletes ONLY identities tagged `{"type": "test"}`
+- [x] Mock system identities (mock-gleif/qvi/gsma) survive deployments — tagged with correct types
+- [x] Regular org identities (ACME Inc) survive deployments — tagged `type=org`
+- [x] KERI Agent refuses cleanup requests with no filter criteria (400 Bad Request)
+- [x] `test_registry` uses org's own registry — no AID mismatch 403
+- [x] All tests pass — 188+900+1844=2,932 tests pass

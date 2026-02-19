@@ -20952,3 +20952,267 @@ Issuer POST /admin/cleanup/credentials {org_id, schema, ...}
 | R3 | 2026-02-18 | Per Gemini R2: (1) Identity deletion blocks if identity has issued credentials; `cascade_credentials: true` opt-in deletes identity + its credentials; (2) `delete_rotation_seeds` now uses AID (`delete_rotation_seeds_by_aid`) for consistent identifier usage |
 | R4 | 2026-02-18 | Per Gemini R3: (1) Added `force` flag to both bulk endpoint request bodies; (2) Defined partial failure contract — `failed` array in response, always 200; (3) Added `organization_id` filter to Issuer identity cleanup endpoint; (4) Clarified rotation seed method uses join, not lookup; (5) Added performance note for large-scale operations |
 
+
+---
+
+# Sprint 74: KERI Identity Stability
+
+_Archived: 2026-02-19_
+
+# Sprint 74: KERI Identity Stability — Fix Bulk Cleanup Passthrough & Identity Tagging
+
+## Problem Statement
+
+Post-deployment integration tests repeatedly fail with 403 on credential issuance. Root cause traced to CI cleanup erasing ALL KERI identities and their PostgreSQL seeds on every deployment.
+
+The CI cleanup step calls:
+```
+POST /admin/cleanup/identities  {"metadata_type": "test", "cascade_credentials": true, "force": true}
+```
+The intent is to delete only `type=test` test identities. However, the issuer's `BulkIdentityCleanupRequest` Pydantic model has **no `metadata_type` field**. Pydantic silently discards it. The issuer then forwards to the KERI Agent with **no filter criteria whatsoever**, matching ALL identities. With `force=True`, everything is deleted: mock-gleif, mock-qvi, mock-gsma, org-7b857430 (ACME Inc), and all their PostgreSQL seeds.
+
+On next KERI Agent restart: seeds are gone → identities cannot be rebuilt → bootstrap fails ("Registry 'org-7b857430-registry' not found") → all integration tests get 403 on credential issuance.
+
+## Root Causes
+
+| # | Bug | Location |
+|---|-----|----------|
+| 1 | `metadata_type` silently ignored — not in issuer's `BulkIdentityCleanupRequest` model | `services/issuer/app/api/admin.py:1634` |
+| 2 | No filter = match all — KERI Agent has no safety guard for empty filter criteria | `services/keri-agent/app/api/admin.py:187` |
+| 3 | System org identities created without metadata — `mock_vlei.py` passes no metadata, so `PROTECTED_METADATA_TYPES` constant can never protect them | `services/keri-agent/app/mock_vlei.py:117,142,287` |
+| 4 | Regular org identities created without metadata — `organization.py` doesn't pass metadata when creating KERI identity | `services/issuer/app/api/organization.py:135` |
+| 5 | `test_registry` regression — previous session changed it to create registry under `admin_issuer_client/test_identity`, causing AID mismatch 403 when org-scoped client issues credentials | `tests/integration/conftest.py:232` |
+
+## Architecture Context
+
+The VVP system uses:
+- **Ephemeral LMDB** (`/tmp/vvp-keri-agent`) for KERI state — wiped on container restart
+- **PostgreSQL** for KERI seeds (5 tables: `keri_habery_salt`, `keri_identity_seeds`, `keri_rotation_seeds`, `keri_registry_seeds`, `keri_credential_seeds`)
+- **StateBuilder** at startup: replays all seeds from PostgreSQL to reconstruct LMDB state
+- **Mock vLEI** hierarchy: mock-gleif → mock-qvi → mock-gsma provides trust anchor chain for credential issuance
+- **ACME Inc** is a regular org (`type=regular`) that serves as the test fixture for integration tests
+
+KERI Agent's cleanup endpoint (`/admin/cleanup/identities`) already has `metadata_type` filter support. The issuer's cleanup endpoint (`/admin/cleanup/identities`) acts as a proxy but was missing the `metadata_type` field in its request model.
+
+## Proposed Solution
+
+### Fix 1: Add `metadata_type` to issuer cleanup endpoint
+
+**File:** `services/issuer/app/api/admin.py`
+
+The issuer's `BulkIdentityCleanupRequest` (line 1634) is missing `metadata_type`. Add it and forward to the KERI Agent.
+
+```python
+class BulkIdentityCleanupRequest(BaseModel):
+    organization_id: str | None = None
+    name_pattern: str | None = None
+    metadata_type: str | None = None  # ADD
+    cascade_credentials: bool = False
+    force: bool = False
+    dry_run: bool = False
+```
+
+In `bulk_cleanup_identities()` (line ~1764), add to `agent_body`:
+```python
+if body.metadata_type:
+    agent_body["metadata_type"] = body.metadata_type
+```
+
+**Effect:** CI sends `metadata_type=test` → issuer passes to KERI Agent → KERI Agent filters only `type=test` identities → system/org identities untouched.
+
+### Fix 2: KERI Agent safety guard for empty filter
+
+**File:** `services/keri-agent/app/api/admin.py`
+
+At top of `bulk_cleanup_identities()`, before building `target_names`:
+```python
+if (not request.names and not request.name_pattern
+        and not request.metadata_type and not request.before):
+    raise HTTPException(
+        status_code=400,
+        detail="At least one filter criterion required "
+               "(names, name_pattern, metadata_type, or before). "
+               "Use dry_run=true to preview what would be deleted.",
+    )
+```
+
+**Effect:** Prevents silent "delete all" if a caller ever sends a request without filter criteria again.
+
+### Fix 3: Tag system org identities with metadata on creation
+
+**File:** `services/keri-agent/app/mock_vlei.py`
+
+The `PROTECTED_METADATA_TYPES = {"mock_gleif", "mock_qvi", "mock_gsma"}` constant (admin.py:24) exists but is useless because mock identities have `metadata_json=NULL`. Fix by passing metadata on creation:
+
+- Line ~117: `metadata={"type": "mock_gleif"}`
+- Line ~142: `metadata={"type": "mock_qvi"}`
+- Line ~287: `metadata={"type": "mock_gsma"}`
+
+The `create_identity()` already accepts `metadata: Optional[dict]` parameter.
+
+**Effect:** Protection mechanism actually works. Even if the metadata_type filter somehow fails, `force=False` would block deletion of these identities.
+
+### Fix 4: Tag regular org identities with metadata on creation
+
+**File:** `services/issuer/app/api/organization.py`
+
+Change `AgentCreateIdentityRequest` call (line ~135):
+```python
+org_identity = await client.create_identity(AgentCreateIdentityRequest(
+    name=org_identity_name,
+    transferable=True,
+    metadata={"type": "org", "org_id": org_id},  # ADD
+))
+```
+
+`CreateIdentityRequest.metadata` field already exists in `common/common/vvp/models/keri_agent.py:29`.
+
+**Effect:** Regular org identities (ACME Inc, etc.) cannot be accidentally deleted by `metadata_type=test` filter since `type=org != type=test`.
+
+### Fix 5: Revert `test_registry` fixture
+
+**File:** `tests/integration/conftest.py`
+
+A previous session changed `test_registry` to create a new registry under `admin_issuer_client/test_identity`. This causes 403 on credential issuance because:
+- `issuer_client` (ACME Inc org-scoped) tries to issue with `test_registry`
+- The credential issue endpoint checks: registry's identity AID must match org's AID
+- `test_registry.identity_aid` = `test_identity["aid"]` ≠ ACME Inc's AID → 403
+
+After Fixes 1-4, ACME Inc's KERI identity and registry survive deployments. Revert to using ACME Inc's own registry:
+
+```python
+@pytest_asyncio.fixture(loop_scope="session")
+async def test_registry(
+    issuer_client: IssuerClient,
+    environment_config: EnvironmentConfig,
+) -> dict:
+    """Return the test org's default registry.
+
+    Uses the organization's own registry (registry_key from org record).
+    Avoids AID mismatch: org-scoped client can only issue credentials
+    in registries belonging to its own identity.
+
+    After Sprint 74 fixes 1-4, the org's KERI identity + registry survive
+    deployments and are properly rebuilt from PostgreSQL seeds on restart.
+    """
+    if not environment_config.org_id:
+        pytest.skip("VVP_TEST_ORG_ID not set")
+    async with issuer_client._get_client() as client:
+        response = await client.get(f"/organizations/{environment_config.org_id}")
+        response.raise_for_status()
+        org = response.json()
+    registry_name = org.get("registry_key")
+    if not registry_name:
+        pytest.skip("Test org has no registry_key — bootstrap may not have run")
+    return {"name": registry_name}
+```
+
+`test_identity` stays as-is — it's tagged `type=test` (conftest.py line 222) and used correctly by rotation tests.
+
+## Alternatives Considered
+
+| Alternative | Why Rejected |
+|-------------|-------------|
+| Use temp `test_org` per session (create/delete fresh org) | Requires org DELETE endpoint; more complex fixture setup; mock vLEI must be up before org can be created |
+| Use `admin_issuer_client` for credential issuance with explicit `organization_id` | Still fails — registry AID check is against org.aid, and test_registry was under different AID |
+| Add `metadata_type=test` to system identities | Wrong direction — we want them to NOT match the test filter |
+| Make protection absolute (block even with force=True) | Less flexible for legitimate admin operations; filter correctness is the better fix |
+
+## Data Flow After Fix
+
+```
+CI cleanup step
+  POST /admin/cleanup/identities
+  {"metadata_type": "test", "cascade_credentials": true, "force": true}
+    ↓
+  Issuer (now has metadata_type in BulkIdentityCleanupRequest)
+  agent_body = {"cascade_credentials": true, "force": true, "metadata_type": "test"}
+    ↓
+  KERI Agent bulk_cleanup_identities()
+  Safety guard passes (metadata_type is a filter criterion)
+  Filter: seeds where meta.get("type") == "test"
+    → test-integ-* identities: metadata={"type":"test"} → MATCHED → deleted
+    → mock-gleif: metadata={"type":"mock_gleif"} → NOT matched → preserved
+    → org-7b857430: metadata={"type":"org",...} → NOT matched → preserved
+    ↓
+  Only test identities deleted ✓
+  System + org identities preserved ✓
+  Seeds preserved in PostgreSQL ✓
+    ↓
+  Next KERI Agent restart:
+  StateBuilder rebuilds from seeds:
+    → mock-gleif ✓ → mock-qvi ✓ → mock-gsma ✓ → org-7b857430 ✓
+  Integration tests pass ✓
+```
+
+## Test Strategy
+
+### Unit tests — issuer (`services/issuer/tests/test_cleanup_metadata.py`)
+- `test_metadata_type_forwarded_to_agent` — mock KERI Agent; verify `metadata_type` appears in agent request body
+- `test_metadata_type_absent_not_forwarded` — omit `metadata_type`; verify agent body has no key
+
+### Unit tests — KERI Agent (`services/keri-agent/tests/test_admin_cleanup.py`)
+- `test_cleanup_requires_filter_criterion` — no filter → HTTP 400
+- `test_cleanup_metadata_type_test_skips_org_type` — seed with `type=org` NOT deleted when `metadata_type=test`
+- `test_cleanup_metadata_type_test_skips_mock_gleif` — seed with `type=mock_gleif` NOT deleted when `metadata_type=test`
+- `test_cleanup_metadata_type_test_deletes_test_type` — seed with `type=test` IS deleted when `metadata_type=test`
+- `test_cleanup_name_pattern_bypasses_filter_guard` — `name_pattern=*` is valid (sufficient criterion)
+
+## Files to Create/Modify
+
+| File | Action | Change |
+|------|--------|--------|
+| `services/issuer/app/api/admin.py` | Modify | Add `metadata_type` to request model + forward to agent |
+| `services/keri-agent/app/api/admin.py` | Modify | Add safety guard for empty filter criteria |
+| `services/keri-agent/app/mock_vlei.py` | Modify | Pass `metadata` to 3 system identity creation calls |
+| `services/issuer/app/api/organization.py` | Modify | Pass `metadata={"type":"org","org_id":...}` to org identity creation |
+| `tests/integration/conftest.py` | Modify | Revert `test_registry` to use org's own registry |
+| `services/issuer/tests/test_cleanup_metadata.py` | Create | Issuer metadata_type passthrough tests |
+| `services/keri-agent/tests/test_admin_cleanup.py` | Create | KERI Agent filter safety + metadata filter tests |
+
+## Clean Restart Procedure (Post-Deploy)
+
+1. Wipe KERI Agent (name_pattern is a valid filter after Fix 2):
+   ```bash
+   curl -X POST https://vvp-issuer.rcnx.io/admin/cleanup/identities \
+     -H "X-API-Key: $ADMIN_KEY" -H "Content-Type: application/json" \
+     -d '{"name_pattern": "*", "cascade_credentials": true, "force": true}'
+   ```
+2. Reinitialize issuer (clears all org/credential data):
+   ```bash
+   curl -X POST https://vvp-issuer.rcnx.io/admin/mock-vlei/reinitialize \
+     -H "X-API-Key: $ADMIN_KEY"
+   ```
+3. Restart KERI Agent (triggers fresh mock vLEI init with proper metadata):
+   ```bash
+   az containerapp revision restart --name vvp-keri-agent --resource-group VVP
+   ```
+4. Run bootstrap (creates ACME Inc with `type=org` metadata):
+   ```bash
+   python3 scripts/bootstrap-issuer.py --url https://vvp-issuer.rcnx.io --admin-key $ADMIN_KEY --org-name "ACME Inc"
+   ```
+
+## Success Criteria
+
+| Criterion | Verification |
+|-----------|-------------|
+| CI cleanup only deletes test identities | Check CI logs: "Deleted N test identities" where N is test-integ-* count |
+| Mock system identities survive | KERI Agent logs after cleanup: mock-gleif/qvi/gsma present |
+| ACME Inc survives | Bootstrap finds existing ACME Inc org; no "registry not found" |
+| All integration tests pass | CI integration test step: 0 failures |
+| Identity stability across re-deploy | Second CI run after deploy: tests still pass without re-bootstrap |
+
+## Risks and Mitigations
+
+| Risk | Likelihood | Impact | Mitigation |
+|------|------------|--------|------------|
+| Name_pattern="*" filter now fails (Fix 2) | Low | High | name_pattern IS a valid criterion; only "no criteria at all" is blocked |
+| Existing system identity seeds in PG have NULL metadata | Medium | Low | mock_vlei.initialize() is idempotent — checks if identity exists first; only sets metadata on creation |
+| ACME Inc org exists in DB but KERI identity has NULL metadata | High | Low | Clean restart creates fresh identity with metadata; existing orgs will rebuild without metadata but still survive (not matched by metadata_type=test filter) |
+
+## Revision History
+
+| Round | Date | Changes |
+|-------|------|---------|
+| R1 | 2026-02-19 | Initial draft |
+

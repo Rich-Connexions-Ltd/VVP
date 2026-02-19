@@ -178,6 +178,18 @@ async def bulk_cleanup_identities(request: BulkIdentityCleanupRequest):
     - cascade_credentials=false (default): blocks deletion of identities that have issued credentials
     - dry_run=true: returns what would be deleted without deleting
     """
+    # Safety guard: require at least one filter criterion to prevent accidental "delete all"
+    if (not request.names and not request.name_pattern
+            and not request.metadata_type and not request.before):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "At least one filter criterion required "
+                "(names, name_pattern, metadata_type, or before). "
+                "Use dry_run=true to preview what would be deleted."
+            ),
+        )
+
     seed_store = get_seed_store()
 
     # Build target names list from filters

@@ -1,5 +1,30 @@
 # VVP Verifier Change Log
 
+## Sprint 74: KERI Identity Stability — Fix Bulk Cleanup Passthrough & Identity Tagging
+
+**Date:** 2026-02-19
+**Status:** Complete
+
+### Summary
+
+Fixed root cause of post-deployment integration test failures: the CI cleanup step was silently deleting ALL KERI identities because the issuer's bulk cleanup endpoint was missing the `metadata_type` filter field. Five targeted fixes: add `metadata_type` passthrough in issuer, add empty-filter safety guard in KERI Agent, tag system identities (mock-gleif/qvi/gsma) with metadata on creation, tag org identities with metadata on creation, and revert `test_registry` fixture to use org's own registry. 11 new tests; 188+900+1844=2,932 tests pass.
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `services/issuer/app/api/admin.py` | Add `metadata_type` to `BulkIdentityCleanupRequest`; forward to KERI Agent |
+| `services/keri-agent/app/api/admin.py` | Add safety guard requiring at least one filter criterion (HTTP 400) |
+| `services/keri-agent/app/mock_vlei.py` | Pass `metadata={"type": "mock_gleif/mock_qvi/mock_gsma"}` to 3 identity creation calls |
+| `services/issuer/app/api/organization.py` | Pass `metadata={"type":"org","org_id":...}` to org identity creation |
+| `tests/integration/conftest.py` | Revert `test_registry` to use org's own registry (fixes AID mismatch 403) |
+| `services/issuer/tests/test_cleanup_metadata.py` | New: 2 issuer metadata_type passthrough tests |
+| `services/keri-agent/tests/test_admin_cleanup.py` | New: 9 KERI Agent filter safety + metadata filter tests |
+
+**Commit:** (pending)
+
+---
+
 ## Sprint 72: Issuer UI Simplification — Dossier Creation UX
 
 **Date:** 2026-02-18

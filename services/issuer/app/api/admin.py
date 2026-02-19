@@ -1635,6 +1635,7 @@ class BulkIdentityCleanupRequest(BaseModel):
     """Request for bulk identity cleanup."""
     organization_id: str | None = None
     name_pattern: str | None = None
+    metadata_type: str | None = None
     cascade_credentials: bool = False
     force: bool = False
     dry_run: bool = False
@@ -1769,6 +1770,9 @@ async def bulk_cleanup_identities(
 
     if body.name_pattern:
         agent_body["name_pattern"] = body.name_pattern
+
+    if body.metadata_type:
+        agent_body["metadata_type"] = body.metadata_type
 
     # If org filter, look up identities for that org
     if body.organization_id:

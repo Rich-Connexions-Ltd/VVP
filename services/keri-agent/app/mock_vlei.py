@@ -117,6 +117,7 @@ class MockVLEIManager:
             gleif_info = await identity_mgr.create_identity(
                 name=MOCK_GLEIF_NAME,
                 transferable=True,
+                metadata={"type": "mock_gleif"},
             )
             log.info(f"Created mock GLEIF identity: {gleif_info.aid[:16]}...")
         else:
@@ -142,6 +143,7 @@ class MockVLEIManager:
             qvi_info = await identity_mgr.create_identity(
                 name=MOCK_QVI_NAME,
                 transferable=True,
+                metadata={"type": "mock_qvi"},
             )
             log.info(f"Created mock QVI identity: {qvi_info.aid[:16]}...")
         else:
@@ -287,6 +289,7 @@ class MockVLEIManager:
             gsma_info = await identity_mgr.create_identity(
                 name=MOCK_GSMA_NAME,
                 transferable=True,
+                metadata={"type": "mock_gsma"},
             )
             log.info(f"Created mock GSMA identity: {gsma_info.aid[:16]}...")
         else:
