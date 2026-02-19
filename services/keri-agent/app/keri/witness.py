@@ -2,12 +2,15 @@
 
 Handles OOBI publishing to KERI witnesses for identity discovery.
 
-Phase 2 (receipt distribution) sends a receipt event (rct) with all
-collected witness indexed signatures (-B WitnessIdxSigs attachment) to
-each witness's root HTTP endpoint. This matches the keripy-proven
-approach (test_witness.py) which uses processReceiptWitness to verify
-and store wigers in db.wigs via addWig, satisfying the fullyWitnessed()
-check required for OOBI resolution.
+Receipt processing (local wigs storage):
+  After Phase 1, each witness's receipt response is parsed locally
+  via hby.psr.parse(). This calls processReceiptWitness which stores
+  witness indexed signatures (wigers) in db.wigs via addWig, making
+  hab.db.getWigs() return non-empty and satisfying fullyWitnessed().
+
+Phase 2 (receipt distribution) then sends the combined rct event
+(all witness indexed sigs, -B WitnessIdxSigs attachment) to each
+witness's root HTTP endpoint so remote witnesses also store all wigers.
 """
 import asyncio
 import logging
@@ -87,8 +90,18 @@ class WitnessPublisher:
         self,
         aid: str,
         kel_bytes: bytes,
+        hby=None,
     ) -> PublishResult:
-        """Publish identity KEL to witnesses."""
+        """Publish identity KEL to witnesses.
+
+        Args:
+            aid: AID being published
+            kel_bytes: CESR-encoded inception event bytes
+            hby: Optional keripy Habery. When provided, Phase 1 witness
+                 receipts are parsed locally (hby.psr.parse) so that
+                 witness indexed signatures (wigers) are stored in
+                 db.wigs, making hab.db.getWigs() return non-empty.
+        """
         if not self._witness_urls:
             log.warning("No witness URLs configured for publishing")
             return PublishResult(
@@ -124,10 +137,28 @@ class WitnessPublisher:
                 else:
                     results.append(result)
 
+            # Parse Phase 1 receipts locally so wigers are stored in db.wigs.
+            # Each witness's receipt contains its indexed signature (wiger).
+            # hby.psr.parse() dispatches rct events to processReceiptWitness
+            # which calls addWig, making hab.db.getWigs() return non-empty.
+            if hby is not None and receipts:
+                for url, receipt_bytes in receipts.items():
+                    try:
+                        hby.psr.parse(bytearray(receipt_bytes))
+                        log.debug(
+                            f"Parsed witness receipt locally from {url} "
+                            f"for {aid[:16]}..."
+                        )
+                    except Exception as e:
+                        log.warning(
+                            f"Failed to parse witness receipt locally "
+                            f"from {url}: {e}"
+                        )
+
             # Phase 2: Distribute all witness indexed signatures to each
             # witness via a receipt (rct) event with -B WitnessIdxSigs.
-            # This uses the keripy-proven processReceiptWitness path
-            # (eventing.py:3905) which stores wigers in db.wigs via addWig.
+            # Remote witnesses parse this to store all wigers via addWig,
+            # satisfying fullyWitnessed() for OOBI resolution.
             if len(receipts) > 1:
                 try:
                     rct_msg = self._build_witness_receipt(

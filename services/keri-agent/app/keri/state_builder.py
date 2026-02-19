@@ -476,7 +476,9 @@ class KeriStateBuilder:
                         f"falling back to LMDB lookup"
                     )
                     inception_msg = await identity_mgr.get_inception_msg(aid)
-                result = await publisher.publish_oobi(aid, inception_msg)
+                result = await publisher.publish_oobi(
+                    aid, inception_msg, hby=identity_mgr.hby
+                )
                 if result.threshold_met:
                     log.info(
                         f"Published {hab.name} ({aid[:16]}...) to "

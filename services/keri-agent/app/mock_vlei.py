@@ -169,7 +169,9 @@ class MockVLEIManager:
             publisher = get_witness_publisher()
             for aid_info in [gleif_info, qvi_info]:
                 kel_bytes = await identity_mgr.get_kel_bytes(aid_info.aid)
-                pub = await publisher.publish_oobi(aid_info.aid, kel_bytes)
+                pub = await publisher.publish_oobi(
+                    aid_info.aid, kel_bytes, hby=identity_mgr.hby
+                )
                 log.info(f"Published {aid_info.name} to witnesses: "
                          f"{pub.success_count}/{pub.total_count}")
         except Exception as e:
@@ -313,7 +315,9 @@ class MockVLEIManager:
             from app.keri.witness import get_witness_publisher
             publisher = get_witness_publisher()
             kel_bytes = await identity_mgr.get_kel_bytes(gsma_info.aid)
-            pub = await publisher.publish_oobi(gsma_info.aid, kel_bytes)
+            pub = await publisher.publish_oobi(
+                gsma_info.aid, kel_bytes, hby=identity_mgr.hby
+            )
             log.info(f"Published mock GSMA to witnesses: "
                      f"{pub.success_count}/{pub.total_count}")
         except Exception as e:

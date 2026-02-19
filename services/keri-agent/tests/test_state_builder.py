@@ -496,7 +496,7 @@ class TestWitnessPublishing:
 
         call_count = 0
 
-        async def mock_publish(aid, kel_bytes):
+        async def mock_publish(aid, kel_bytes, hby=None):
             nonlocal call_count
             call_count += 1
             return PublishResult(

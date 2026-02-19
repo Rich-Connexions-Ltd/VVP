@@ -189,7 +189,7 @@ async def publish_identity(name: str):
         raise HTTPException(status_code=404, detail=str(e))
 
     publisher = get_witness_publisher()
-    result = await publisher.publish_oobi(info.aid, inception_bytes)
+    result = await publisher.publish_oobi(info.aid, inception_bytes, hby=mgr.hby)
 
     return {
         "aid": info.aid,
