@@ -21,7 +21,13 @@ Fixed root cause of post-deployment integration test failures: the CI cleanup st
 | `services/issuer/tests/test_cleanup_metadata.py` | New: 2 issuer metadata_type passthrough tests |
 | `services/keri-agent/tests/test_admin_cleanup.py` | New: 9 KERI Agent filter safety + metadata filter tests |
 
-**Commit:** e6ecedb
+**Commits:**
+- `e6ecedb` — Sprint 74: Fix bulk cleanup metadata_type passthrough and identity tagging
+- `e474b83` — Fix test_registry fixture: use registry name not registry key
+- `431d218` — Add clear_regular_orgs option to mock vLEI reinitialize endpoint
+- `601bd2a` — Fix OrgAPIKeyRole attribute name in clear_regular_orgs
+- `43f5640` — Split post-deployment tests into smoke + full phases
+- `da1d9ba` — Fix clear_regular_orgs: null PBXConfig API key ref before deleting org_api_keys
 
 ---
 
