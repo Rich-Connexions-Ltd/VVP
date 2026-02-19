@@ -366,6 +366,32 @@ class CredentialIssuer:
                 rules=creder.sad.get("r"),
             )
 
+    async def get_credential_tel_bytes(self, credential_said: str) -> Optional[bytes]:
+        """Get CESR-encoded TEL issuance event for a credential.
+
+        Returns the TEL iss event (sn=0) for use in dossier assembly.
+        The verifier uses inline TEL events to check revocation status
+        without needing to resolve the issuer's TEL registry separately.
+
+        Returns:
+            CESR bytes of the iss TEL event, or None if not found.
+        """
+        async with self._lock:
+            registry_mgr = await get_registry_manager()
+            reger = registry_mgr.regery.reger
+
+            # Verify credential exists
+            creder = reger.creds.get(keys=(credential_said,))
+            if creder is None:
+                return None
+
+            try:
+                iss_raw = reger.cloneTvtAt(credential_said, sn=0)
+                return bytes(iss_raw) if iss_raw else None
+            except Exception as e:
+                log.warning(f"Could not get TEL iss event for {credential_said[:16]}...: {e}")
+                return None
+
     async def get_credential(self, credential_said: str) -> Optional[CredentialInfo]:
         """Get credential info by SAID."""
         async with self._lock:

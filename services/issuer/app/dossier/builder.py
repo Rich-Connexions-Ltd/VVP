@@ -280,8 +280,13 @@ class DossierBuilder:
     async def _get_tel_event(self, credential_said: str) -> bytes | None:
         """Get TEL issuance event for a credential.
 
-        Sprint 68b: Per-credential TEL retrieval is not yet available via the
-        KERI Agent. Returns None until the agent exposes this endpoint.
+        Calls the KERI Agent's per-credential TEL endpoint to get the iss
+        event (sn=0) for inline inclusion in dossiers. The verifier uses
+        inline TEL events to check revocation status without needing to
+        resolve the issuer's TEL registry separately.
+
+        Only the issuing KERI Agent's own credentials will have TEL events.
+        Externally-issued edge credentials (e.g. LE from mock-QVI) return None.
 
         Args:
             credential_said: SAID of the credential
@@ -289,8 +294,12 @@ class DossierBuilder:
         Returns:
             CESR-encoded TEL iss event, or None if not available
         """
-        # TODO: Sprint 68b — add per-credential TEL endpoint to KERI Agent
-        return None
+        try:
+            client = get_keri_client()
+            return await client.get_credential_tel(credential_said)
+        except Exception as e:
+            log.debug(f"TEL not available for {credential_said[:16]}...: {e}")
+            return None
 
     def _credential_to_json(self, cred_info) -> dict:
         """Build credential JSON dict from a CredentialResponse.

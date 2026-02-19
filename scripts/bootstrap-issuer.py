@@ -278,21 +278,25 @@ def step_issue_tn_allocation(base_url, org_api_key, org_aid, registry_name, tn_r
 
 def step_issue_brand_credential(base_url, org_api_key, org_aid, registry_name,
                                  le_said, brand_name, brand_logo_url,
-                                 tnalloc_saids=None):
-    """Step 3c: Issue Extended Brand Credential linked to LE + TNAlloc credentials.
+                                 tnalloc_saids=None, vetter_cert_said=None):
+    """Step 3c: Issue Extended Brand Credential linked to LE + TNAlloc + VetterCert.
 
     Sprint 60: The brand credential carries brand identity (name, logo, etc.)
     and becomes the dossier root. The dossier builder DFS walks edges:
-    brand → LE → QVI, brand → TNAlloc0, brand → TNAlloc1, giving the verifier
-    the full credential chain including brand evidence and TN rights.
+    brand → LE → QVI, brand → TNAlloc0, brand → TNAlloc1, brand → vetterCert,
+    giving the verifier the full credential chain including brand evidence,
+    TN rights, and vetter certification for constraint checking.
     """
     BRAND_SCHEMA = "EK7kPhs5YkPsq9mZgUfPYfU-zq5iSlU8XVYJWqrVPk6g"
     LE_SCHEMA = "ENPXp1vQzRF6JwIuS-mp2U8Uf1MKAIuPchgRiMCe48Mb"
     TN_ALLOC_SCHEMA = "EFvnoHDY7I-kaBBeKlbDbkjG4BaI0nKLGadxBdjMGgSQ"
+    VETTER_CERT_SCHEMA = "EOefmhWU2qTpMiEQhXohE6z3xRXkpLloZdhTYIenlD4H"
 
     print(f"\n[4a/6] Issuing Extended Brand Credential...")
     print(f"  Brand Name:     {brand_name}")
     print(f"  Logo URL:       {brand_logo_url}")
+    if vetter_cert_said:
+        print(f"  VetterCert:     {vetter_cert_said[:24]}...")
 
     attributes = {
         "i": org_aid,
@@ -303,6 +307,7 @@ def step_issue_brand_credential(base_url, org_api_key, org_aid, registry_name,
         attributes["logoUrl"] = brand_logo_url
 
     # Build edges: LE (required) + TNAlloc credentials (for TN rights in dossier)
+    # + VetterCert (for vetter constraint checking in verifier)
     edges = {
         "le": {
             "n": le_said,
@@ -316,6 +321,12 @@ def step_issue_brand_credential(base_url, org_api_key, org_aid, registry_name,
                 "s": TN_ALLOC_SCHEMA,
             }
         print(f"  TNAlloc edges:  {len(tnalloc_saids)} credentials linked")
+    if vetter_cert_said:
+        edges["vetterCert"] = {
+            "n": vetter_cert_said,
+            "s": VETTER_CERT_SCHEMA,
+        }
+        print(f"  VetterCert edge linked")
 
     status, body = api_call(
         "POST",
@@ -549,7 +560,15 @@ def main():
     registry_name = f"{identity_name}-registry"
 
     # Step 3a: Issue VetterCertification
+    # If org already has active VetterCert (409), use its existing SAID from the org.
     vetter_cert = step_issue_vetter_certification(base_url, args.admin_key, org_id)
+    if vetter_cert:
+        vetter_cert_said = vetter_cert.get("said")
+    else:
+        # 409 case: org already has an active VetterCert — use the stored SAID
+        vetter_cert_said = org.get("vetter_certification_said")
+        if vetter_cert_said:
+            print(f"  Using existing VetterCert: {vetter_cert_said[:24]}...")
 
     # Step 3b: Issue TN Allocation credentials (before brand, so SAIDs can be linked)
     tn_ranges = [
@@ -562,7 +581,9 @@ def main():
             base_url, org_api_key, org_aid, registry_name, tn_ranges,
         )
 
-    # Step 3c: Issue brand credential with edges to LE + TNAlloc credentials
+    # Step 3c: Issue brand credential with edges to LE + TNAlloc + VetterCert
+    # The DFS edge walk in the dossier builder and verifier requires VetterCert to be
+    # reachable from the dossier root (brand credential) for vetter constraint checking.
     brand_said = None
     tnalloc_saids = [r["said"] for r in tnalloc_results] if tnalloc_results else None
     if le_said and org_aid:
@@ -570,6 +591,7 @@ def main():
             base_url, org_api_key, org_aid, registry_name,
             le_said, args.brand_name, args.brand_logo,
             tnalloc_saids=tnalloc_saids,
+            vetter_cert_said=vetter_cert_said,
         )
 
     # Sprint 60: Use brand credential as dossier root (brand → LE → QVI chain).

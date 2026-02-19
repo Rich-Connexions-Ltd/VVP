@@ -504,6 +504,20 @@ class KeriAgentClient:
         """Get CESR-encoded credential bytes."""
         return await self._get_bytes(f"/credentials/{said}/cesr")
 
+    async def get_credential_tel(self, said: str) -> bytes | None:
+        """Get CESR-encoded TEL issuance event for a credential.
+
+        Returns the TEL iss event (sn=0) for inclusion in dossiers.
+        Returns None if no TEL event exists for the credential (e.g. externally
+        issued credentials held as edges in the local registry).
+        """
+        try:
+            return await self._get_bytes(f"/credentials/{said}/tel")
+        except HTTPException as e:
+            if e.status_code == 404:
+                return None
+            raise
+
     async def delete_credential(self, said: str) -> None:
         """Delete a credential by SAID. Raises HTTPException on error."""
         await self._delete(f"/credentials/{said}")

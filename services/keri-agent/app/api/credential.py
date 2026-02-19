@@ -191,6 +191,21 @@ async def get_credential_cesr(said: str):
     return Response(content=cesr_bytes, media_type="application/cesr")
 
 
+@router.get("/{said}/tel")
+async def get_credential_tel(said: str):
+    """Get CESR-encoded TEL issuance event for a credential.
+
+    Returns the TEL iss event (sn=0) for the given credential SAID.
+    Used by the issuer dossier builder to include TEL events in dossiers
+    so the verifier can check credential revocation status.
+    """
+    issuer = await get_credential_issuer()
+    tel_bytes = await issuer.get_credential_tel_bytes(said)
+    if tel_bytes is None:
+        raise HTTPException(status_code=404, detail=f"TEL not found for credential: {said}")
+    return Response(content=tel_bytes, media_type="application/cesr")
+
+
 @router.delete("/{said}", status_code=204)
 async def delete_credential(said: str):
     """Delete a credential from local storage."""
