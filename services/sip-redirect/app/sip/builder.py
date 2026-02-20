@@ -48,6 +48,32 @@ def _copy_transaction_headers(request: SIPRequest, response: SIPResponse) -> Non
     response.cseq = request.cseq
 
 
+def build_100_trying(request: SIPRequest) -> SIPResponse:
+    """Build 100 Trying provisional response.
+
+    Sent immediately on INVITE receipt to reset SIP Timer B (32s), allowing
+    the signing service time to complete TN lookup and VVP credential creation.
+
+    Per RFC 3261 section 8.2.6.2, 100 Trying MUST NOT add a To tag.
+
+    Args:
+        request: Original SIP INVITE request
+
+    Returns:
+        SIPResponse ready to send immediately
+    """
+    response = SIPResponse(
+        status_code=100,
+        reason_phrase="Trying",
+    )
+    response.via = list(request.via)
+    response.from_header = request.from_header
+    response.to_header = request.to_header  # No tag for 100 Trying (RFC 3261)
+    response.call_id = request.call_id
+    response.cseq = request.cseq
+    return response
+
+
 def build_302_redirect(
     request: SIPRequest,
     contact_uri: str,

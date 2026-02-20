@@ -17,6 +17,7 @@ from app.config import (
     SIPS_CERT_FILE,
     SIPS_KEY_FILE,
 )
+from app.sip.builder import build_100_trying
 from common.vvp.sip import SIPRequest, SIPResponse, parse_sip_request
 
 log = logging.getLogger(__name__)
@@ -108,7 +109,15 @@ class UDPServerProtocol(asyncio.DatagramProtocol):
                     pass  # Original handler failed; retransmission gets nothing
                 return
 
-            # New INVITE — create a future and process
+            # New INVITE — send 100 Trying immediately to reset SIP Timer B.
+            # Without this, FreeSWITCH terminates the transaction after 32s
+            # (Timer B) even though our TN lookup + VVP create can take 30-35s.
+            trying = build_100_trying(request)
+            if self._transport and not self._transport.is_closing():
+                self._transport.sendto(trying.to_bytes(), addr)
+                log.debug(f"Sent 100 Trying for {call_id[:16] if call_id else 'unknown'}")
+
+            # Create a future and process
             fut: asyncio.Future[SIPResponse] = asyncio.get_running_loop().create_future()
             if call_id:
                 self._inflight[call_id] = fut

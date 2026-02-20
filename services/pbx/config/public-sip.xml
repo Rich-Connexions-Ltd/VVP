@@ -40,19 +40,21 @@
         <action application="log" data="INFO [VVP] Loopback call to extension $1 via VVP signing"/>
         <action application="set" data="hangup_after_bridge=true"/>
         <action application="set" data="continue_on_fail=true"/>
-        <!-- Allow 30s for signing service (TN lookup + VVP create can take 5-15s) -->
-        <action application="set" data="bridge_timeout=30"/>
-        <action application="set" data="progress_timeout=30"/>
-        <!-- SIP Timer B: max wait for INVITE transaction (default 32s, extend to 35s) -->
-        <action application="set" data="sip_invite_timeout=35"/>
-        <!-- Map extension to test TN: dest from dialed digits, caller is +441923311000 -->
+        <!-- Allow 60s for signing service (TN lookup + VVP create can take 5-35s for new orgs) -->
+        <action application="set" data="bridge_timeout=60"/>
+        <action application="set" data="progress_timeout=60"/>
+        <!-- SIP Timer B: max wait for INVITE transaction -->
+        <action application="set" data="sip_invite_timeout=65"/>
+        <!-- Map extension to test TN: dest from dialed digits -->
+        <!-- Use origination_caller_id_number if provided, fall back to +441923311000 -->
         <action application="set" data="loopback_dest_tn=+44192331$1"/>
-        <action application="set" data="effective_caller_id_number=+441923311000"/>
-        <action application="set" data="effective_caller_id_name=VVP Loopback"/>
+        <action application="set" data="effective_caller_id_number=${origination_caller_id_number:+441923311000}"/>
+        <action application="set" data="effective_caller_id_name=${origination_caller_id_name:VVP Loopback}"/>
         <!-- Route signing 302 through redirected context (not directly to Contact URI) -->
         <action application="set" data="sip_redirect_context=redirected"/>
         <!-- Route through signing service with org API key -->
-        <action application="export" data="nolocal:sip_h_X-VVP-API-Key=KyGs1suZJR0dQAL0kymkhSvSeJQo4Dh11eWE6YrQXTs"/>
+        <!-- Use vvp_test_api_key channel var if set (for per-org testing), else use default ACME Inc key -->
+        <action application="export" data="nolocal:sip_h_X-VVP-API-Key=${vvp_test_api_key:KyGs1suZJR0dQAL0kymkhSvSeJQo4Dh11eWE6YrQXTs}"/>
         <action application="log" data="INFO [VVP] Routing to signing service: ${loopback_dest_tn}"/>
         <action application="bridge" data="sofia/external/${loopback_dest_tn}@127.0.0.1:5070"/>
       </condition>
@@ -234,20 +236,23 @@
         <action application="set" data="vvp_brand_logo=${sip_rh_X-VVP-Brand-Logo}"/>
         <action application="set" data="vvp_status=${sip_rh_X-VVP-Status}"/>
         <action application="set" data="vvp_warning_reason=${sip_rh_X-VVP-Warning-Reason}"/>
+        <action application="set" data="vvp_vetter_status=${sip_rh_X-VVP-Vetter-Status}"/>
         <!-- Fallback to request headers -->
         <action application="set" data="vvp_brand_name=${vvp_brand_name:${sip_h_X-VVP-Brand-Name}}"/>
         <action application="set" data="vvp_brand_logo=${vvp_brand_logo:${sip_h_X-VVP-Brand-Logo}}"/>
         <action application="set" data="vvp_status=${vvp_status:${sip_h_X-VVP-Status}}"/>
         <action application="set" data="vvp_warning_reason=${vvp_warning_reason:${sip_h_X-VVP-Warning-Reason}}"/>
+        <action application="set" data="vvp_vetter_status=${vvp_vetter_status:${sip_h_X-VVP-Vetter-Status}}"/>
         <!-- URL decode -->
         <action application="set" data="vvp_brand_name=${url_decode(${vvp_brand_name})}"/>
         <action application="set" data="vvp_brand_logo=${url_decode(${vvp_brand_logo})}"/>
-        <action application="log" data="INFO [VVP] Delivering: brand=${vvp_brand_name}, status=${vvp_status}, warning=${vvp_warning_reason}"/>
+        <action application="log" data="INFO [VVP] Delivering: brand=${vvp_brand_name}, status=${vvp_status}, vetter=${vvp_vetter_status}, warning=${vvp_warning_reason}"/>
         <!-- Export VVP headers to B-leg for WebRTC client -->
         <action application="export" data="nolocal:sip_h_X-VVP-Brand-Name=${vvp_brand_name}"/>
         <action application="export" data="nolocal:sip_h_X-VVP-Brand-Logo=${vvp_brand_logo}"/>
         <action application="export" data="nolocal:sip_h_X-VVP-Status=${vvp_status}"/>
         <action application="export" data="nolocal:sip_h_X-VVP-Warning-Reason=${vvp_warning_reason}"/>
+        <action application="export" data="nolocal:sip_h_X-VVP-Vetter-Status=${vvp_vetter_status}"/>
         <action application="ring_ready"/>
         <action application="set" data="hangup_after_bridge=true"/>
         <action application="set" data="target_ext=10$1"/>

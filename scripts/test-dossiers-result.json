@@ -1,0 +1,57 @@
+{
+  "phase1": {
+    "org_name": "Phase 1 Branded Co",
+    "org_id": "c9721736-d2da-4b70-9a41-4b9452843c44",
+    "org_aid": "EPqbo27h1mPZAEhGszEgQ9usihvC_DlSnnYQ0kx9hp5A",
+    "le_said": "EBligxffEewC2465ddCjJVmXGLaBiMExu3FS6WvEkzpk",
+    "vetter_cert_said": "ED5SMj9GjLMimbgaRc7uukUzqlezXdNa3iRlWqq_IUxy",
+    "vetter_ecc": [
+      "44",
+      "1"
+    ],
+    "explicit_vetter_edge": false,
+    "tnalloc_said": "EDJXmV1pV9Khl5HzNFokj--uimzoPIgfABLxEfto3nkv",
+    "brand_said": "ELR6gNfEKWy4JY2tvRej2ckoI9uqE_zrZ9TStYpXhVuy",
+    "dossier_root_said": "ELR6gNfEKWy4JY2tvRej2ckoI9uqE_zrZ9TStYpXhVuy",
+    "identity_name": "org-c9721736",
+    "tn": "+441923311001",
+    "credential_count": 6,
+    "dossier_size_bytes": 5850
+  },
+  "phase2a": {
+    "org_name": "Phase 2a UK Ltd",
+    "org_id": "9ef9e083-4286-41d8-922b-f8bd772b5049",
+    "org_aid": "EJsl8KES-9GBmLMhlt9L-chjUnjVNVY2ikerqZmJ-mnW",
+    "le_said": "ENDCPdx84FXaCK6zq1XggL04q_NFBU7OyqoZrPbofHbY",
+    "vetter_cert_said": "EMRrbR5lqB5n-c0bGbMc75SOGW2kwB8g-wCTLkvSv0Vz",
+    "vetter_ecc": [
+      "44"
+    ],
+    "explicit_vetter_edge": true,
+    "tnalloc_said": "ELDsoIwKoGRljLZ4Jw3wH8umVDISxZ3rUcyhtcYKqyY6",
+    "brand_said": "EBHgSL2hbjHD3G65z_meovi_8tkbHdGtZOp93Q8EOERd",
+    "dossier_root_said": "EBHgSL2hbjHD3G65z_meovi_8tkbHdGtZOp93Q8EOERd",
+    "identity_name": "org-9ef9e083",
+    "tn": "+441923311002",
+    "credential_count": 6,
+    "dossier_size_bytes": 5951
+  },
+  "phase2b": {
+    "org_name": "Phase 2b US Ltd",
+    "org_id": "b19a8f09-731f-4f6d-bc74-8fb700015bb0",
+    "org_aid": "ELwvqBnm6rri73ClsJi66yc685N7yXsMuh4DET8-Pf_6",
+    "le_said": "EEWYQYWTyM5Nlmefr1WX4jg6HsZf0GFJZL49ikAOZcBU",
+    "vetter_cert_said": "EKnzGQLbOHbXy0JAEnx9Wnjw6A-qCx1A9JymGKjbbr1a",
+    "vetter_ecc": [
+      "1"
+    ],
+    "explicit_vetter_edge": true,
+    "tnalloc_said": "EFgjCB0ozbzgdDoOfpVVZoAQizlg_uhC1NUY5Pht9_3G",
+    "brand_said": "EIw9pJgiXzbH_pBCndgN3aaF9frNVJewhPgLvF-CvpN_",
+    "dossier_root_said": "EIw9pJgiXzbH_pBCndgN3aaF9frNVJewhPgLvF-CvpN_",
+    "identity_name": "org-b19a8f09",
+    "tn": "+441923311003",
+    "credential_count": 6,
+    "dossier_size_bytes": 5950
+  }
+}
