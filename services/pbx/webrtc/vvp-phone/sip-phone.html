@@ -7,7 +7,7 @@
     <link rel="icon" href="favicon.ico" type="image/x-icon">
     <link rel="stylesheet" href="css/vvp-theme.css">
     <style>
-        /* Base styles */
+        /* Base styles — matches VVP Issuer design language */
         * {
             box-sizing: border-box;
             margin: 0;
@@ -15,8 +15,8 @@
         }
 
         body {
-            font-family: var(--vvp-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: system-ui, -apple-system, sans-serif;
+            background: #f8faf9;
             min-height: 100vh;
             display: flex;
             flex-direction: column;
@@ -27,35 +27,67 @@
 
         .phone-container {
             background: white;
-            border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            box-shadow: rgba(0, 0, 0, 0.1) 0px 2px 4px;
             width: 100%;
             max-width: 400px;
             overflow: hidden;
+            border-top: 3px solid #2a9d8f;
         }
 
         .phone-header {
-            background: #2a9d8f;
-            color: white;
-            padding: 20px;
+            background: white;
+            color: #264653;
+            padding: 16px 20px;
+            border-bottom: 1px solid #d4e6e1;
+        }
+
+        .header-brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .ovc-logo {
+            height: 36px;
+            width: auto;
+            display: block;
+        }
+
+        .header-text {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .header-text .service-label {
+            font-size: 0.6875rem;
+            font-weight: 700;
+            color: #6c757d;
+            text-transform: uppercase;
+            letter-spacing: 0.02em;
+            line-height: 1;
+        }
+
+        .header-text .service-name {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: #264653;
+            line-height: 1.2;
+        }
+
+        .phone-header .subtitle {
+            font-size: 0.8125rem;
+            color: #6c757d;
+            margin-top: 8px;
             text-align: center;
-        }
-
-        .phone-header h1 {
-            font-size: 1.5rem;
-            font-weight: 600;
-        }
-
-        .phone-header p {
-            font-size: 0.875rem;
-            opacity: 0.9;
-            margin-top: 5px;
         }
 
         .phone-header .version {
             font-size: 0.75rem;
-            opacity: 0.7;
-            margin-top: 3px;
+            color: #2a9d8f;
+            margin-top: 2px;
+            font-weight: 500;
+            text-align: center;
         }
 
         .phone-body {
@@ -73,24 +105,30 @@
 
         .vvp-placeholder {
             text-align: center;
-            color: #999;
+            color: #6c757d;
             padding: 40px;
         }
 
         .vvp-placeholder svg {
-            width: 60px;
-            height: 60px;
+            width: 48px;
+            height: 48px;
             margin-bottom: 10px;
-            opacity: 0.5;
+            opacity: 0.3;
+            color: #2a9d8f;
+        }
+
+        .vvp-placeholder p {
+            font-size: 0.875rem;
         }
 
         /* Connection Status */
         #connection-status {
             text-align: center;
-            padding: 10px;
-            border-radius: 8px;
-            margin-bottom: 15px;
-            font-size: 0.875rem;
+            padding: 8px 12px;
+            border-radius: 4px;
+            margin-bottom: 16px;
+            font-size: 0.8125rem;
+            font-weight: 500;
         }
 
         #connection-status.connected {
@@ -109,8 +147,8 @@
         }
 
         #connection-status.registered {
-            background: #cce5ff;
-            color: #004085;
+            background: #e8f5f1;
+            color: #2d5a4e;
         }
 
         /* Login Form */
@@ -123,40 +161,46 @@
         }
 
         .form-group {
-            margin-bottom: 15px;
+            margin-bottom: 16px;
         }
 
         .form-group label {
             display: block;
-            margin-bottom: 5px;
-            font-weight: 500;
-            color: #333;
+            margin-bottom: 4px;
+            font-weight: 600;
+            font-size: 0.8125rem;
+            color: #264653;
         }
 
         .form-group input {
             width: 100%;
-            padding: 12px;
-            border: 2px solid #e0e0e0;
-            border-radius: 8px;
-            font-size: 1rem;
+            padding: 10px 12px;
+            border: 1px solid #d4e6e1;
+            border-radius: 4px;
+            font-size: 0.9375rem;
+            font-family: inherit;
+            color: #264653;
+            background: #fff;
             transition: border-color 0.2s;
         }
 
         .form-group input:focus {
             outline: none;
             border-color: #2a9d8f;
+            box-shadow: 0 0 0 2px rgba(42, 157, 143, 0.15);
         }
 
         /* Buttons */
         .btn {
             display: inline-block;
-            padding: 12px 24px;
+            padding: 10px 20px;
             border: none;
-            border-radius: 8px;
-            font-size: 1rem;
+            border-radius: 4px;
+            font-size: 0.9375rem;
             font-weight: 600;
+            font-family: inherit;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: background-color 0.2s;
             width: 100%;
         }
 
@@ -206,8 +250,9 @@
             text-align: center;
             padding: 10px;
             margin-bottom: 15px;
-            background: #e9ecef;
-            border-radius: 8px;
+            background: #f8faf9;
+            border: 1px solid #d4e6e1;
+            border-radius: 4px;
             display: none;
         }
 
@@ -216,9 +261,9 @@
         }
 
         .incoming-info .caller {
-            font-size: 1.25rem;
+            font-size: 1.125rem;
             font-weight: 600;
-            color: #333;
+            color: #264653;
         }
 
         /* Audio elements */
@@ -228,12 +273,13 @@
 
         /* Debug panel */
         #debug-panel {
-            margin-top: 20px;
-            padding: 15px;
-            background: #f8f9fa;
-            border-radius: 8px;
-            font-family: monospace;
-            font-size: 0.75rem;
+            margin-top: 16px;
+            padding: 12px;
+            background: #f8faf9;
+            border: 1px solid #d4e6e1;
+            border-radius: 4px;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+            font-size: 0.6875rem;
             max-height: 200px;
             overflow-y: auto;
             display: none;
@@ -245,7 +291,7 @@
 
         .debug-entry {
             padding: 2px 0;
-            border-bottom: 1px solid #e9ecef;
+            border-bottom: 1px solid #e8eeeb;
         }
 
         .debug-entry.error {
@@ -253,19 +299,19 @@
         }
 
         .debug-entry.info {
-            color: #17a2b8;
+            color: #2a9d8f;
         }
 
         .debug-entry.success {
-            color: #28a745;
+            color: #2d5a4e;
         }
 
         /* Footer */
         .phone-footer {
-            padding: 15px;
+            padding: 12px;
             text-align: center;
-            background: #f8f9fa;
-            border-top: 1px solid #e9ecef;
+            background: #f8faf9;
+            border-top: 1px solid #d4e6e1;
         }
 
         .phone-footer a {
@@ -274,8 +320,8 @@
         }
 
         .phone-footer label {
-            font-size: 0.875rem;
-            color: #666;
+            font-size: 0.8125rem;
+            color: #6c757d;
             cursor: pointer;
         }
     </style>
@@ -283,8 +329,14 @@
 <body>
     <div class="phone-container">
         <div class="phone-header">
-            <h1>VVP Phone</h1>
-            <p>Verified Voice Protocol Demo</p>
+            <div class="header-brand">
+                <img src="img/ovc-logo.png" alt="OVC" class="ovc-logo">
+                <div class="header-text">
+                    <span class="service-label">VVP</span>
+                    <span class="service-name">Phone</span>
+                </div>
+            </div>
+            <p class="subtitle">Verified Voice Protocol Demo</p>
             <div class="version" id="header-version">SIP.js Edition (bidirectional)</div>
         </div>
 
