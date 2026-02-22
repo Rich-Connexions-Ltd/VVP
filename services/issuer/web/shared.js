@@ -18,12 +18,10 @@ const NAV_LINKS = [
   { href: '/ui/vvp',         label: 'VVP Headers' },
   { href: '/ui/tn-mappings', label: 'TN Mappings' },
   { href: '/ui/pbx',         label: 'PBX' },
-  { href: '/ui/help',        label: 'Help' },
   { href: '/ui/admin',       label: 'Admin' },
   { href: '/ui/vetter',     label: 'Vetter Certs', hidden: true },
   { href: '/organizations/ui', label: 'Organizations', hidden: true },
   { href: '/users/ui',       label: 'Users', hidden: true },
-  { href: 'https://vvp-verifier.rcnx.io', label: 'Verifier \u2197', className: 'verifier-link', external: true },
 ];
 
 /**
@@ -45,6 +43,85 @@ function buildNavigation() {
     if (item.className) a.classList.add(item.className);
     if (item.href === currentPath) a.classList.add('active');
     nav.appendChild(a);
+  });
+
+  // Add hamburger toggle for mobile (inserted before .nav-links)
+  const header = document.querySelector('.site-header');
+  if (header && !document.getElementById('hamburger-btn')) {
+    const btn = document.createElement('button');
+    btn.id = 'hamburger-btn';
+    btn.className = 'hamburger-btn';
+    btn.setAttribute('aria-label', 'Toggle navigation');
+    btn.innerHTML = '☰';
+    btn.addEventListener('click', () => {
+      header.classList.toggle('nav-open');
+    });
+    // Insert before .nav-links
+    header.insertBefore(btn, nav);
+  }
+}
+
+/**
+ * Build the header utility area with help dropdown and Verifier link.
+ * Inserted after the auth-status container in the header.
+ */
+function buildHeaderUtility() {
+  const header = document.querySelector('.site-header');
+  if (!header || document.getElementById('header-utility')) return;
+
+  const utility = document.createElement('div');
+  utility.id = 'header-utility';
+  utility.className = 'header-utility';
+
+  // --- Help dropdown ---
+  const helpWrap = document.createElement('div');
+  helpWrap.className = 'help-dropdown-wrap';
+
+  const helpBtn = document.createElement('button');
+  helpBtn.className = 'help-trigger';
+  helpBtn.setAttribute('aria-label', 'Help menu');
+  helpBtn.textContent = '?';
+  helpBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    helpWrap.classList.toggle('open');
+  });
+
+  const dropdown = document.createElement('div');
+  dropdown.className = 'help-dropdown';
+
+  const quickRef = document.createElement('a');
+  quickRef.href = '#';
+  quickRef.textContent = 'Quick Reference';
+  quickRef.addEventListener('click', (e) => {
+    e.preventDefault();
+    helpWrap.classList.remove('open');
+    showIssuerHelp();
+  });
+
+  const helpGuide = document.createElement('a');
+  helpGuide.href = '/ui/help';
+  helpGuide.textContent = 'Help Guide';
+
+  dropdown.appendChild(quickRef);
+  dropdown.appendChild(helpGuide);
+  helpWrap.appendChild(helpBtn);
+  helpWrap.appendChild(dropdown);
+  utility.appendChild(helpWrap);
+
+  // --- Verifier external link ---
+  const verifierLink = document.createElement('a');
+  verifierLink.href = 'https://vvp-verifier.rcnx.io';
+  verifierLink.target = '_blank';
+  verifierLink.rel = 'noopener';
+  verifierLink.className = 'verifier-ext-link';
+  verifierLink.innerHTML = 'Verifier <span class="ext-icon">↗</span>';
+  utility.appendChild(verifierLink);
+
+  header.appendChild(utility);
+
+  // Close help dropdown when clicking elsewhere
+  document.addEventListener('click', () => {
+    helpWrap.classList.remove('open');
   });
 }
 
@@ -1150,16 +1227,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Handle OAuth errors from URL parameters (e.g., after failed OAuth callback)
   handleOAuthError();
 
-  // Add help button to header nav if it doesn't exist
-  const nav = document.querySelector('.nav-links');
-  if (nav && !document.getElementById('help-btn')) {
-    const helpBtn = document.createElement('button');
-    helpBtn.id = 'help-btn';
-    helpBtn.className = 'help-btn';
-    helpBtn.innerHTML = '? Help';
-    helpBtn.onclick = showIssuerHelp;
-    nav.appendChild(helpBtn);
-  }
+  // Build utility area (help dropdown + Verifier link)
+  buildHeaderUtility();
 
   // Add auth status container to header if it doesn't exist
   const header = document.querySelector('header');
@@ -1167,7 +1236,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     const authStatus = document.createElement('div');
     authStatus.id = 'auth-status';
     authStatus.className = 'auth-status';
-    header.appendChild(authStatus);
+    // Insert auth-status inside utility area if it exists, otherwise append to header
+    const utility = document.getElementById('header-utility');
+    if (utility) {
+      utility.appendChild(authStatus);
+    } else {
+      header.appendChild(authStatus);
+    }
   }
 
   // Check auth status on page load

@@ -78,28 +78,102 @@
             background: var(--vvp-info);
             color: white;
         }
-        /* Cross-service link (styled with Issuer's teal) */
-        .site-header .nav-links a.issuer-link {
-            background: var(--vvp-issuer-color);
-            color: white;
+        /* Hamburger toggle (hidden on desktop, visible on mobile) */
+        .hamburger-btn {
+            display: none;
+            background: none;
+            border: 1px solid var(--vvp-muted);
+            border-radius: 4px;
+            font-size: 1.5rem;
+            line-height: 1;
+            padding: 0.25rem 0.5rem;
+            cursor: pointer;
+            color: inherit;
         }
-        .site-header .nav-links a.issuer-link:hover {
-            background: #238b80;
+        .hamburger-btn:hover {
+            background: rgba(0,0,0,0.05);
         }
 
-        /* Help button and modal */
-        .help-btn {
-            background: var(--vvp-info);
-            color: white;
-            border: none;
-            padding: 0.25rem 0.75rem;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 0.9rem;
-            transition: background 0.2s;
+        /* Header utility area (right side: help dropdown + issuer link) */
+        .header-utility {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-left: auto;
         }
-        .help-btn:hover {
-            background: #005599;
+
+        /* Help dropdown */
+        .help-dropdown-wrap {
+            position: relative;
+        }
+        .help-trigger {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            border: 1px solid var(--vvp-muted);
+            background: white;
+            color: var(--vvp-info);
+            font-weight: 700;
+            font-size: 0.95rem;
+            cursor: pointer;
+            transition: background 0.2s, border-color 0.2s;
+        }
+        .help-trigger:hover {
+            background: rgba(0,0,0,0.05);
+            border-color: var(--vvp-info);
+        }
+        .help-dropdown {
+            display: none;
+            position: absolute;
+            top: calc(100% + 6px);
+            right: 0;
+            background: white;
+            border: 1px solid #dee2e6;
+            border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+            min-width: 170px;
+            z-index: 1000;
+            overflow: hidden;
+        }
+        .help-dropdown-wrap.open .help-dropdown {
+            display: block;
+        }
+        .help-dropdown a {
+            display: block;
+            padding: 0.6rem 1rem;
+            color: inherit;
+            text-decoration: none;
+            font-size: 0.9rem;
+            transition: background 0.15s;
+        }
+        .help-dropdown a:hover {
+            background: rgba(0,0,0,0.05);
+            color: var(--vvp-info);
+        }
+        .help-dropdown a + a {
+            border-top: 1px solid #dee2e6;
+        }
+
+        /* Issuer external link (subtle, in utility area) */
+        .issuer-ext-link {
+            color: var(--vvp-muted);
+            text-decoration: none;
+            font-size: 0.85rem;
+            padding: 0.3rem 0.5rem;
+            border-radius: 4px;
+            transition: color 0.2s, background 0.2s;
+            white-space: nowrap;
+        }
+        .issuer-ext-link:hover {
+            color: var(--vvp-issuer-color);
+            background: rgba(0,0,0,0.05);
+        }
+        .issuer-ext-link .ext-icon {
+            font-size: 0.75rem;
+            margin-left: 2px;
         }
         .help-overlay {
             position: fixed;
@@ -195,12 +269,43 @@
             gap: 1rem;
             justify-content: center;
         }
-        @media (max-width: 768px) {
+        @media (max-width: 900px) {
             .site-header {
-                flex-direction: column;
-                align-items: flex-start;
+                flex-wrap: wrap;
                 gap: 0.5rem;
             }
+            .hamburger-btn {
+                display: block;
+                order: 1;
+            }
+            .header-brand {
+                order: 0;
+            }
+            .header-utility {
+                order: 2;
+                margin-left: auto;
+            }
+            .nav-links {
+                display: none !important;
+                width: 100%;
+                order: 3;
+                flex-direction: column;
+                align-items: stretch;
+                gap: 0.25rem;
+                padding-top: 0.5rem;
+                border-top: 1px solid var(--vvp-muted);
+            }
+            .site-header.nav-open .nav-links {
+                display: flex !important;
+            }
+            .site-header .nav-links a {
+                text-align: left;
+                padding: 0.6rem 1rem;
+                font-size: 0.9rem;
+                width: auto;
+            }
+        }
+        @media (max-width: 768px) {
             .error-page h1 {
                 font-size: 4rem;
             }
@@ -770,9 +875,16 @@
                     <a href="/verify">Verify</a>
                     <a href="/verify/explore">Explorer</a>
                     <a href="/ui/admin">Admin</a>
-                    <a href="https://vvp-issuer.rcnx.io" class="issuer-link" target="_blank">Issuer ↗</a>
-                    <button class="help-btn" onclick="showVerifierHelp()">? Help</button>
                 </nav>
+                <div class="header-utility">
+                    <div class="help-dropdown-wrap">
+                        <button class="help-trigger" onclick="toggleHelpDropdown(event)" aria-label="Help menu">?</button>
+                        <div class="help-dropdown" id="help-dropdown">
+                            <a href="#" onclick="event.preventDefault(); closeHelpDropdown(); showVerifierHelp();">Quick Reference</a>
+                        </div>
+                    </div>
+                    <a href="https://vvp-issuer.rcnx.io" target="_blank" rel="noopener" class="issuer-ext-link">Issuer <span class="ext-icon">↗</span></a>
+                </div>
             </div>
             <h1>{% block header %}VVP Verifier{% endblock %}</h1>
         </header>
@@ -832,7 +944,7 @@
 
         // Note: Graph visualization is now self-contained in credential_graph.html
 
-        // Navigation: mark active link based on current path
+        // Navigation: mark active link and add hamburger for mobile
         function initNavigation() {
             const path = window.location.pathname;
             document.querySelectorAll('.site-header .nav-links a').forEach(link => {
@@ -841,8 +953,31 @@
                     link.classList.add('active');
                 }
             });
+
+            // Add hamburger toggle for mobile
+            const header = document.querySelector('.site-header');
+            const nav = document.querySelector('.site-header .nav-links');
+            if (header && nav && !document.getElementById('hamburger-btn')) {
+                const btn = document.createElement('button');
+                btn.id = 'hamburger-btn';
+                btn.className = 'hamburger-btn';
+                btn.setAttribute('aria-label', 'Toggle navigation');
+                btn.innerHTML = '☰';
+                btn.addEventListener('click', () => header.classList.toggle('nav-open'));
+                header.insertBefore(btn, nav);
+            }
         }
         document.addEventListener('DOMContentLoaded', initNavigation);
+
+        // Help dropdown toggle
+        function toggleHelpDropdown(e) {
+            e.stopPropagation();
+            document.querySelector('.help-dropdown-wrap').classList.toggle('open');
+        }
+        function closeHelpDropdown() {
+            document.querySelector('.help-dropdown-wrap').classList.remove('open');
+        }
+        document.addEventListener('click', closeHelpDropdown);
 
         // Help modal for VVP Verifier
         function showVerifierHelp() {
