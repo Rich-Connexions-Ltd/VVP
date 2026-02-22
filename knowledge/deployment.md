@@ -34,7 +34,7 @@ The pipeline has separate jobs triggered by path filters:
 | `deploy-sip-redirect` | `services/sip-redirect/**`, `common/**` | PBX VM via `az vm run-command` |
 | `deploy-sip-verify` | `services/sip-verify/**`, `common/**` | PBX VM via `az vm run-command` |
 | `build-witness-image` + `deploy-witnesses` | `services/witness/**` | Azure Container Apps (3 witnesses) |
-| `deploy-pbx-config` | `services/pbx/config/**` | PBX VM FreeSWITCH dialplan |
+| `deploy-pbx-config` | `services/pbx/config/**` | PBX VM FreeSWITCH dialplan + directory + force-register-domain check |
 
 **Deploy ordering**: When both keri-agent and issuer change (e.g., `common/**` change), keri-agent deploys first. The issuer's `deploy-issuer` job depends on `deploy-keri-agent` completing successfully. This ensures the KERI Agent is healthy before the issuer starts routing to it.
 

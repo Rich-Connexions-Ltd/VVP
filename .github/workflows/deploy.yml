@@ -1579,24 +1579,102 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Deploy dialplan (single command)
+      - name: Deploy dialplan and directory (single command)
         run: |
           # Combine backup, deploy, and reload into a single VM command
           # This reduces conflicts with other az vm run-command operations
+          DIALPLAN=""
+          DIRECTORY=""
           if [ -f "services/pbx/config/public-sip.xml" ]; then
-            CONTENT=$(base64 -w0 "services/pbx/config/public-sip.xml")
-            echo "Deploying dialplan..."
+            DIALPLAN=$(base64 -w0 "services/pbx/config/public-sip.xml")
+          fi
+          if [ -f "services/pbx/config/directory-pbx.rcnx.io.xml" ]; then
+            DIRECTORY=$(base64 -w0 "services/pbx/config/directory-pbx.rcnx.io.xml")
+          fi
+          if [ -n "$DIALPLAN" ]; then
+            echo "Deploying dialplan + directory..."
             az vm run-command invoke \
               --resource-group VVP --name vvp-pbx \
               --command-id RunShellScript \
               --scripts "
                 set -e
+                # --- Dialplan ---
                 BACKUP_DIR=/etc/freeswitch/dialplan/backup
                 mkdir -p \$BACKUP_DIR
                 cp /etc/freeswitch/dialplan/public.xml \$BACKUP_DIR/public.xml.\$(date +%Y%m%d%H%M%S) 2>/dev/null || true
-                echo '$CONTENT' | base64 -d > /etc/freeswitch/dialplan/public.xml
+                echo '$DIALPLAN' | base64 -d > /etc/freeswitch/dialplan/public.xml
                 chown www-data:www-data /etc/freeswitch/dialplan/public.xml
+                echo 'Dialplan deployed'
+
+                # --- Directory (extension registration) ---
+                if [ -n '$DIRECTORY' ]; then
+                  cp /etc/freeswitch/directory/pbx.rcnx.io.xml \$BACKUP_DIR/directory.pbx.rcnx.io.xml.\$(date +%Y%m%d%H%M%S) 2>/dev/null || true
+                  echo '$DIRECTORY' | base64 -d > /etc/freeswitch/directory/pbx.rcnx.io.xml
+                  chown www-data:www-data /etc/freeswitch/directory/pbx.rcnx.io.xml
+                  echo 'Directory deployed'
+                fi
+
+                # --- Ensure force-register-domain is enabled ---
+                FORCE_COUNT=\$(sudo -u postgres psql -t fusionpbx -c \"SELECT count(*) FROM v_sip_profile_settings WHERE sip_profile_setting_name='force-register-domain' AND sip_profile_setting_value='pbx.rcnx.io' AND sip_profile_setting_enabled='true';\" 2>/dev/null | tr -d ' ')
+                if [ \"\$FORCE_COUNT\" = \"0\" ] || [ -z \"\$FORCE_COUNT\" ]; then
+                  echo 'WARNING: force-register-domain not enabled, fixing...'
+                  sudo -u postgres psql fusionpbx -c \"UPDATE v_sip_profile_settings SET sip_profile_setting_value='pbx.rcnx.io', sip_profile_setting_enabled='true' WHERE sip_profile_setting_name IN ('force-register-domain','force-register-db-domain','force-subscription-domain');\" 2>/dev/null
+                  rm -f /var/cache/fusionpbx/configuration.sofia.conf.*
+                  echo 'force-register-domain enabled and cache flushed'
+                fi
+
+                # --- Reload ---
                 fs_cli -x 'reloadxml'
-                echo 'Dialplan deployed and reloaded successfully'
+                echo 'FreeSWITCH configuration reloaded'
               "
           fi
+
+      - name: Validate PBX configuration
+        run: |
+          echo "Validating PBX configuration..."
+          az vm run-command invoke \
+            --resource-group VVP --name vvp-pbx \
+            --command-id RunShellScript \
+            --scripts "
+              ERRORS=0
+
+              # Check domain is recognized
+              DOMAIN_OK=\$(fs_cli -x 'user_exists id 1001 pbx.rcnx.io' 2>/dev/null)
+              if [ \"\$DOMAIN_OK\" = 'true' ]; then
+                echo 'PASS: Extension 1001 found in domain pbx.rcnx.io'
+              else
+                echo 'FAIL: Extension 1001 not found in domain pbx.rcnx.io'
+                ERRORS=1
+              fi
+
+              # Check directory file exists
+              if [ -f /etc/freeswitch/directory/pbx.rcnx.io.xml ]; then
+                echo 'PASS: Directory XML file exists'
+              else
+                echo 'FAIL: Directory XML file missing'
+                ERRORS=1
+              fi
+
+              # Check dialplan file exists
+              if [ -f /etc/freeswitch/dialplan/public.xml ]; then
+                echo 'PASS: Dialplan XML file exists'
+              else
+                echo 'FAIL: Dialplan XML file missing'
+                ERRORS=1
+              fi
+
+              # Check FreeSWITCH is running
+              if fs_cli -x 'status' >/dev/null 2>&1; then
+                echo 'PASS: FreeSWITCH is running'
+              else
+                echo 'FAIL: FreeSWITCH is not responding'
+                ERRORS=1
+              fi
+
+              if [ \$ERRORS -eq 0 ]; then
+                echo 'All PBX validations passed'
+              else
+                echo 'WARNING: Some PBX validations failed'
+                exit 1
+              fi
+            "

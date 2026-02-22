@@ -1,0 +1,79 @@
+<!--
+  FreeSWITCH Directory: pbx.rcnx.io domain
+
+  Defines SIP extensions for the VVP PBX. This static file provides a reliable
+  fallback when the FusionPBX Lua XML handler fails to serve directory entries.
+
+  Deployed by CI/CD to: /etc/freeswitch/directory/pbx.rcnx.io.xml
+
+  NOTE: The FusionPBX DB (v_extensions) is the source of truth for extension
+  passwords. If passwords change in FusionPBX, update this file to match.
+
+  Prerequisites on PBX:
+    - force-register-domain = pbx.rcnx.io (in FusionPBX SIP profile settings)
+    - force-register-db-domain = pbx.rcnx.io
+    Both must be enabled for the internal profile so clients registering with
+    the server IP are mapped to this domain.
+-->
+<include>
+  <domain name="pbx.rcnx.io">
+    <params>
+      <param name="dial-string" value="{^^:sip_invite_domain=${dialed_domain}:presence_id=${dialed_user}@${dialed_domain}}${sofia_contact(*/${dialed_user}@${dialed_domain})}"/>
+    </params>
+    <variables>
+      <variable name="record_stereo" value="true"/>
+      <variable name="transfer_fallback_extension" value="operator"/>
+    </variables>
+    <groups>
+      <group name="default">
+        <users>
+          <user id="1001">
+            <params>
+              <param name="password" value="vvptest1001"/>
+              <param name="vm-password" value="1001"/>
+            </params>
+            <variables>
+              <variable name="toll_allow" value="domestic,international,local"/>
+              <variable name="accountcode" value="1001"/>
+              <variable name="user_context" value="public"/>
+              <variable name="effective_caller_id_name" value="Extension 1001"/>
+              <variable name="effective_caller_id_number" value="1001"/>
+              <variable name="outbound_caller_id_name" value="VVP PBX"/>
+              <variable name="outbound_caller_id_number" value="+441923311001"/>
+            </variables>
+          </user>
+          <user id="1002">
+            <params>
+              <param name="password" value="vvptest1002"/>
+              <param name="vm-password" value="1002"/>
+            </params>
+            <variables>
+              <variable name="toll_allow" value="domestic,international,local"/>
+              <variable name="accountcode" value="1002"/>
+              <variable name="user_context" value="public"/>
+              <variable name="effective_caller_id_name" value="Extension 1002"/>
+              <variable name="effective_caller_id_number" value="1002"/>
+              <variable name="outbound_caller_id_name" value="VVP PBX"/>
+              <variable name="outbound_caller_id_number" value="+441923311002"/>
+            </variables>
+          </user>
+          <user id="1006">
+            <params>
+              <param name="password" value="vvptest1006"/>
+              <param name="vm-password" value="1006"/>
+            </params>
+            <variables>
+              <variable name="toll_allow" value="domestic,international,local"/>
+              <variable name="accountcode" value="1006"/>
+              <variable name="user_context" value="public"/>
+              <variable name="effective_caller_id_name" value="Extension 1006"/>
+              <variable name="effective_caller_id_number" value="1006"/>
+              <variable name="outbound_caller_id_name" value="VVP PBX"/>
+              <variable name="outbound_caller_id_number" value="+441923311006"/>
+            </variables>
+          </user>
+        </users>
+      </group>
+    </groups>
+  </domain>
+</include>
