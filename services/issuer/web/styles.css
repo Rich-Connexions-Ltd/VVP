@@ -75,18 +75,21 @@ h2 {
 
 .nav-links {
   display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
+  gap: 0.35rem;
+  flex-wrap: nowrap;
+  align-items: center;
 }
 
 .nav-links a {
   color: var(--vvp-primary);
   text-decoration: none;
-  padding: 0.5rem 1rem;
+  padding: 0.4rem 0.7rem;
   border-radius: 4px;
   background: white;
   box-shadow: 0 1px 2px rgba(0,0,0,0.1);
   transition: background 0.2s, color 0.2s;
+  font-size: 0.9rem;
+  white-space: nowrap;
 }
 
 .nav-links a:hover {
@@ -122,14 +125,112 @@ h2 {
   letter-spacing: 0.05em;
 }
 
-/* Cross-service link (styled with Verifier's blue) */
-.nav-links a.verifier-link {
-  background: var(--vvp-verifier-color);
-  color: white;
+/* Hamburger toggle (hidden on desktop, visible on mobile) */
+.hamburger-btn {
+  display: none;
+  background: none;
+  border: 1px solid var(--vvp-border);
+  border-radius: 4px;
+  font-size: 1.5rem;
+  line-height: 1;
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+  color: var(--vvp-dark);
 }
 
-.nav-links a.verifier-link:hover {
-  background: #0055aa;
+.hamburger-btn:hover {
+  background: var(--vvp-light);
+}
+
+/* Header utility area (right side: help dropdown + verifier link + auth) */
+.header-utility {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-left: auto;
+}
+
+/* Help dropdown */
+.help-dropdown-wrap {
+  position: relative;
+}
+
+.help-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid var(--vvp-border);
+  background: white;
+  color: var(--vvp-primary);
+  font-weight: 700;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.help-trigger:hover {
+  background: var(--vvp-light);
+  border-color: var(--vvp-primary);
+}
+
+.help-dropdown {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  background: white;
+  border: 1px solid var(--vvp-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+  min-width: 170px;
+  z-index: 1000;
+  overflow: hidden;
+}
+
+.help-dropdown-wrap.open .help-dropdown {
+  display: block;
+}
+
+.help-dropdown a {
+  display: block;
+  padding: 0.6rem 1rem;
+  color: var(--vvp-dark);
+  text-decoration: none;
+  font-size: 0.9rem;
+  transition: background 0.15s;
+}
+
+.help-dropdown a:hover {
+  background: var(--vvp-light);
+  color: var(--vvp-primary);
+}
+
+.help-dropdown a + a {
+  border-top: 1px solid var(--vvp-border);
+}
+
+/* Verifier external link (subtle, in utility area) */
+.verifier-ext-link {
+  color: var(--vvp-muted);
+  text-decoration: none;
+  font-size: 0.85rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: 4px;
+  transition: color 0.2s, background 0.2s;
+  white-space: nowrap;
+}
+
+.verifier-ext-link:hover {
+  color: var(--vvp-primary);
+  background: var(--vvp-light);
+}
+
+.verifier-ext-link .ext-icon {
+  font-size: 0.75rem;
+  margin-left: 2px;
 }
 
 /* ==========================================================================
@@ -640,26 +741,55 @@ tr.selected {
 /* ==========================================================================
    Responsive
    ========================================================================== */
-@media (max-width: 768px) {
-  body {
-    padding: 1rem;
-  }
-
+@media (max-width: 1150px) {
   .site-header {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 1rem;
+    flex-wrap: wrap;
+    gap: 0.5rem;
   }
 
+  /* Show hamburger when nav would overflow */
+  .hamburger-btn {
+    display: block;
+    order: 1;
+  }
+
+  .header-brand {
+    order: 0;
+  }
+
+  .header-utility {
+    order: 2;
+    margin-left: auto;
+  }
+
+  /* Collapse nav links by default */
   .nav-links {
+    display: none;
     width: 100%;
+    order: 3;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.25rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--vvp-border);
+  }
+
+  /* Show nav when hamburger toggled */
+  .site-header.nav-open .nav-links {
+    display: flex;
   }
 
   .nav-links a {
-    flex: 1;
-    text-align: center;
-    padding: 0.5rem;
+    text-align: left;
+    padding: 0.6rem 1rem;
     font-size: 0.9rem;
+    width: auto;
+  }
+}
+
+@media (max-width: 768px) {
+  body {
+    padding: 1rem;
   }
 
   .button-row {
@@ -677,7 +807,11 @@ tr.selected {
 
 @media (max-width: 480px) {
   .nav-links a {
-    padding: 0.4rem;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.85rem;
+  }
+
+  .verifier-ext-link {
     font-size: 0.8rem;
   }
 }
@@ -685,23 +819,7 @@ tr.selected {
 /* ==========================================================================
    Help Menu
    ========================================================================== */
-.help-btn {
-  background: var(--vvp-info);
-  color: white;
-  border: none;
-  padding: 0.5rem 1rem;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 1rem;
-  transition: background 0.2s;
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-}
-
-.help-btn:hover {
-  background: #138496;
-}
+/* Legacy .help-btn removed — replaced by .help-trigger + .help-dropdown */
 
 .help-modal {
   max-width: 700px;

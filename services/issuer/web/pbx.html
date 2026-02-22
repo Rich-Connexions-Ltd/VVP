@@ -324,8 +324,11 @@
     let currentConfig = null;
 
     async function init() {
-      const authOk = await checkAuthStatus();
-      if (!authOk) return;
+      const session = await checkAuthStatus();
+      if (!session.authenticated) {
+        window.location.href = '/login?redirect=' + encodeURIComponent(window.location.pathname);
+        return;
+      }
       await loadConfig();
       await loadOrganizations();
       renderExtensionTable();
