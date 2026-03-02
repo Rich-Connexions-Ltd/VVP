@@ -923,7 +923,7 @@ jobs:
   # Run selective integration tests after deployment based on which services changed.
   post-deployment-tests:
     needs: [changes, deploy-verifier, deploy-issuer, deploy-keri-agent]
-    if: (needs.changes.outputs.verifier == 'true' || needs.changes.outputs.issuer == 'true' || needs.changes.outputs.keri-agent == 'true') && !failure()
+    if: always() && !failure() && (needs.changes.outputs.verifier == 'true' || needs.changes.outputs.issuer == 'true' || needs.changes.outputs.keri-agent == 'true')
     runs-on: ubuntu-latest
 
     env:

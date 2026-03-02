@@ -226,20 +226,78 @@ jobs:
         run: |
           pip install httpx aiohttp pysodium azure-storage-blob
 
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Wait for services to be ready
+        env:
+          VVP_ISSUER_URL: https://vvp-issuer.rcnx.io
+          VVP_VERIFIER_URL: https://vvp-verifier.rcnx.io
+        run: |
+          echo "Waiting for issuer and verifier to be ready..."
+          for i in {1..30}; do
+            ISSUER_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$VVP_ISSUER_URL/healthz" || echo "000")
+            VERIFIER_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$VVP_VERIFIER_URL/healthz" || echo "000")
+            echo "Attempt $i/30: Issuer=$ISSUER_STATUS, Verifier=$VERIFIER_STATUS"
+            if [ "$ISSUER_STATUS" = "200" ] && [ "$VERIFIER_STATUS" = "200" ]; then
+              echo "Both services are ready"
+              break
+            fi
+            sleep 10
+          done
 
-      - name: Run Azure integration tests
+      - name: Bootstrap test org (self-healing)
+        id: bootstrap
+        env:
+          VVP_SYSTEM_ADMIN_KEY: ${{ secrets.VVP_SYSTEM_ADMIN_KEY }}
+        run: |
+          # Ensure ACME Inc org and API key exist. Uses --skip-reinit so it never
+          # wipes production data — finds existing org or creates one if absent.
+          python3 scripts/bootstrap-issuer.py \
+            --url "https://vvp-issuer.rcnx.io" \
+            --admin-key "$VVP_SYSTEM_ADMIN_KEY" \
+            --org-name "ACME Inc" \
+            --skip-reinit \
+            --json-file bootstrap_summary.json
+          ORG_ID=$(python3 -c "import json; d=json.load(open('bootstrap_summary.json')); print(d['organization']['id'])")
+          API_KEY=$(python3 -c "import json; d=json.load(open('bootstrap_summary.json')); print(d['org_api_key']['raw_key'])")
+          echo "org_id=$ORG_ID" >> $GITHUB_OUTPUT
+          echo "api_key=$API_KEY" >> $GITHUB_OUTPUT
+          echo "Bootstrap: org_id=$ORG_ID"
+
+      - name: Smoke tests (fast critical-path check)
+        id: smoke_tests
         env:
           VVP_TEST_MODE: azure
           VVP_ISSUER_URL: https://vvp-issuer.rcnx.io
           VVP_VERIFIER_URL: https://vvp-verifier.rcnx.io
-          VVP_TEST_API_KEY: ${{ secrets.VVP_ADMIN_API_KEY }}
-          VVP_TEST_ORG_ID: ${{ secrets.VVP_TEST_ORG_ID }}
+          VVP_TEST_API_KEY: ${{ steps.bootstrap.outputs.api_key }}
+          VVP_TEST_ORG_ID: ${{ steps.bootstrap.outputs.org_id }}
+          VVP_TEST_ADMIN_KEY: ${{ secrets.VVP_SYSTEM_ADMIN_KEY }}
+        run: |
+          set +e
+          set -o pipefail
+          python -m pytest tests/integration/ \
+            -v \
+            --tb=short \
+            -x \
+            -m "integration and smoke" \
+            --ignore=tests/integration/benchmarks/ \
+            2>&1 | tee smoke_output.txt
+          echo "exit_code=$?" >> $GITHUB_OUTPUT
+
+      - name: Fail if smoke tests failed
+        if: steps.smoke_tests.outputs.exit_code != '0'
+        run: |
+          echo "##[error]Smoke tests FAILED — see smoke_output.txt for details"
+          cat smoke_output.txt | tail -30 || true
+          exit 1
+
+      - name: Full Azure integration tests
+        if: steps.smoke_tests.outputs.exit_code == '0'
+        env:
+          VVP_TEST_MODE: azure
+          VVP_ISSUER_URL: https://vvp-issuer.rcnx.io
+          VVP_VERIFIER_URL: https://vvp-verifier.rcnx.io
+          VVP_TEST_API_KEY: ${{ steps.bootstrap.outputs.api_key }}
+          VVP_TEST_ORG_ID: ${{ steps.bootstrap.outputs.org_id }}
           VVP_TEST_ADMIN_KEY: ${{ secrets.VVP_SYSTEM_ADMIN_KEY }}
           VVP_AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
           VVP_BENCHMARK_OUTPUT_DIR: ${{ github.workspace }}/benchmark-output
@@ -248,7 +306,8 @@ jobs:
           python -m pytest tests/integration/ \
             -v \
             --tb=short \
-            -m "integration" \
+            -m "integration and not smoke" \
+            --ignore=tests/integration/benchmarks/ \
             --junitxml=azure-test-results.xml
 
       - name: Upload Azure test results
@@ -256,7 +315,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: azure-integration-test-results
-          path: azure-test-results.xml
+          path: |
+            smoke_output.txt
+            azure-test-results.xml
 
       - name: Upload Azure benchmark results
         if: always()
