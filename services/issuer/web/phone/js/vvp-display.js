@@ -38,34 +38,49 @@ const VVPDisplay = {
    * @returns {Object} { brand_name, brand_logo, status, vetter_status, caller_number }
    */
   extractFromSIPSession(session) {
-    const headers = session.request?.headers || {};
+    const request = session.request;
+    const headers = request?.headers || {};
 
-    const get = (name) => {
-      // SIP.js stores headers keyed by their original casing
-      const vals = headers[name] || headers[name.toLowerCase()];
-      if (!vals) return null;
-      const raw = Array.isArray(vals) ? (vals[0]?.raw || vals[0]) : vals;
-      if (!raw) return null;
+    // SIP.js stores headers under unpredictable casing — iterate all
+    // and match case-insensitively (proven pattern from existing phone)
+    let brandName = null;
+    let brandLogo = null;
+    let status = null;
+    let vetterStatus = null;
+
+    for (const [name, values] of Object.entries(headers)) {
+      const raw = Array.isArray(values) ? (values[0]?.raw || values[0]) : values;
+      if (!raw) continue;
+
+      let decoded;
       try {
-        return decodeURIComponent(String(raw).replace(/\+/g, ' '));
+        decoded = decodeURIComponent(String(raw).replace(/\+/g, ' '));
       } catch {
-        return String(raw);
+        decoded = String(raw);
       }
-    };
 
-    const brandName = get('X-VVP-Brand-Name')
-      || session.request?.from?.displayName
-      || session.request?.from?.uri?.user
-      || 'Unknown Caller';
+      const lower = name.toLowerCase();
+      if (lower === 'x-vvp-brand-name')    brandName = decoded;
+      else if (lower === 'x-vvp-brand-logo')  brandLogo = decoded;
+      else if (lower === 'x-vvp-status')       status = decoded.toUpperCase();
+      else if (lower === 'x-vvp-vetter-status') vetterStatus = decoded.toUpperCase();
+    }
 
-    const rawStatus = (get('X-VVP-Status') || 'UNKNOWN').toUpperCase();
+    // Fallback for brand name: From header display name, then URI user
+    if (!brandName) {
+      brandName = request?.from?.displayName
+        || request?.from?.uri?.user
+        || 'Unknown Caller';
+    }
+
+    if (!status) status = 'UNKNOWN';
 
     return {
       brand_name:    brandName,
-      brand_logo:    get('X-VVP-Brand-Logo') || this.placeholderLogo,
-      status:        this.statusConfig[rawStatus] ? rawStatus : 'UNKNOWN',
-      vetter_status: get('X-VVP-Vetter-Status')?.toUpperCase() || null,
-      caller_number: session.request?.from?.uri?.user || null,
+      brand_logo:    brandLogo || this.placeholderLogo,
+      status:        this.statusConfig[status] ? status : 'UNKNOWN',
+      vetter_status: vetterStatus || null,
+      caller_number: request?.from?.uri?.user || null,
     };
   },
 };
