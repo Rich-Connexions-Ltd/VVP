@@ -46,17 +46,18 @@
         <!-- SIP Timer B: max wait for INVITE transaction -->
         <action application="set" data="sip_invite_timeout=65"/>
         <!-- Map extension to test TN: dest from dialed digits -->
-        <!-- Use origination_caller_id_number if provided, fall back to +441923311000 -->
         <action application="set" data="loopback_dest_tn=+44192331$1"/>
-        <action application="set" data="effective_caller_id_number=${origination_caller_id_number:+441923311000}"/>
-        <action application="set" data="effective_caller_id_name=${origination_caller_id_name:VVP Loopback}"/>
+        <!-- IMPORTANT: FreeSWITCH ${var:text} is SUBSTRING, not default-value syntax! -->
+        <!-- Use explicit +441923311000 (ACME Inc mapped TN) as From for signing service. -->
+        <!-- The originate command can override via origination_caller_id_number. -->
+        <action application="set" data="effective_caller_id_number=+441923311000"/>
+        <action application="set" data="effective_caller_id_name=VVP Loopback"/>
         <!-- Route signing 302 through redirected context (not directly to Contact URI) -->
         <action application="set" data="sip_redirect_context=redirected"/>
-        <!-- Route through signing service with org API key -->
-        <!-- Use vvp_test_api_key channel var if set (for per-org testing), else use default ACME Inc key -->
-        <action application="export" data="nolocal:sip_h_X-VVP-API-Key=${vvp_test_api_key:KyGs1suZJR0dQAL0kymkhSvSeJQo4Dh11eWE6YrQXTs}"/>
+        <!-- Route through signing service with org API key + correct From TN -->
+        <!-- API key and caller ID must be in bridge [endpoint vars] to appear in B-leg INVITE -->
         <action application="log" data="INFO [VVP] Routing to signing service: ${loopback_dest_tn}"/>
-        <action application="bridge" data="sofia/external/${loopback_dest_tn}@127.0.0.1:5070"/>
+        <action application="bridge" data="[sip_h_X-VVP-API-Key=KyGs1suZJR0dQAL0kymkhSvSeJQo4Dh11eWE6YrQXTs,origination_caller_id_number=+441923311000]sofia/external/${loopback_dest_tn}@127.0.0.1:5070"/>
       </condition>
     </extension>
 

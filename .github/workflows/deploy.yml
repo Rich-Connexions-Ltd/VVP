@@ -1678,3 +1678,77 @@ jobs:
                 exit 1
               fi
             "
+
+      - name: E2E VVP call smoke test
+        run: |
+          echo "Running E2E VVP call smoke test after dialplan deploy..."
+          RESULT=$(az vm run-command invoke \
+            --resource-group VVP --name vvp-pbx \
+            --command-id RunShellScript \
+            --scripts "
+              # Record baseline counts
+              BEFORE_OK=\$(journalctl -u vvp-sip-redirect --no-pager 2>/dev/null | grep -c 'invite.completed' || echo 0)
+              BEFORE_FAIL=\$(journalctl -u vvp-sip-redirect --no-pager 2>/dev/null | grep -cE 'invite\.(rejected|tn_not_found|error)' || echo 0)
+
+              # Originate through dialplan — no pre-set caller ID so it exercises
+              # the same path as a real WebRTC call (dialplan must handle API key
+              # and From TN via bridge endpoint vars)
+              fs_cli -x 'bgapi originate {origination_caller_id_name=CI-SmokeTest}loopback/71006/public &park()' 2>/dev/null
+
+              # Wait for signing (~5-20s) + verification (~1-3s) chain
+              sleep 20
+
+              # Check results
+              AFTER_OK=\$(journalctl -u vvp-sip-redirect --no-pager 2>/dev/null | grep -c 'invite.completed' || echo 0)
+              AFTER_FAIL=\$(journalctl -u vvp-sip-redirect --no-pager 2>/dev/null | grep -cE 'invite\.(rejected|tn_not_found|error)' || echo 0)
+              OK_DELTA=\$(( AFTER_OK - BEFORE_OK ))
+              FAIL_DELTA=\$(( AFTER_FAIL - BEFORE_FAIL ))
+
+              # Get last audit entry for diagnostics
+              LAST_ENTRY=\$(journalctl -u vvp-sip-redirect -n 30 --no-pager 2>/dev/null | grep 'AUDIT:' | tail -1 || echo 'NO_LOGS')
+
+              # Cleanup
+              fs_cli -x 'hupall NORMAL_CLEARING' 2>/dev/null || true
+
+              if [ \$OK_DELTA -gt 0 ] && [ \$FAIL_DELTA -eq 0 ]; then
+                echo 'PASS: VVP signing succeeded after dialplan deploy'
+                echo \"\$LAST_ENTRY\"
+                exit 0
+              elif [ \$OK_DELTA -gt 0 ] && [ \$FAIL_DELTA -gt 0 ]; then
+                # Mixed results — check last entry
+                if echo \"\$LAST_ENTRY\" | grep -q 'invite.completed'; then
+                  echo 'PASS: VVP signing succeeded (with prior failures cleared)'
+                  echo \"\$LAST_ENTRY\"
+                  exit 0
+                else
+                  echo 'FAIL: Last signing entry was a failure'
+                  echo \"\$LAST_ENTRY\"
+                  exit 1
+                fi
+              elif [ \$FAIL_DELTA -gt 0 ]; then
+                echo \"FAIL: VVP signing rejected (\$FAIL_DELTA failures, 0 completions)\"
+                echo \"\$LAST_ENTRY\"
+                exit 1
+              else
+                echo 'FAIL: No signing activity detected (service may be down)'
+                journalctl -u vvp-sip-redirect -n 5 --no-pager 2>/dev/null || true
+                exit 1
+              fi
+            ")
+
+          # az vm run-command always exits 0; check the script output for PASS/FAIL
+          echo "$RESULT" | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          msg = data['value'][0]['message']
+          print(msg)
+          # Check for FAIL in stdout
+          stdout = msg.split('[stdout]')[1].split('[stderr]')[0] if '[stdout]' in msg else ''
+          if 'FAIL:' in stdout:
+              sys.exit(1)
+          elif 'PASS:' in stdout:
+              sys.exit(0)
+          else:
+              print('WARNING: Could not determine E2E call result')
+              sys.exit(1)
+          "

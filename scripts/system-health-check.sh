@@ -920,26 +920,36 @@ _run_freeswitch_call_test() {
     call_output=$(pbx_run "
         # Record the invite.completed count before originating
         BEFORE_COUNT=\$(journalctl -u vvp-sip-redirect --no-pager 2>/dev/null | grep -c 'invite.completed' || echo '0')
+        BEFORE_FAIL=\$(journalctl -u vvp-sip-redirect --no-pager 2>/dev/null | grep -cE 'invite\.(rejected|tn_not_found|error)' || echo '0')
         VERIFY_BEFORE=\$(journalctl -u vvp-sip-verify --no-pager 2>/dev/null | grep -c 'Verification complete' || echo '0')
 
         # Originate through the loopback/public dialplan context for full 3-stage flow:
         # FreeSWITCH → sip-redirect:5070 (signing) → redirected → sip-verify:5071 (verification) → verified → delivery
-        # The public context's vvp-loopback-outbound extension adds the API key and sets sip_redirect_context.
-        ORIGINATE_RESULT=\$(fs_cli -x \"bgapi originate {origination_caller_id_number=+441923311000,origination_caller_id_name=VVP-HealthCheck}loopback/71006/public &park()\" 2>/dev/null) || ORIGINATE_RESULT='ORIGINATE_FAILED'
+        # IMPORTANT: Do NOT pre-set origination_caller_id_number — the dialplan must handle
+        # From TN and API key via bridge endpoint vars (same path as real WebRTC calls).
+        # Pre-setting it here would mask dialplan bugs like broken \${var:text} substring syntax.
+        ORIGINATE_RESULT=\$(fs_cli -x \"bgapi originate {origination_caller_id_name=VVP-HealthCheck}loopback/71006/public &park()\" 2>/dev/null) || ORIGINATE_RESULT='ORIGINATE_FAILED'
 
         # Wait for full signing (~3s) + verification (~1s) chain
-        sleep 12
+        sleep 15
 
         # Count completed invites after the call — delta proves signing happened
         AFTER_COUNT=\$(journalctl -u vvp-sip-redirect --no-pager 2>/dev/null | grep -c 'invite.completed' || echo '0')
         DELTA=\$(( AFTER_COUNT - BEFORE_COUNT ))
+
+        # Count signing failures — delta > 0 means our call may have failed
+        AFTER_FAIL=\$(journalctl -u vvp-sip-redirect --no-pager 2>/dev/null | grep -cE 'invite\.(rejected|tn_not_found|error)' || echo '0')
+        FAIL_DELTA=\$(( AFTER_FAIL - BEFORE_FAIL ))
+
+        # Get the last signing audit entry to check actual result
+        LAST_SIGNING=\$(journalctl -u vvp-sip-redirect -n 30 --no-pager 2>/dev/null | grep 'AUDIT:' | tail -1 || echo '')
 
         # Count verification completions — delta proves verification happened
         VERIFY_AFTER=\$(journalctl -u vvp-sip-verify --no-pager 2>/dev/null | grep -c 'Verification complete' || echo '0')
         VERIFY_DELTA=\$(( VERIFY_AFTER - VERIFY_BEFORE ))
 
         # Get recent signing logs as evidence
-        SIP_LOGS=\$(journalctl -u vvp-sip-redirect -n 50 --no-pager 2>/dev/null | grep -E 'invite\.(received|completed)|Monitor event' | tail -10 || echo 'NO_LOGS')
+        SIP_LOGS=\$(journalctl -u vvp-sip-redirect -n 50 --no-pager 2>/dev/null | grep -E 'invite\.(received|completed|rejected|tn_not_found)|Monitor event' | tail -10 || echo 'NO_LOGS')
 
         # Get recent verification logs as evidence
         VERIFY_LOGS=\$(journalctl -u vvp-sip-verify -n 50 --no-pager 2>/dev/null | grep -E 'Verification complete|Verifier response|Monitor event' | tail -10 || echo 'NO_LOGS')
@@ -962,6 +972,8 @@ _run_freeswitch_call_test() {
         echo '=== CALL_TEST_RESULTS ==='
         echo \"originate:\$ORIGINATE_RESULT\"
         echo \"signing_delta:\$DELTA\"
+        echo \"signing_fail_delta:\$FAIL_DELTA\"
+        echo \"last_signing:\$LAST_SIGNING\"
         echo \"verify_delta:\$VERIFY_DELTA\"
         echo '=== END ==='
     " 2>/dev/null) || {
@@ -978,9 +990,11 @@ _run_freeswitch_call_test() {
     fi
 
     # Parse results
-    local originate_result signing_delta verify_delta
+    local originate_result signing_delta signing_fail_delta last_signing verify_delta
     originate_result=$(echo "$call_output" | grep "^originate:" | cut -d: -f2-)
     signing_delta=$(echo "$call_output" | grep "^signing_delta:" | cut -d: -f2)
+    signing_fail_delta=$(echo "$call_output" | grep "^signing_fail_delta:" | cut -d: -f2)
+    last_signing=$(echo "$call_output" | grep "^last_signing:" | cut -d: -f2-)
     verify_delta=$(echo "$call_output" | grep "^verify_delta:" | cut -d: -f2)
 
     # Check if originate succeeded (should contain a UUID or +OK)
@@ -997,10 +1011,29 @@ _run_freeswitch_call_test() {
         failed=1
     fi
 
-    # Check if VVP signing flow was triggered (delta > 0 means new invite.completed entries)
+    # Check VVP signing result — verify the call actually succeeded, not just that
+    # signing was triggered. This catches dialplan bugs (wrong API key, missing headers)
+    # that would produce invite.rejected/invite.tn_not_found instead of invite.completed.
     if [ -n "$signing_delta" ] && [ "$signing_delta" -gt 0 ] 2>/dev/null; then
-        log_pass "VVP signing flow triggered ($signing_delta new invite.completed entries)"
-        record_result "E2E" "vvp_signing_flow" "pass" "$signing_delta signing events"
+        # Signing completed — but also check that the last entry wasn't a failure
+        if [ -n "$signing_fail_delta" ] && [ "$signing_fail_delta" -gt 0 ] 2>/dev/null; then
+            # Both success and failure deltas increased — check which was last
+            if echo "$last_signing" | grep -q 'invite.completed'; then
+                log_pass "VVP signing succeeded ($signing_delta completed, last entry=invite.completed)"
+                record_result "E2E" "vvp_signing_flow" "pass" "$signing_delta signing events"
+            else
+                # Last entry was a failure — extract reason
+                local fail_reason
+                fail_reason=$(echo "$last_signing" | grep -oP '"details":\s*\{[^}]*\}' | head -1)
+                log_fail "VVP signing failed — last entry was not invite.completed"
+                log_fail "  Failure details: ${fail_reason:-unknown}"
+                record_result "E2E" "vvp_signing_flow" "fail" "Signing rejected: $fail_reason"
+                failed=1
+            fi
+        else
+            log_pass "VVP signing succeeded ($signing_delta new invite.completed entries)"
+            record_result "E2E" "vvp_signing_flow" "pass" "$signing_delta signing events"
+        fi
 
         # Show relevant signing log lines
         if [ "$JSON_OUTPUT" = false ]; then
@@ -1010,9 +1043,18 @@ _run_freeswitch_call_test() {
                 fi
             done
         fi
+    elif [ -n "$signing_fail_delta" ] && [ "$signing_fail_delta" -gt 0 ] 2>/dev/null; then
+        # No completions but failures detected — signing was reached but rejected
+        local fail_reason
+        fail_reason=$(echo "$last_signing" | grep -oP '"details":\s*\{[^}]*\}' | head -1)
+        log_fail "VVP signing rejected ($signing_fail_delta failures, 0 completions)"
+        log_fail "  Last entry: ${last_signing:-none}"
+        log_fail "  Failure details: ${fail_reason:-unknown}"
+        record_result "E2E" "vvp_signing_flow" "fail" "Signing rejected: $fail_reason"
+        failed=1
     else
-        log_fail "No VVP signing evidence — signing_delta=${signing_delta:-empty}"
-        record_result "E2E" "vvp_signing_flow" "fail" "No new invite.completed entries"
+        log_fail "No VVP signing evidence — signing_delta=${signing_delta:-empty}, fail_delta=${signing_fail_delta:-empty}"
+        record_result "E2E" "vvp_signing_flow" "fail" "No signing log entries at all"
         failed=1
     fi
 
