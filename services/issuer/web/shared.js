@@ -18,6 +18,7 @@ const NAV_LINKS = [
   { href: '/ui/vvp',         label: 'VVP Headers' },
   { href: '/ui/tn-mappings', label: 'TN Mappings' },
   { href: '/ui/pbx',         label: 'PBX' },
+  { href: '/phone',          label: 'Phone' },
   { href: '/ui/admin',       label: 'Admin' },
   { href: '/ui/vetter',     label: 'Vetter Certs', hidden: true },
   { href: '/organizations/ui', label: 'Organizations', hidden: true },

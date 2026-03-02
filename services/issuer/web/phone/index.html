@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>VVP Phone</title>
+
+  <!-- PWA -->
+  <link rel="manifest" href="/static/phone/manifest.json">
+  <meta name="theme-color" content="#2a9d8f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="apple-touch-icon" href="/static/phone/img/icon-192.png">
+
+  <!-- Styles -->
+  <link rel="stylesheet" href="/static/phone/css/phone.css">
+</head>
+<body>
+
+  <!-- ================================================================== -->
+  <!-- Screen: Login                                                      -->
+  <!-- ================================================================== -->
+  <div id="screen-login" class="screen screen-login active">
+    <div class="login-card">
+      <div class="login-logo">
+        <img src="/static/phone/img/vvp-logo-placeholder.svg" alt="VVP" width="72" height="72">
+      </div>
+      <h1>VVP Phone</h1>
+      <p class="login-subtitle">Select your extension to connect</p>
+
+      <div id="login-error" class="login-error"></div>
+
+      <div class="form-group">
+        <label for="ext-select">Extension</label>
+        <select id="ext-select">
+          <option value="1001">1001</option>
+          <option value="1002">1002</option>
+          <option value="1003">1003</option>
+          <option value="1004">1004</option>
+          <option value="1005">1005</option>
+          <option value="1006">1006</option>
+          <option value="1007">1007</option>
+          <option value="1008">1008</option>
+          <option value="1009">1009</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" placeholder="SIP password" autocomplete="current-password">
+      </div>
+
+      <div class="form-group form-check">
+        <input type="checkbox" id="remember" checked>
+        <label for="remember">Remember me</label>
+      </div>
+
+      <button id="btn-connect" class="btn btn-connect">Connect</button>
+    </div>
+  </div>
+
+
+  <!-- ================================================================== -->
+  <!-- Screen: Dialer                                                     -->
+  <!-- ================================================================== -->
+  <div id="screen-dialer" class="screen screen-dialer">
+
+    <!-- Header -->
+    <div class="dialer-header">
+      <img src="/static/phone/img/vvp-logo-placeholder.svg" alt="VVP" class="dialer-logo" width="32" height="32">
+      <div class="dialer-title">
+        <span class="label">VVP Phone</span>
+        <span class="ext-label" id="ext-display">Ext 1001</span>
+      </div>
+      <div id="connection-indicator" class="indicator connected"></div>
+    </div>
+
+    <!-- Dial Input -->
+    <input type="tel" id="dial-input" class="dial-input" placeholder="Enter number" readonly>
+
+    <!-- Dial Pad -->
+    <div class="dial-pad">
+      <button class="dial-key" data-digit="1">
+        <span class="digit">1</span>
+        <span class="letters">&nbsp;</span>
+      </button>
+      <button class="dial-key" data-digit="2">
+        <span class="digit">2</span>
+        <span class="letters">ABC</span>
+      </button>
+      <button class="dial-key" data-digit="3">
+        <span class="digit">3</span>
+        <span class="letters">DEF</span>
+      </button>
+      <button class="dial-key" data-digit="4">
+        <span class="digit">4</span>
+        <span class="letters">GHI</span>
+      </button>
+      <button class="dial-key" data-digit="5">
+        <span class="digit">5</span>
+        <span class="letters">JKL</span>
+      </button>
+      <button class="dial-key" data-digit="6">
+        <span class="digit">6</span>
+        <span class="letters">MNO</span>
+      </button>
+      <button class="dial-key" data-digit="7">
+        <span class="digit">7</span>
+        <span class="letters">PQRS</span>
+      </button>
+      <button class="dial-key" data-digit="8">
+        <span class="digit">8</span>
+        <span class="letters">TUV</span>
+      </button>
+      <button class="dial-key" data-digit="9">
+        <span class="digit">9</span>
+        <span class="letters">WXYZ</span>
+      </button>
+      <button class="dial-key" data-digit="*">
+        <span class="digit">*</span>
+        <span class="letters">&nbsp;</span>
+      </button>
+      <button class="dial-key" data-digit="0">
+        <span class="digit">0</span>
+        <span class="letters">+</span>
+      </button>
+      <button class="dial-key" data-digit="#">
+        <span class="digit">#</span>
+        <span class="letters">&nbsp;</span>
+      </button>
+    </div>
+
+    <!-- Dial Actions -->
+    <div class="dial-actions">
+      <button id="btn-backspace" class="btn-icon" aria-label="Backspace">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 4H8l-7 8 7 8h13a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"/>
+          <line x1="18" y1="9" x2="12" y2="15"/>
+          <line x1="12" y1="9" x2="18" y2="15"/>
+        </svg>
+      </button>
+      <button id="btn-call" class="btn-call" aria-label="Call">
+        <svg viewBox="0 0 24 24" fill="white">
+          <path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Quick Dial -->
+    <div class="quick-dial">
+      <span class="quick-label">Quick:</span>
+      <button class="quick-chip" data-number="71006">71006 VVP Test</button>
+      <button class="quick-chip" data-number="1001">1001</button>
+      <button class="quick-chip" data-number="1002">1002</button>
+      <button class="quick-chip" data-number="1006">1006</button>
+    </div>
+
+    <!-- Footer -->
+    <div class="dialer-footer">
+      <span class="status-text" id="status-text">Ready</span>
+      <button id="btn-disconnect" class="btn-text-danger">Disconnect</button>
+    </div>
+  </div>
+
+
+  <!-- ================================================================== -->
+  <!-- Overlay: Incoming / Outgoing / In-Call                             -->
+  <!-- ================================================================== -->
+  <div id="call-overlay" class="call-overlay">
+    <div class="call-avatar" id="call-avatar">
+      <img id="call-logo" src="/static/phone/img/vvp-logo-placeholder.svg" alt="" width="96" height="96">
+    </div>
+
+    <div class="call-brand-name" id="call-brand-name">Unknown Caller</div>
+
+    <div id="call-status-badge" class="call-status-badge unknown">
+      <span class="badge-icon">&mdash;</span> Unknown
+    </div>
+
+    <div id="call-vetter-badge" class="call-vetter-badge" style="display:none;"></div>
+
+    <div class="call-number" id="call-number"></div>
+    <div class="call-label" id="call-label">Incoming call</div>
+    <div class="call-duration" id="call-duration" style="display:none;">00:00</div>
+
+    <div class="call-actions" id="call-actions">
+      <button id="btn-decline" class="call-btn call-btn-decline" aria-label="Decline">
+        <svg viewBox="0 0 24 24" fill="white">
+          <path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08a.956.956 0 0 1-.01-1.36c3.36-3.24 7.78-5.14 12.68-5.14 4.85 0 9.26 1.86 12.61 5.07.39.38.39 1 .01 1.37l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.1-.7-.28-.79-.74-1.69-1.36-2.67-1.85-.33-.16-.56-.5-.56-.9v-3.1C17.15 9.25 15.6 9 14 9h-2z"/>
+        </svg>
+      </button>
+      <button id="btn-accept" class="call-btn call-btn-accept" aria-label="Accept">
+        <svg viewBox="0 0 24 24" fill="white">
+          <path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+
+  <!-- Audio Elements -->
+  <audio id="remote-audio" autoplay></audio>
+
+
+  <!-- Scripts -->
+  <script src="https://cdn.jsdelivr.net/npm/sip.js@0.15.11/dist/sip.min.js"></script>
+  <script src="/static/phone/js/vvp-display.js"></script>
+  <script src="/static/phone/js/ui.js"></script>
+  <script src="/static/phone/js/app.js"></script>
+
+  <!-- Service Worker -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/phone/sw.js')
+        .then(reg => console.log('[SW] Registered:', reg.scope))
+        .catch(err => console.error('[SW] Failed:', err));
+    }
+  </script>
+
+</body>
+</html>

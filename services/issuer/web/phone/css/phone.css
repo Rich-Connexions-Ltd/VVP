@@ -1,0 +1,795 @@
+/**
+ * VVP Phone PWA - Mobile-First Styles
+ *
+ * Three screens: Login, Dialer, Call Overlay (incoming/outgoing/in-call)
+ * Android-style incoming call UI with VVP brand verification display
+ */
+
+/* ========================================================================
+   CSS Variables
+   ======================================================================== */
+
+:root {
+  --vvp-primary: #2a9d8f;
+  --vvp-primary-dark: #21867a;
+  --vvp-bg: #f8faf9;
+  --vvp-text: #264653;
+  --vvp-text-light: #6c757d;
+  --vvp-border: #d4e6e1;
+  --vvp-success: #28a745;
+  --vvp-danger: #dc3545;
+  --vvp-warning: #ffc107;
+  --vvp-muted: #6c757d;
+
+  /* Safe area insets for notched devices */
+  --sai-top: env(safe-area-inset-top, 0px);
+  --sai-bottom: env(safe-area-inset-bottom, 0px);
+  --sai-left: env(safe-area-inset-left, 0px);
+  --sai-right: env(safe-area-inset-right, 0px);
+}
+
+
+/* ========================================================================
+   Reset & Base
+   ======================================================================== */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  background: var(--vvp-bg);
+  color: var(--vvp-text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+
+/* ========================================================================
+   Screen Management
+   ======================================================================== */
+
+.screen {
+  display: none;
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  inset: 0;
+}
+
+.screen.active {
+  display: flex;
+  flex-direction: column;
+}
+
+
+/* ========================================================================
+   Login Screen
+   ======================================================================== */
+
+.screen-login {
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  padding-top: calc(1.5rem + var(--sai-top));
+  padding-bottom: calc(1.5rem + var(--sai-bottom));
+  background: linear-gradient(135deg, #f8faf9 0%, #e8f0ed 100%);
+}
+
+.login-card {
+  width: 100%;
+  max-width: 360px;
+  background: white;
+  border-radius: 12px;
+  padding: 2rem 1.5rem;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+  border-top: 3px solid var(--vvp-primary);
+}
+
+.login-logo {
+  text-align: center;
+  margin-bottom: 1rem;
+}
+
+.login-logo img {
+  width: 72px;
+  height: 72px;
+}
+
+.login-card h1 {
+  text-align: center;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--vvp-text);
+  margin-bottom: 0.25rem;
+}
+
+.login-subtitle {
+  text-align: center;
+  font-size: 0.8125rem;
+  color: var(--vvp-text-light);
+  margin-bottom: 1.5rem;
+}
+
+.form-group {
+  margin-bottom: 1rem;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 0.375rem;
+  font-weight: 600;
+  font-size: 0.8125rem;
+  color: var(--vvp-text);
+}
+
+.form-group select,
+.form-group input[type="password"],
+.form-group input[type="text"] {
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid var(--vvp-border);
+  border-radius: 6px;
+  font-size: 1rem;
+  font-family: inherit;
+  color: var(--vvp-text);
+  background: #fff;
+  appearance: none;
+  -webkit-appearance: none;
+  transition: border-color 0.2s;
+}
+
+.form-group select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2 4l4 4 4-4' stroke='%236c757d' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  padding-right: 2.5rem;
+}
+
+.form-group input:focus,
+.form-group select:focus {
+  outline: none;
+  border-color: var(--vvp-primary);
+  box-shadow: 0 0 0 3px rgba(42, 157, 143, 0.15);
+}
+
+.form-check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.form-check input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--vvp-primary);
+}
+
+.form-check label {
+  margin-bottom: 0;
+  font-weight: 400;
+  font-size: 0.875rem;
+  color: var(--vvp-text-light);
+}
+
+.login-error {
+  display: none;
+  padding: 0.5rem 0.75rem;
+  background: #f8d7da;
+  color: #721c24;
+  border-radius: 6px;
+  font-size: 0.8125rem;
+  margin-bottom: 1rem;
+  text-align: center;
+}
+
+.login-error.active {
+  display: block;
+}
+
+
+/* ========================================================================
+   Buttons
+   ======================================================================== */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.75rem 1.5rem;
+  border: none;
+  border-radius: 6px;
+  font-size: 1rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color 0.15s, transform 0.1s;
+  min-height: 48px;
+}
+
+.btn:active {
+  transform: scale(0.97);
+}
+
+.btn-connect {
+  width: 100%;
+  background: var(--vvp-primary);
+  color: white;
+  font-size: 1.0625rem;
+}
+
+.btn-connect:hover {
+  background: var(--vvp-primary-dark);
+}
+
+.btn-connect:disabled {
+  background: #a0cec6;
+  cursor: not-allowed;
+}
+
+.btn-text-danger {
+  background: none;
+  border: none;
+  color: var(--vvp-danger);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0.5rem;
+  font-family: inherit;
+}
+
+
+/* ========================================================================
+   Dialer Screen
+   ======================================================================== */
+
+.screen-dialer {
+  background: var(--vvp-bg);
+  padding-top: var(--sai-top);
+  padding-bottom: var(--sai-bottom);
+}
+
+/* Header */
+.dialer-header {
+  display: flex;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  background: white;
+  border-bottom: 1px solid var(--vvp-border);
+  gap: 0.75rem;
+}
+
+.dialer-logo {
+  width: 32px;
+  height: 32px;
+}
+
+.dialer-title {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.dialer-title .label {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  color: var(--vvp-text-light);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  line-height: 1;
+}
+
+.dialer-title .ext-label {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--vvp-text);
+  line-height: 1.2;
+}
+
+.indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.indicator.connected {
+  background: var(--vvp-success);
+  box-shadow: 0 0 4px rgba(40, 167, 69, 0.5);
+}
+
+.indicator.disconnected {
+  background: var(--vvp-danger);
+}
+
+.indicator.connecting {
+  background: var(--vvp-warning);
+  animation: indicator-pulse 1s ease-in-out infinite;
+}
+
+@keyframes indicator-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* Dial Input */
+.dial-input {
+  width: 100%;
+  padding: 1rem;
+  border: none;
+  border-bottom: 1px solid var(--vvp-border);
+  font-size: 1.75rem;
+  font-weight: 300;
+  text-align: center;
+  color: var(--vvp-text);
+  background: white;
+  letter-spacing: 0.05em;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  caret-color: var(--vvp-primary);
+}
+
+.dial-input:focus {
+  outline: none;
+}
+
+.dial-input::placeholder {
+  color: #c0cec8;
+  font-weight: 300;
+}
+
+/* Dial Pad Grid */
+.dial-pad {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  padding: 0.75rem 1.5rem;
+  align-content: center;
+  max-height: 320px;
+}
+
+.dial-key {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 64px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  border-radius: 50%;
+  transition: background-color 0.1s;
+  font-family: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.dial-key:active {
+  background: rgba(42, 157, 143, 0.1);
+}
+
+.dial-key .digit {
+  font-size: 1.5rem;
+  font-weight: 400;
+  color: var(--vvp-text);
+  line-height: 1;
+}
+
+.dial-key .letters {
+  font-size: 0.5625rem;
+  color: var(--vvp-text-light);
+  letter-spacing: 0.1em;
+  margin-top: 2px;
+}
+
+/* Dial Actions */
+.dial-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3rem;
+  padding: 0.75rem 1.5rem;
+}
+
+.btn-icon {
+  width: 48px;
+  height: 48px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--vvp-text-light);
+}
+
+.btn-icon:active {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.btn-icon svg {
+  width: 24px;
+  height: 24px;
+}
+
+.btn-call {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  border: none;
+  background: var(--vvp-success);
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 12px rgba(40, 167, 69, 0.3);
+  transition: transform 0.1s, box-shadow 0.1s;
+}
+
+.btn-call:active {
+  transform: scale(0.92);
+  box-shadow: 0 2px 6px rgba(40, 167, 69, 0.3);
+}
+
+.btn-call svg {
+  width: 28px;
+  height: 28px;
+}
+
+/* Quick Dial */
+.quick-dial {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.quick-label {
+  font-size: 0.75rem;
+  color: var(--vvp-text-light);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.quick-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.375rem 0.75rem;
+  background: white;
+  border: 1px solid var(--vvp-border);
+  border-radius: 2rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--vvp-primary);
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: inherit;
+  transition: background-color 0.1s;
+  flex-shrink: 0;
+}
+
+.quick-chip:active {
+  background: #e8f5f1;
+}
+
+/* Dialer Footer */
+.dialer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.625rem 1rem;
+  background: white;
+  border-top: 1px solid var(--vvp-border);
+}
+
+.dialer-footer .status-text {
+  font-size: 0.75rem;
+  color: var(--vvp-text-light);
+}
+
+
+/* ========================================================================
+   Call Overlay — Android-style incoming/outgoing/in-call
+   ======================================================================== */
+
+.call-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1.5rem;
+  padding-top: calc(2rem + var(--sai-top));
+  padding-bottom: calc(2rem + var(--sai-bottom));
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+.call-overlay.active {
+  opacity: 1;
+  pointer-events: all;
+}
+
+/* Avatar */
+.call-avatar {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  margin-bottom: 1.5rem;
+  flex-shrink: 0;
+}
+
+.call-avatar img {
+  width: 80%;
+  height: 80%;
+  object-fit: contain;
+  border-radius: 50%;
+}
+
+/* Pulse rings during ringing */
+.call-avatar::before,
+.call-avatar::after {
+  content: '';
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+  border: 2px solid rgba(42, 157, 143, 0.4);
+  opacity: 0;
+}
+
+.call-overlay.ringing .call-avatar::before {
+  animation: pulse-ring 2s ease-out infinite;
+}
+
+.call-overlay.ringing .call-avatar::after {
+  animation: pulse-ring 2s ease-out infinite 0.6s;
+}
+
+@keyframes pulse-ring {
+  0%   { transform: scale(1);   opacity: 0.8; }
+  100% { transform: scale(1.8); opacity: 0; }
+}
+
+/* Brand Name */
+.call-brand-name {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: #ffffff;
+  margin-bottom: 0.75rem;
+  text-align: center;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+/* Status Badge */
+.call-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1.25rem;
+  border-radius: 2rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.5rem;
+}
+
+.call-status-badge .badge-icon {
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.call-status-badge.valid {
+  background: rgba(40, 167, 69, 0.2);
+  color: #5ced73;
+  border: 1px solid rgba(40, 167, 69, 0.5);
+}
+
+.call-status-badge.invalid {
+  background: rgba(220, 53, 69, 0.2);
+  color: #ff6b7a;
+  border: 1px solid rgba(220, 53, 69, 0.5);
+}
+
+.call-status-badge.indeterminate {
+  background: rgba(255, 193, 7, 0.2);
+  color: #ffd54f;
+  border: 1px solid rgba(255, 193, 7, 0.5);
+}
+
+.call-status-badge.unknown {
+  background: rgba(108, 117, 125, 0.2);
+  color: #adb5bd;
+  border: 1px solid rgba(108, 117, 125, 0.5);
+}
+
+/* Vetter Badge */
+.call-vetter-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: 1rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  margin-bottom: 1.5rem;
+}
+
+.call-vetter-badge.pass {
+  background: rgba(40, 167, 69, 0.15);
+  color: #81d89e;
+  border: 1px solid rgba(40, 167, 69, 0.3);
+}
+
+.call-vetter-badge.fail {
+  background: rgba(230, 81, 0, 0.15);
+  color: #ffb74d;
+  border: 1px solid rgba(230, 81, 0, 0.3);
+}
+
+.call-vetter-badge.vetter-indeterminate {
+  background: rgba(255, 193, 7, 0.15);
+  color: #ffd54f;
+  border: 1px solid rgba(255, 193, 7, 0.3);
+}
+
+/* Caller Number & Label */
+.call-number {
+  font-size: 1rem;
+  color: rgba(255, 255, 255, 0.6);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  margin-bottom: 0.25rem;
+  text-align: center;
+}
+
+.call-label {
+  font-size: 0.875rem;
+  color: rgba(255, 255, 255, 0.4);
+  margin-bottom: 1rem;
+  text-align: center;
+}
+
+/* Call Duration */
+.call-duration {
+  font-size: 1.125rem;
+  color: rgba(255, 255, 255, 0.7);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-weight: 500;
+  margin-bottom: 2rem;
+  text-align: center;
+}
+
+/* Action Buttons */
+.call-actions {
+  display: flex;
+  gap: 4rem;
+  align-items: center;
+  margin-top: auto;
+  padding-bottom: 1rem;
+}
+
+.call-btn {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.12s, box-shadow 0.12s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.call-btn:active {
+  transform: scale(0.88);
+}
+
+.call-btn-accept {
+  background: var(--vvp-success);
+  box-shadow: 0 4px 24px rgba(40, 167, 69, 0.4);
+}
+
+.call-btn-decline {
+  background: var(--vvp-danger);
+  box-shadow: 0 4px 24px rgba(220, 53, 69, 0.4);
+}
+
+.call-btn svg {
+  width: 32px;
+  height: 32px;
+  fill: white;
+}
+
+/* In-call: hide accept, center hangup */
+.call-actions.in-call {
+  gap: 0;
+  justify-content: center;
+}
+
+
+/* ========================================================================
+   Responsive — landscape adjustments
+   ======================================================================== */
+
+@media (orientation: landscape) and (max-height: 500px) {
+  .call-overlay {
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 1rem;
+    padding: 1rem;
+  }
+
+  .call-avatar {
+    width: 80px;
+    height: 80px;
+    margin-bottom: 0;
+  }
+
+  .call-brand-name {
+    font-size: 1.25rem;
+  }
+
+  .dial-pad {
+    max-height: 200px;
+    padding: 0.5rem 1rem;
+  }
+
+  .dial-key {
+    height: 48px;
+  }
+}
+
+@media (min-width: 600px) {
+  .screen-dialer {
+    align-items: center;
+  }
+
+  .dialer-header,
+  .dial-input,
+  .dial-pad,
+  .dial-actions,
+  .quick-dial,
+  .dialer-footer {
+    max-width: 420px;
+  }
+
+  .dialer-header {
+    border-radius: 8px 8px 0 0;
+    margin-top: 1rem;
+    border: 1px solid var(--vvp-border);
+    border-bottom: 1px solid var(--vvp-border);
+  }
+
+  .dialer-footer {
+    border-radius: 0 0 8px 8px;
+    border: 1px solid var(--vvp-border);
+    border-top: 1px solid var(--vvp-border);
+    margin-bottom: 1rem;
+  }
+}

@@ -312,6 +312,22 @@ def ui_organization_detail():
     return FileResponse(WEB_DIR / "organization-detail.html", media_type="text/html")
 
 
+@app.get("/phone", response_class=FileResponse)
+def ui_phone():
+    """Serve the VVP Phone PWA."""
+    return FileResponse(WEB_DIR / "phone" / "index.html", media_type="text/html")
+
+
+@app.get("/phone/sw.js")
+def phone_service_worker():
+    """Serve the VVP Phone service worker with correct scope."""
+    return FileResponse(
+        WEB_DIR / "phone" / "sw.js",
+        media_type="application/javascript",
+        headers={"Service-Worker-Allowed": "/phone"},
+    )
+
+
 # -----------------------------------------------------------------------------
 # Sprint 41: User Management & Multi-tenancy UI Routes
 # -----------------------------------------------------------------------------

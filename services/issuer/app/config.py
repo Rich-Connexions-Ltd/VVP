@@ -399,5 +399,8 @@ def get_auth_exempt_paths() -> set[str]:
         exempt.add("/ui/organization-detail")
         # Sprint 71: PBX management
         exempt.add("/ui/pbx")
+        # VVP Phone PWA
+        exempt.add("/phone")
+        exempt.add("/phone/sw.js")
 
     return exempt

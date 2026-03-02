@@ -567,6 +567,8 @@ All endpoints require `issuer:admin` role. Router: `app/api/pbx.py`.
 | `GET` | `/ui/walkthrough` | Interactive split-pane walkthrough (Sprint 66) |
 | `GET` | `/ui/organization-detail` | Organization detail page with tabs (Sprint 67) |
 | `GET` | `/ui/pbx` | PBX management (Sprint 71) |
+| `GET` | `/phone` | VVP Phone PWA (SIP client) |
+| `GET` | `/phone/sw.js` | Phone PWA service worker |
 | `GET` | `/organizations/ui` | Organization management |
 | `GET` | `/users/ui` | User management |
 | `GET` | `/profile` | User profile |
