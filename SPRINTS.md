@@ -5724,7 +5724,7 @@ The current DELETE endpoints only remove items from KERI Agent LMDB. Because Pos
 
 ## Sprint 76: Issuer Call-Path Performance — Timing Instrumentation & Concurrency Fix
 
-**Status:** IN PROGRESS
+**Status:** COMPLETE — commits `43e8867` + `00bda42`
 **Goal:** Eliminate the 6-23 second delay in VVP call setup by adding timing instrumentation, multi-worker uvicorn, intermediate result caching, and async DB wrappers for the hot path.
 
 ### Root Cause (diagnosed)
@@ -5736,20 +5736,52 @@ The current DELETE endpoints only remove items from KERI Agent LMDB. Because Pos
 
 ### Deliverables
 
-- [ ] **Shared PhaseTimer** — Move `timing.py` to `common/` for reuse by issuer
-- [ ] **`/vvp/create` timing** — Per-step timing in response (`timing_ms` dict)
-- [ ] **`/tn/lookup` timing** — Per-step timing in TN lookup response
-- [ ] **Event loop monitor** — Detect and log event loop blocking (>100ms)
-- [ ] **Uvicorn `--workers=4`** — Multi-process serving to eliminate serialization
-- [ ] **VVP attestation cache** — Cache identity, brand, URLs across calls for same identity+dossier
-- [ ] **Async DB wrapper** — `asyncio.to_thread()` for hot-path sync DB calls
-- [ ] **SIP redirect timing logging** — Log per-step timing from issuer response
+- [x] **Shared PhaseTimer** — Moved `timing.py` to `common/vvp/timing.py`; verifier re-exports for backward compatibility
+- [x] **`/vvp/create` timing** — Per-step timing in response (`timing_ms` dict); revocation + constraints run on every request (cache hit and miss)
+- [x] **`/tn/lookup` timing** — Per-step timing in TN lookup response; bcrypt offloaded to thread pool
+- [x] **Event loop monitor** — `EventLoopMonitor` measures interval drift; `GET /admin/event-loop-health`
+- [x] **Uvicorn `--workers=4`** — Added `--workers=4` to issuer Dockerfile CMD
+- [x] **VVP attestation cache** — `AttestationCache` (LRU, TTL=300s) keyed by `(identity_name, dossier_said)`; callback-based invalidation via DossierCache
+- [x] **Async DB wrapper** — `async_db_call()` in `session.py`; bcrypt in `lookup_tn_with_validation` offloaded via `asyncio.to_thread()`
+- [x] **SIP redirect timing logging** — Logs `timing_ms` from issuer response
 
 ### Exit Criteria
 
-- [ ] `/vvp/create` response includes `timing_ms` breakdown
-- [ ] Event loop health endpoint at `/admin/event-loop-health`
-- [ ] Issuer Dockerfile has `--workers=4`
-- [ ] Attestation cache eliminates redundant KERI Agent calls on 2nd+ call
-- [ ] All existing tests pass
-- [ ] New tests for cache, monitor, and timing
+- [x] `/vvp/create` response includes `timing_ms` breakdown
+- [x] Event loop health endpoint at `/admin/event-loop-health`
+- [x] Issuer Dockerfile has `--workers=4`
+- [x] Attestation cache eliminates redundant KERI Agent calls on 2nd+ call
+- [x] All existing tests pass — 948 issuer + 1848 verifier = 2,796 tests pass
+- [x] New tests for cache, monitor, and timing — 46 new Sprint 76 tests
+
+## Sprint 77: PBX Portal — Migrate PBX Management & Phone to pbx.rcnx.io
+
+**Status:** IN PROGRESS
+**Goal:** Consolidate all PBX-related UIs on `pbx.rcnx.io`: landing page at `/`, PBX management console, Phone PWA, FusionPBX link, and SIP Monitor. Remove PBX-specific routes and files from the issuer service where they don't belong.
+
+### Context
+
+Currently PBX management UI (`/ui/pbx`) and Phone PWA (`/phone`) are hosted on `vvp-issuer.rcnx.io`. The PBX domain `pbx.rcnx.io` only serves the FusionPBX admin console (root) and SIP Monitor dashboard (`/sip-monitor/`). PBX-related UIs should live on the PBX domain.
+
+### Deliverables
+
+- [ ] **PBX Portal landing page** — New static page at `pbx.rcnx.io/` with navigation to all PBX tools
+- [ ] **Phone PWA migration** — Move Phone PWA to `pbx.rcnx.io/phone/` (self-contained, no issuer API dependency)
+- [ ] **PBX Management UI migration** — Move PBX config UI to `pbx.rcnx.io/pbx-admin/`, using API key auth against issuer CORS-enabled endpoints
+- [ ] **FusionPBX access** — Move FusionPBX console from `/` to `/fusion/` via nginx location block
+- [ ] **Issuer CORS** — Add `pbx.rcnx.io` to issuer CORS allowed origins for PBX API endpoints
+- [ ] **nginx reconfiguration** — Serve portal static files, proxy FusionPBX, preserve existing routes
+- [ ] **CI/CD deployment** — Deploy portal static files to PBX VM via existing pipeline
+- [ ] **Issuer cleanup** — Remove `/ui/pbx`, `/phone` routes and PBX-related web files from issuer
+- [ ] **Tests** — Update/remove issuer PBX tests, add portal smoke tests
+
+### Exit Criteria
+
+- [ ] `pbx.rcnx.io/` serves landing page with navigation links
+- [ ] `pbx.rcnx.io/phone/` serves working Phone PWA (SIP calls functional)
+- [ ] `pbx.rcnx.io/pbx-admin/` serves PBX management UI (config CRUD + deploy working via issuer API)
+- [ ] `pbx.rcnx.io/fusion/` proxies FusionPBX admin console
+- [ ] `pbx.rcnx.io/sip-monitor/` continues working (unchanged)
+- [ ] `vvp-issuer.rcnx.io/ui/pbx` and `/phone` routes removed
+- [ ] All remaining issuer tests pass
+- [ ] E2E VVP call flow unaffected

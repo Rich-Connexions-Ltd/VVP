@@ -1,5 +1,44 @@
 # VVP Verifier Change Log
 
+## Sprint 76: Issuer Call-Path Performance — Timing Instrumentation & Concurrency Fix
+
+**Date:** 2026-03-04
+**Status:** Complete
+**Commits:** `43e8867`, `00bda42`
+
+### Summary
+
+Eliminated 6-23 second VVP call setup delay. Root causes: single uvicorn worker (event loop serialization), zero caching in `/vvp/create` (5-10 KERI Agent HTTP calls per call), synchronous bcrypt blocking the event loop. Solutions: 4 uvicorn workers, `AttestationCache` (LRU, TTL=300s, callback-based invalidation), `PhaseTimer` in `common/` for reuse, `EventLoopMonitor` measuring interval drift, `async_db_call()` wrapper, `asyncio.to_thread()` for bcrypt in TN lookup. Vetter constraints + revocation always enforced (cache hit and miss). 46 new tests; 948+1848=2,796 tests pass.
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `common/common/vvp/timing.py` | New: `PhaseTimer` with sync (`phase`) and async (`aphase`) context managers |
+| `common/common/vvp/dossier/cache.py` | `on_invalidate_said()` callback registration; `invalidate_by_said()` passes root dossier SAIDs to callbacks |
+| `services/verifier/app/vvp/timing.py` | Re-export `PhaseTimer` from `common` for backward compatibility |
+| `services/issuer/app/api/vvp.py` | Per-step timing; attestation cache; revocation + constraints always run |
+| `services/issuer/app/api/tn.py` | Pass `timing_ms` from `TNLookupResult` to response |
+| `services/issuer/app/api/models.py` | Add `timing_ms` to `CreateVVPResponse` and `TNLookupResponse` |
+| `services/issuer/app/api/admin.py` | `GET /admin/event-loop-health` endpoint |
+| `services/issuer/app/tn/lookup.py` | Per-step timing; bcrypt offloaded via `asyncio.to_thread()` |
+| `services/issuer/app/vvp/attestation_cache.py` | New: `AttestationCache` (LRU, TTL=300s, invalidation by dossier SAID or identity) |
+| `services/issuer/app/vvp/dossier_service.py` | Register attestation cache invalidation callback on DossierCache |
+| `services/issuer/app/core/event_loop_monitor.py` | New: `EventLoopMonitor` (interval drift measurement, per-worker metrics) |
+| `services/issuer/app/db/session.py` | `async_db_call()` thread-pool wrapper with fresh session |
+| `services/issuer/app/main.py` | Start/stop `EventLoopMonitor` in lifespan handler |
+| `services/issuer/Dockerfile` | `--workers=4` in uvicorn CMD |
+| `services/sip-redirect/app/redirect/client.py` | Log `timing_ms` breakdown from issuer response |
+| `services/issuer/tests/test_attestation_cache.py` | 19 tests: cache ops, TTL, LRU, invalidation, DossierCache callback integration |
+| `services/issuer/tests/test_event_loop_monitor.py` | 10 tests: lifecycle, metrics, blocked detection |
+| `services/issuer/tests/test_vvp_timing.py` | 14 tests: PhaseTimer sync+async, async_db_call thread isolation |
+
+### Commit SHA
+
+`43e8867` (initial implementation) + `00bda42` (code review R1 fixes)
+
+---
+
 ## Sprint 75: Vetter Jurisdiction Constraints + UX Polish
 
 **Date:** 2026-02-19

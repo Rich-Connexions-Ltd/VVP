@@ -455,7 +455,9 @@ Internal endpoint for SIP Redirect service. Authenticates via API key (not sessi
 2. OSP delegation fallback: if direct lookup fails, join `DossierOspAssociation` with `TNMapping` to find mappings where the dossier has been delegated to the API key's org as OSP
 3. TN ownership validation: checks the **owner org's** TN Allocation credentials (even when found via OSP delegation)
 
-**Response:** `{ "found": true, "tn": "...", "organization_id": "...", "organization_name": "...", "dossier_said": "...", "identity_name": "...", "brand_name": "...", "brand_logo_url": "...", "error": null }`
+**Response:** `{ "found": true, "tn": "...", "organization_id": "...", "organization_name": "...", "dossier_said": "...", "identity_name": "...", "brand_name": "...", "brand_logo_url": "...", "error": null, "timing_ms": {...} }`
+
+`timing_ms` (Sprint 76): Per-step timing breakdown — `total`, `api_key_verify`, `tn_mapping_query`, `ownership_validation`. API key bcrypt verification offloaded to thread pool via `asyncio.to_thread()`.
 
 When found via OSP delegation, the response contains the **owner org's** data (organization_id, identity_name, dossier_said) since the signing identity and dossier belong to the accountable party.
 
@@ -489,6 +491,11 @@ When found via OSP delegation, the response contains the **owner org's** data (o
 | Method | Path | Purpose |
 |--------|------|---------|
 | `POST` | `/vvp/create` | Create VVP attestation (PASSporT + headers) |
+
+**`POST /vvp/create`** (Sprint 76 enhancements):
+- Returns `timing_ms` dict: `total`, `cache`, `identity_resolve`, `brand_extraction`, `revocation_check`, `signing_constraints`, `attestation_signing`
+- **Attestation cache**: Results cached by `(identity_name, dossier_said)` — 2nd+ calls skip identity resolve and brand extraction (cache TTL=300s)
+- **Always runs**: Revocation check and vetter constraint validation run on every request regardless of cache (constraints depend on per-call `orig_tn`)
 
 ### Users (`/users`)
 
@@ -530,8 +537,11 @@ When found via OSP delegation, the response contains the **owner org's** data (o
 | `POST` | `/admin/cleanup/credentials` | Bulk delete credentials by org, schema, or date. Requires admin. Sends batch to KERI Agent (Sprint 73) |
 | `POST` | `/admin/cleanup/identities` | Bulk delete identities. Requires admin. Forwards to KERI Agent (Sprint 73) |
 | `GET` | `/admin/witness-status/{name}` | Proxy to KERI Agent `/identities/{name}/witness-status` (Sprint 75) |
+| `GET` | `/admin/event-loop-health` | Event loop latency metrics per worker (Sprint 76) |
 
-### PBX Management (`/pbx`) — Sprint 71
+**`GET /admin/event-loop-health`** — Returns `EventLoopMetrics` per worker process: `worker_pid`, `current_latency_ms` (drift from last sleep interval), `max_latency_ms`, `blocked_count` (probes exceeding threshold), `probe_count`, `threshold_ms`. Useful for diagnosing sync operations blocking the event loop.
+
+### PBX Management (`/pbx`) — Sprint 71, 77
 
 All endpoints require `issuer:admin` role. Router: `app/api/pbx.py`.
 
@@ -539,12 +549,16 @@ All endpoints require `issuer:admin` role. Router: `app/api/pbx.py`.
 |--------|------|---------|
 | `GET` | `/pbx/config` | Get PBX config singleton (creates with defaults if absent) |
 | `PUT` | `/pbx/config` | Update config (extensions, API key, caller ID) |
-| `POST` | `/pbx/deploy` | Generate dialplan XML and deploy to PBX via Azure VM run-command |
+| `POST` | `/pbx/deploy` | Generate dialplan XML and deploy to PBX via Azure VM run-command (async) |
 | `GET` | `/pbx/dialplan-preview` | Preview generated dialplan as `application/xml` |
+| `GET` | `/pbx/organizations/names` | **PBX facade** — list org names for API key selection (Sprint 77) |
+| `GET` | `/pbx/organizations/{org_id}/api-keys` | **PBX facade** — list non-revoked API keys for an org (Sprint 77) |
 
 **`PUT /pbx/config`** — Body: `UpdatePBXConfigRequest` with optional fields: `api_key_org_id`, `api_key_id`, `api_key_value` (plaintext), `extensions` (list of `PBXExtension`), `default_caller_id` (E.164). Validates: extension range 1000-1009, no duplicate ext numbers, E.164 format.
 
-**`POST /pbx/deploy`** — Body: `{ "dry_run": true|false }`. Dry run returns generated XML without deploying. Real deploy: base64-encodes XML, invokes Azure VM run-command on PBX VM (backup, write, `fs_cli reloadxml`).
+**`POST /pbx/deploy`** — Body: `{ "dry_run": true|false }`. Dry run returns generated XML without deploying. Real deploy: wraps Azure SDK `begin_run_command().result()` in `asyncio.to_thread()` to avoid blocking the event loop (the VM command can take 30–120s).
+
+**CORS:** All `/pbx/*` paths support cross-origin requests from `https://pbx.rcnx.io` via `PbxCorsMiddleware` (Sprint 77). The `X-API-Key` header is the only auth mechanism for cross-origin requests — no session cookies forwarded. The two facade endpoints (`/pbx/organizations/*`) exist specifically so the PBX portal's CORS scope is a single `/pbx/*` prefix with no exceptions for generic org endpoints.
 
 ### Issuer UI Pages (all `GET`, return HTML)
 
@@ -566,9 +580,9 @@ All endpoints require `issuer:admin` role. Router: `app/api/pbx.py`.
 | `GET` | `/ui/help` | Help/documentation |
 | `GET` | `/ui/walkthrough` | Interactive split-pane walkthrough (Sprint 66) |
 | `GET` | `/ui/organization-detail` | Organization detail page with tabs (Sprint 67) |
-| `GET` | `/ui/pbx` | PBX management (Sprint 71) |
-| `GET` | `/phone` | VVP Phone PWA (SIP client) |
-| `GET` | `/phone/sw.js` | Phone PWA service worker |
+| `GET` | `/ui/pbx` | ~~PBX management~~ — **REMOVED Sprint 77** (moved to `pbx.rcnx.io/pbx-admin/`) |
+| `GET` | `/phone` | ~~VVP Phone PWA~~ — **REMOVED Sprint 77** (moved to `pbx.rcnx.io/phone/`) |
+| `GET` | `/phone/sw.js` | ~~Phone PWA service worker~~ — **REMOVED Sprint 77** |
 | `GET` | `/organizations/ui` | Organization management |
 | `GET` | `/users/ui` | User management |
 | `GET` | `/profile` | User profile |

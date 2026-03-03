@@ -30,11 +30,12 @@ The pipeline has separate jobs triggered by path filters:
 |-----|---------------|--------|
 | `deploy-verifier` | `services/verifier/**`, `common/**` | Azure Container Apps |
 | `deploy-keri-agent` | `services/keri-agent/**`, `keripy/**`, `common/**` | Azure Container Apps (ephemeral LMDB on tmpfs, internal-only) |
-| `deploy-issuer` | `services/issuer/**`, `common/**` | Azure Container Apps (no LMDB, fast ~30s deploy, sticky sessions, 1-3 replicas) |
+| `deploy-issuer` | `services/issuer/**`, `common/**` | Azure Container Apps (no LMDB, fast ~30s deploy, sticky sessions, 1-3 replicas, 4 uvicorn workers per replica) |
 | `deploy-sip-redirect` | `services/sip-redirect/**`, `common/**` | PBX VM via `az vm run-command` |
 | `deploy-sip-verify` | `services/sip-verify/**`, `common/**` | PBX VM via `az vm run-command` |
 | `build-witness-image` + `deploy-witnesses` | `services/witness/**` | Azure Container Apps (3 witnesses) |
 | `deploy-pbx-config` | `services/pbx/config/**` | PBX VM FreeSWITCH dialplan + directory + force-register-domain check |
+| `deploy-pbx-portal` | `services/pbx/web/**` | PBX VM static portal files to `/var/www/pbx-portal/` (Sprint 77) |
 
 **Deploy ordering**: When both keri-agent and issuer change (e.g., `common/**` change), keri-agent deploys first. The issuer's `deploy-issuer` job depends on `deploy-keri-agent` completing successfully. This ensures the KERI Agent is healthy before the issuer starts routing to it.
 
@@ -163,6 +164,9 @@ docker compose down
 | KERI Agent | `vvp-keri-agent` (internal-only, port 8002) |
 | Issuer | `https://vvp-issuer.rcnx.io` |
 | PBX | `pbx.rcnx.io` |
+| PBX Portal | `https://pbx.rcnx.io/pbx-admin/` — PBX Management UI (Sprint 77) |
+| Phone PWA | `https://pbx.rcnx.io/phone/` (moved from issuer in Sprint 77) |
+| FusionPBX console | `https://pbx.rcnx.io/fusion/` (moved from root in Sprint 77) |
 
 ---
 
@@ -178,6 +182,34 @@ docker compose down
 - **Resource Group**: `VVP`
 - **DNS**: `pbx.rcnx.io`
 - **Platform**: FusionPBX (FreeSWITCH) on Debian
+
+### PBX Portal (Sprint 77)
+
+Static files served from `/var/www/pbx-portal/` on the PBX VM. Deployed by `deploy-pbx-portal` CI/CD job when `services/pbx/web/**` changes.
+
+| URL | Path on VM | Description |
+|-----|-----------|-------------|
+| `pbx.rcnx.io/` | `/var/www/pbx-portal/index.html` | Landing page |
+| `pbx.rcnx.io/pbx-admin/` | `/var/www/pbx-portal/pbx-admin/index.html` | PBX management UI (sessionStorage auth) |
+| `pbx.rcnx.io/phone/` | `/var/www/pbx-portal/phone/` | Phone PWA (moved from issuer) |
+| `pbx.rcnx.io/fusion/` | FusionPBX PHP-FPM | FusionPBX admin (moved from root) |
+| `pbx.rcnx.io/sip-monitor/` | aiohttp:8090 | SIP Monitor (unchanged) |
+
+**nginx config**: `services/pbx/config/nginx-pbx-portal.conf` — CSP applied per-location (not globally), no `'unsafe-inline'` in `style-src`, HSTS on portal locations. FusionPBX (`/fusion/`) has no restrictive CSP to avoid breaking the PHP admin console.
+
+**Auth**: PBX management UI uses `sessionStorage` for the issuer API key — persists within a browser tab session, cleared on tab close. API calls go to `https://vvp-issuer.rcnx.io/pbx/*` (HTTPS hardcoded, no HTTP fallback). CORS on the issuer is handled by `PbxCorsMiddleware` restricted to `/pbx/*`.
+
+**Manual deployment** (if CI unavailable):
+```bash
+cd services/pbx/web
+tar czf /tmp/pbx-portal.tar.gz .
+B64=$(base64 /tmp/pbx-portal.tar.gz)
+az vm run-command invoke --resource-group VVP --name vvp-pbx \
+  --command-id RunShellScript \
+  --scripts "echo '$B64' | base64 -d > /tmp/pbx-portal.tar.gz && \
+             tar xzf /tmp/pbx-portal.tar.gz -C /var/www/pbx-portal && \
+             chown -R www-data:www-data /var/www/pbx-portal"
+```
 
 ### PBX Management (via Azure CLI)
 ```bash
@@ -452,7 +484,7 @@ pip install -e common/
 # Run verifier
 cd services/verifier && pip install -e . && uvicorn app.main:app --port 8000
 
-# Run issuer
+# Run issuer (single worker for dev; production uses --workers=4)
 cd services/issuer && pip install -e . && uvicorn app.main:app --port 8001
 ```
 
