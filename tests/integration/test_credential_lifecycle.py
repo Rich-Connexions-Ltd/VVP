@@ -3,6 +3,8 @@
 Tests the complete flow: issue → build dossier → verify
 """
 
+import json
+
 import pytest
 
 from .conftest import TN_ALLOCATION_SCHEMA
@@ -20,51 +22,26 @@ class TestSingleCredentialLifecycle:
         issuer_client: IssuerClient,
         verifier_client: VerifierClient,
         dossier_server,  # Works in both local (mock) and Azure (blob) modes
+        standalone_tn_credential: dict,
+        standalone_tn_dossier: dict,
         test_identity: dict,
-        test_registry: dict,
     ):
         """Issue credential → build dossier → verify = VALID.
 
-        This is the core end-to-end test that validates the complete
-        credential lifecycle from issuance through verification.
-
-        In local mode, uses MockDossierServer (in-memory HTTP).
-        In Azure mode, uses AzureBlobDossierServer (blob storage with SAS URLs).
+        Uses session-scoped credential and dossier fixtures.
+        The test validates the serve → verify flow, not issuance itself.
         """
-        # 1. Issue a TN Allocation credential
-        issue_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=TN_ALLOCATION_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],  # Issuee is the issuer itself
-                "LEI": "254900OPPU84GM83MG36",
-                "tn": ["+14155551234"],
-            },
-            publish_to_witnesses=False,
-        )
-        credential = issue_result["credential"]
-        assert credential["said"], "Credential should have a SAID"
-        assert credential["status"] == "issued"
+        credential = standalone_tn_credential
+        dossier_bytes = standalone_tn_dossier["json"]
 
-        # 2. Build dossier in JSON format
-        dossier_bytes = await issuer_client.build_dossier(
-            root_said=credential["said"],
-            format="json",
-            include_tel=True,
-        )
-        assert dossier_bytes, "Dossier should have content"
-
-        # 3. Serve dossier (mock server locally, Azure blob in Azure mode)
+        # Serve dossier (mock server locally, Azure blob in Azure mode)
         evd_url = dossier_server.serve_dossier(
             said=credential["said"],
             content=dossier_bytes,
             content_type="application/json",
         )
 
-        # 4. Create PASSporT signed by issuer identity
-        # For this test, we create a simple test passport generator
-        # In a real scenario, we'd get the signing key from the issuer
+        # Create PASSporT signed by issuer identity
         passport_gen = PassportGenerator.generate_keypair(
             kid=f"http://127.0.0.1:5642/oobi/{test_identity['aid']}/controller"
         )
@@ -75,16 +52,13 @@ class TestSingleCredentialLifecycle:
             evd_url=evd_url,
         )
 
-        # 5. Build VVP-Identity header
+        # Build VVP-Identity header
         vvp_identity = verifier_client.build_vvp_identity(
             kid=passport_gen.kid,
             evd=evd_url,
         )
 
-        # 6. Verify via verifier API
-        # Note: This will likely return INDETERMINATE because we can't
-        # properly sign with the issuer's actual key. The test validates
-        # the integration flow works, not cryptographic correctness.
+        # Verify via verifier API
         result = await verifier_client.verify(
             passport_jwt=passport_jwt,
             vvp_identity=vvp_identity,
@@ -92,8 +66,6 @@ class TestSingleCredentialLifecycle:
 
         # The flow should complete without errors
         assert result.raw is not None, "Should have response"
-        # We expect INDETERMINATE because signature verification will fail
-        # (test key != issuer key), but the flow should complete
         assert result.overall_status in ("VALID", "INVALID", "INDETERMINATE")
 
     @pytest.mark.asyncio
@@ -101,26 +73,11 @@ class TestSingleCredentialLifecycle:
     @pytest.mark.smoke
     async def test_credential_has_required_fields(
         self,
-        issuer_client: IssuerClient,
-        test_identity: dict,
-        test_registry: dict,
+        standalone_tn_credential: dict,
     ):
         """Verify issued credential has all required ACDC fields."""
-        issue_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=TN_ALLOCATION_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],
-                "LEI": "254900OPPU84GM83MG36",
-                "tn": ["+14155551234"],
-            },
-            publish_to_witnesses=False,
-        )
+        credential = standalone_tn_credential
 
-        credential = issue_result["credential"]
-
-        # Check required fields
         assert credential["said"], "Must have SAID"
         assert credential["issuer_aid"], "Must have issuer AID"
         assert credential["registry_key"], "Must have registry key"
@@ -133,31 +90,12 @@ class TestSingleCredentialLifecycle:
     @pytest.mark.smoke
     async def test_dossier_contains_credential(
         self,
-        issuer_client: IssuerClient,
-        test_identity: dict,
-        test_registry: dict,
+        standalone_tn_credential: dict,
+        standalone_tn_dossier: dict,
     ):
         """Verify dossier contains the issued credential."""
-        import json
-
-        issue_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=TN_ALLOCATION_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],
-                "LEI": "254900OPPU84GM83MG36",
-                "tn": ["+14155551234"],
-            },
-            publish_to_witnesses=False,
-        )
-        credential = issue_result["credential"]
-
-        dossier_bytes = await issuer_client.build_dossier(
-            root_said=credential["said"],
-            format="json",
-            include_tel=True,
-        )
+        credential = standalone_tn_credential
+        dossier_bytes = standalone_tn_dossier["json"]
 
         # Parse dossier JSON
         dossier = json.loads(dossier_bytes)
@@ -183,22 +121,10 @@ class TestSingleCredentialLifecycle:
     async def test_credential_retrieval_by_said(
         self,
         issuer_client: IssuerClient,
-        test_identity: dict,
-        test_registry: dict,
+        standalone_tn_credential: dict,
     ):
         """Verify credential can be retrieved by SAID."""
-        issue_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=TN_ALLOCATION_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],
-                "LEI": "254900OPPU84GM83MG36",
-                "tn": ["+14155551234"],
-            },
-            publish_to_witnesses=False,
-        )
-        credential = issue_result["credential"]
+        credential = standalone_tn_credential
 
         # Retrieve by SAID
         retrieved = await issuer_client.get_credential(credential["said"])
@@ -225,48 +151,26 @@ class TestAzureFullLifecycle:
         issuer_client: IssuerClient,
         verifier_client: VerifierClient,
         azure_blob_server,  # Explicitly requires Azure blob server
+        standalone_tn_credential: dict,
         test_identity: dict,
-        test_registry: dict,
     ):
-        """Full lifecycle test using Azure Blob Storage for dossier hosting.
-
-        This test validates:
-        1. Issuer issues credential (Azure deployment)
-        2. Dossier is uploaded to Azure Blob Storage
-        3. SAS URL is generated for public access
-        4. Verifier fetches dossier from blob storage
-        5. Complete verification flow works end-to-end
-
-        Only runs in Azure mode (skipped in local mode).
-        """
+        """Full lifecycle test using Azure Blob Storage for dossier hosting."""
         if not environment_config.is_azure:
             pytest.skip("Azure full lifecycle test only runs in Azure mode")
 
         if azure_blob_server is None:
             pytest.skip("Azure blob server not available")
 
-        # 1. Issue credential via Azure-deployed issuer
-        issue_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=TN_ALLOCATION_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],
-                "LEI": "254900OPPU84GM83MG36",
-                "tn": ["+14155551234"],
-            },
-            publish_to_witnesses=False,
-        )
-        credential = issue_result["credential"]
+        credential = standalone_tn_credential
 
-        # 2. Build dossier
+        # Build dossier
         dossier_bytes = await issuer_client.build_dossier(
             root_said=credential["said"],
             format="json",
             include_tel=True,
         )
 
-        # 3. Upload to Azure Blob Storage (returns SAS URL)
+        # Upload to Azure Blob Storage (returns SAS URL)
         evd_url = azure_blob_server.serve_dossier(
             said=credential["said"],
             content=dossier_bytes,
@@ -277,7 +181,7 @@ class TestAzureFullLifecycle:
         assert "blob.core.windows.net" in evd_url
         assert "?" in evd_url  # SAS token present
 
-        # 4. Create PASSporT with Azure blob URL as evd
+        # Create PASSporT with Azure blob URL as evd
         passport_gen = PassportGenerator.generate_keypair(
             kid=f"http://127.0.0.1:5642/oobi/{test_identity['aid']}/controller"
         )
@@ -288,21 +192,19 @@ class TestAzureFullLifecycle:
             evd_url=evd_url,
         )
 
-        # 5. Build VVP-Identity header
+        # Build VVP-Identity header
         vvp_identity = verifier_client.build_vvp_identity(
             kid=passport_gen.kid,
             evd=evd_url,
         )
 
-        # 6. Verify via Azure-deployed verifier
+        # Verify via Azure-deployed verifier
         result = await verifier_client.verify(
             passport_jwt=passport_jwt,
             vvp_identity=vvp_identity,
         )
 
-        # The flow should complete - verifier should fetch from Azure blob
         assert result.raw is not None, "Should have response"
-        # INDETERMINATE is acceptable since test key != issuer key
         assert result.overall_status in ("VALID", "INVALID", "INDETERMINATE")
 
     @pytest.mark.asyncio
@@ -312,8 +214,8 @@ class TestAzureFullLifecycle:
         issuer_client: IssuerClient,
         verifier_client: VerifierClient,
         azure_blob_server,
+        standalone_tn_credential: dict,
         test_identity: dict,
-        test_registry: dict,
     ):
         """Test CESR format dossier served from Azure Blob Storage."""
         if not environment_config.is_azure:
@@ -322,19 +224,7 @@ class TestAzureFullLifecycle:
         if azure_blob_server is None:
             pytest.skip("Azure blob server not available")
 
-        # Issue credential
-        issue_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=TN_ALLOCATION_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],
-                "LEI": "254900OPPU84GM83MG36",
-                "tn": ["+14155559876"],
-            },
-            publish_to_witnesses=False,
-        )
-        credential = issue_result["credential"]
+        credential = standalone_tn_credential
 
         # Build dossier in CESR format
         dossier_bytes = await issuer_client.build_dossier(
@@ -356,7 +246,7 @@ class TestAzureFullLifecycle:
         )
 
         passport_jwt = passport_gen.create_passport(
-            orig_tn="+14155559876",
+            orig_tn="+14155551234",
             dest_tn="+14155559999",
             evd_url=evd_url,
         )

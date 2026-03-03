@@ -7,7 +7,6 @@ import json
 
 import pytest
 
-from .conftest import TN_ALLOCATION_SCHEMA
 from .helpers import IssuerClient
 
 
@@ -19,32 +18,10 @@ class TestDossierFormats:
     @pytest.mark.asyncio
     async def test_json_format_structure(
         self,
-        issuer_client: IssuerClient,
-        test_identity: dict,
-        test_registry: dict,
+        standalone_tn_dossier: dict,
     ):
         """Test JSON dossier format is a valid array."""
-        issue_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=TN_ALLOCATION_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],
-                "LEI": "254900OPPU84GM83MG36",
-                "tn": ["+14155551234"],
-            },
-            publish_to_witnesses=False,
-        )
-        credential = issue_result["credential"]
-
-        dossier_bytes = await issuer_client.build_dossier(
-            root_said=credential["said"],
-            format="json",
-            include_tel=True,
-        )
-
-        # Should be valid JSON
-        dossier = json.loads(dossier_bytes)
+        dossier = json.loads(standalone_tn_dossier["json"])
         assert isinstance(dossier, list), "JSON dossier should be an array"
 
         # Each item should be a valid ACDC
@@ -57,45 +34,26 @@ class TestDossierFormats:
     @pytest.mark.asyncio
     async def test_cesr_format_structure(
         self,
-        issuer_client: IssuerClient,
-        test_identity: dict,
-        test_registry: dict,
+        standalone_tn_credential: dict,
+        standalone_tn_dossier: dict,
     ):
         """Test CESR dossier format contains valid CESR stream."""
-        issue_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=TN_ALLOCATION_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],
-                "LEI": "254900OPPU84GM83MG36",
-                "tn": ["+14155551234"],
-            },
-            publish_to_witnesses=False,
-        )
-        credential = issue_result["credential"]
-
-        dossier_bytes = await issuer_client.build_dossier(
-            root_said=credential["said"],
-            format="cesr",
-            include_tel=True,
-        )
+        dossier_bytes = standalone_tn_dossier["cesr"]
 
         # CESR stream should contain JSON objects with signatures
         assert dossier_bytes, "CESR dossier should have content"
 
         # Should contain the credential SAID somewhere
         content = dossier_bytes.decode("utf-8", errors="replace")
-        assert credential["said"] in content, "CESR should contain credential SAID"
+        assert standalone_tn_credential["said"] in content, "CESR should contain credential SAID"
 
     @pytest.mark.asyncio
     @pytest.mark.skip(reason="Mock server tests disabled in CI - test infrastructure only")
     async def test_mock_server_content_type_json(
         self,
         mock_dossier_server,  # Local-only: tests mock server infrastructure
-        issuer_client: IssuerClient,
-        test_identity: dict,
-        test_registry: dict,
+        standalone_tn_credential: dict,
+        standalone_tn_dossier: dict,
     ):
         """Test mock server returns correct Content-Type for JSON.
 
@@ -106,27 +64,9 @@ class TestDossierFormats:
 
         import aiohttp
 
-        issue_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=TN_ALLOCATION_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],
-                "LEI": "254900OPPU84GM83MG36",
-                "tn": ["+14155551234"],
-            },
-            publish_to_witnesses=False,
-        )
-        credential = issue_result["credential"]
-
-        dossier_bytes = await issuer_client.build_dossier(
-            root_said=credential["said"],
-            format="json",
-        )
-
         evd_url = mock_dossier_server.serve_dossier(
-            said=credential["said"],
-            content=dossier_bytes,
+            said=standalone_tn_credential["said"],
+            content=standalone_tn_dossier["json"],
             content_type="application/json",
         )
 
@@ -140,9 +80,8 @@ class TestDossierFormats:
     async def test_mock_server_content_type_cesr(
         self,
         mock_dossier_server,  # Local-only: tests mock server infrastructure
-        issuer_client: IssuerClient,
-        test_identity: dict,
-        test_registry: dict,
+        standalone_tn_credential: dict,
+        standalone_tn_dossier: dict,
     ):
         """Test mock server returns correct Content-Type for CESR.
 
@@ -153,27 +92,9 @@ class TestDossierFormats:
 
         import aiohttp
 
-        issue_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=TN_ALLOCATION_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],
-                "LEI": "254900OPPU84GM83MG36",
-                "tn": ["+14155551234"],
-            },
-            publish_to_witnesses=False,
-        )
-        credential = issue_result["credential"]
-
-        dossier_bytes = await issuer_client.build_dossier(
-            root_said=credential["said"],
-            format="cesr",
-        )
-
         evd_url = mock_dossier_server.serve_dossier(
-            said=credential["said"],
-            content=dossier_bytes,
+            said=standalone_tn_credential["said"],
+            content=standalone_tn_dossier["cesr"],
             content_type="application/cesr",
         )
 
@@ -208,22 +129,11 @@ class TestDossierFormats:
     async def test_dossier_with_tel_excluded(
         self,
         issuer_client: IssuerClient,
-        test_identity: dict,
-        test_registry: dict,
+        standalone_tn_credential: dict,
+        standalone_tn_dossier: dict,
     ):
         """Test dossier can be built without TEL events."""
-        issue_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=TN_ALLOCATION_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],
-                "LEI": "254900OPPU84GM83MG36",
-                "tn": ["+14155551234"],
-            },
-            publish_to_witnesses=False,
-        )
-        credential = issue_result["credential"]
+        credential = standalone_tn_credential
 
         # Build without TEL
         dossier_no_tel = await issuer_client.build_dossier(
@@ -232,12 +142,8 @@ class TestDossierFormats:
             include_tel=False,
         )
 
-        # Build with TEL
-        dossier_with_tel = await issuer_client.build_dossier(
-            root_said=credential["said"],
-            format="json",
-            include_tel=True,
-        )
+        # Use pre-built dossier with TEL from shared fixture
+        dossier_with_tel = standalone_tn_dossier["json"]
 
         # Both should be valid JSON
         assert json.loads(dossier_no_tel)

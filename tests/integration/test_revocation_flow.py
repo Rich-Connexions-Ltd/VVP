@@ -54,33 +54,15 @@ class TestRevocationFlow:
     async def test_revoked_credential_in_dossier(
         self,
         issuer_client: IssuerClient,
-        test_identity: dict,
-        test_registry: dict,
+        revoked_tn_credential: dict,
     ):
-        """Verify revoked credential can still be included in dossier."""
-        # Issue credential
-        issue_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=TN_ALLOCATION_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],
-                "LEI": "254900OPPU84GM83MG36",
-                "tn": ["+14155551234"],
-            },
-            publish_to_witnesses=False,
-        )
-        credential = issue_result["credential"]
+        """Verify revoked credential can still be included in dossier.
 
-        # Revoke credential
-        await issuer_client.revoke_credential(
-            said=credential["said"],
-            publish_to_witnesses=False,
-        )
-
+        Uses session-scoped revoked credential to avoid redundant issue+revoke.
+        """
         # Build dossier should still work
         dossier_bytes = await issuer_client.build_dossier(
-            root_said=credential["said"],
+            root_said=revoked_tn_credential["said"],
             format="json",
             include_tel=True,
         )
@@ -224,32 +206,14 @@ class TestRevocationFlow:
     async def test_get_revoked_credential_shows_status(
         self,
         issuer_client: IssuerClient,
-        test_identity: dict,
-        test_registry: dict,
+        revoked_tn_credential: dict,
     ):
-        """Getting a revoked credential should show revoked status."""
-        # Issue credential
-        issue_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=TN_ALLOCATION_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],
-                "LEI": "254900OPPU84GM83MG36",
-                "tn": ["+14155551234"],
-            },
-            publish_to_witnesses=False,
-        )
-        credential = issue_result["credential"]
+        """Getting a revoked credential should show revoked status.
 
-        # Revoke
-        await issuer_client.revoke_credential(
-            said=credential["said"],
-            publish_to_witnesses=False,
-        )
-
-        # Get credential
-        retrieved = await issuer_client.get_credential(credential["said"])
+        Uses session-scoped revoked credential to avoid redundant issue+revoke.
+        """
+        # Get credential by SAID
+        retrieved = await issuer_client.get_credential(revoked_tn_credential["said"])
 
         assert retrieved["status"] == "revoked"
         assert retrieved["revocation_dt"] is not None

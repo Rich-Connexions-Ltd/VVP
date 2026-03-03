@@ -233,7 +233,7 @@ async def test_identity(
         pass  # Best-effort cleanup
 
 
-@pytest_asyncio.fixture(loop_scope="session")
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def test_registry(
     environment_config: EnvironmentConfig,
 ) -> dict:
@@ -252,6 +252,331 @@ async def test_registry(
         pytest.skip("VVP_TEST_ORG_ID not set")
     org_identity_name = f"org-{environment_config.org_id[:8]}"
     return {"name": f"{org_identity_name}-registry"}
+
+
+# =============================================================================
+# Shared Credential Fixtures (session-scoped to avoid redundant issuances)
+# =============================================================================
+# Each credential issuance takes ~5-10s against the live KERI Agent.
+# These fixtures issue credentials once per session and share them across
+# all tests that only need read-only access (dossier builds, field checks, etc).
+# Tests that mutate state (revocation, rotation) still issue their own.
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def standalone_tn_credential(
+    issuer_client: IssuerClient,
+    test_identity: dict,
+    test_registry: dict,
+) -> dict:
+    """A standalone TN Allocation credential with no edges.
+
+    Issued once per session; shared by tests that inspect credential fields,
+    build dossiers, or verify structure without mutating the credential.
+    """
+    result = await issuer_client.issue_credential(
+        registry_name=test_registry["name"],
+        schema_said=TN_ALLOCATION_SCHEMA,
+        attributes={
+            "dt": "2024-01-01T00:00:00Z",
+            "i": test_identity["aid"],
+            "LEI": "254900OPPU84GM83MG36",
+            "tn": ["+14155551234"],
+        },
+        publish_to_witnesses=False,
+    )
+    return result["credential"]
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def standalone_tn_dossier(
+    issuer_client: IssuerClient,
+    standalone_tn_credential: dict,
+) -> dict:
+    """JSON and CESR dossiers built from the standalone TN credential.
+
+    Returns dict with 'json' (bytes), 'cesr' (bytes), and 'said' (str).
+    """
+    json_bytes = await issuer_client.build_dossier(
+        root_said=standalone_tn_credential["said"],
+        format="json",
+        include_tel=True,
+    )
+    cesr_bytes = await issuer_client.build_dossier(
+        root_said=standalone_tn_credential["said"],
+        format="cesr",
+        include_tel=True,
+    )
+    return {
+        "json": json_bytes,
+        "cesr": cesr_bytes,
+        "said": standalone_tn_credential["said"],
+    }
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def le_tn_chain(
+    issuer_client: IssuerClient,
+    test_identity: dict,
+    test_registry: dict,
+) -> dict:
+    """LE -> TN credential chain (2 credentials).
+
+    Returns dict with 'le' and 'tn' credential dicts.
+    """
+    le_result = await issuer_client.issue_credential(
+        registry_name=test_registry["name"],
+        schema_said=LEGAL_ENTITY_SCHEMA,
+        attributes={
+            "dt": "2024-01-01T00:00:00Z",
+            "i": test_identity["aid"],
+            "LEI": "254900OPPU84GM83MG36",
+        },
+        publish_to_witnesses=False,
+    )
+    le_cred = le_result["credential"]
+
+    tn_result = await issuer_client.issue_credential(
+        registry_name=test_registry["name"],
+        schema_said=TN_ALLOCATION_SCHEMA,
+        attributes={
+            "dt": "2024-01-01T00:00:00Z",
+            "i": test_identity["aid"],
+            "LEI": "254900OPPU84GM83MG36",
+            "tn": ["+14155551234"],
+        },
+        edges={
+            "le": {
+                "n": le_cred["said"],
+                "s": LEGAL_ENTITY_SCHEMA,
+            }
+        },
+        publish_to_witnesses=False,
+    )
+    tn_cred = tn_result["credential"]
+
+    return {"le": le_cred, "tn": tn_cred}
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def le_tn_chain_dossier(
+    issuer_client: IssuerClient,
+    le_tn_chain: dict,
+) -> dict:
+    """JSON dossier from the LE->TN chain.
+
+    Returns dict with 'json' (bytes), 'le_said', and 'tn_said'.
+    """
+    dossier_bytes = await issuer_client.build_dossier(
+        root_said=le_tn_chain["tn"]["said"],
+        format="json",
+    )
+    return {
+        "json": dossier_bytes,
+        "le_said": le_tn_chain["le"]["said"],
+        "tn_said": le_tn_chain["tn"]["said"],
+    }
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def three_level_chain(
+    issuer_client: IssuerClient,
+    test_identity: dict,
+    test_registry: dict,
+) -> dict:
+    """Three-level credential chain: Root LE -> Mid LE -> Leaf TN.
+
+    Returns dict with 'root', 'mid', and 'leaf' credential dicts.
+    """
+    root_result = await issuer_client.issue_credential(
+        registry_name=test_registry["name"],
+        schema_said=LEGAL_ENTITY_SCHEMA,
+        attributes={
+            "dt": "2024-01-01T00:00:00Z",
+            "i": test_identity["aid"],
+            "LEI": "254900ROOT0000000001",
+        },
+        publish_to_witnesses=False,
+    )
+    root_cred = root_result["credential"]
+
+    mid_result = await issuer_client.issue_credential(
+        registry_name=test_registry["name"],
+        schema_said=LEGAL_ENTITY_SCHEMA,
+        attributes={
+            "dt": "2024-01-01T00:00:00Z",
+            "i": test_identity["aid"],
+            "LEI": "254900MIDDLE00000002",
+        },
+        edges={
+            "auth": {
+                "n": root_cred["said"],
+                "s": LEGAL_ENTITY_SCHEMA,
+            }
+        },
+        publish_to_witnesses=False,
+    )
+    mid_cred = mid_result["credential"]
+
+    leaf_result = await issuer_client.issue_credential(
+        registry_name=test_registry["name"],
+        schema_said=TN_ALLOCATION_SCHEMA,
+        attributes={
+            "dt": "2024-01-01T00:00:00Z",
+            "i": test_identity["aid"],
+            "LEI": "254900MIDDLE00000002",
+            "tn": ["+14155551234"],
+        },
+        edges={
+            "le": {
+                "n": mid_cred["said"],
+                "s": LEGAL_ENTITY_SCHEMA,
+            }
+        },
+        publish_to_witnesses=False,
+    )
+    leaf_cred = leaf_result["credential"]
+
+    return {"root": root_cred, "mid": mid_cred, "leaf": leaf_cred}
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def two_standalone_tn_credentials(
+    issuer_client: IssuerClient,
+    test_identity: dict,
+    test_registry: dict,
+) -> dict:
+    """Two independent TN Allocation credentials for aggregate dossier tests.
+
+    Returns dict with 'cred1' and 'cred2' credential dicts.
+    """
+    cred1_result = await issuer_client.issue_credential(
+        registry_name=test_registry["name"],
+        schema_said=TN_ALLOCATION_SCHEMA,
+        attributes={
+            "dt": "2024-01-01T00:00:00Z",
+            "i": test_identity["aid"],
+            "LEI": "254900FIRST00000001",
+            "tn": ["+14155551111"],
+        },
+        publish_to_witnesses=False,
+    )
+    cred2_result = await issuer_client.issue_credential(
+        registry_name=test_registry["name"],
+        schema_said=TN_ALLOCATION_SCHEMA,
+        attributes={
+            "dt": "2024-01-01T00:00:00Z",
+            "i": test_identity["aid"],
+            "LEI": "254900SECOND0000002",
+            "tn": ["+14155552222"],
+        },
+        publish_to_witnesses=False,
+    )
+    return {
+        "cred1": cred1_result["credential"],
+        "cred2": cred2_result["credential"],
+    }
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def shared_dependency_credentials(
+    issuer_client: IssuerClient,
+    test_identity: dict,
+    test_registry: dict,
+) -> dict:
+    """One LE credential + two TN credentials with edges to the same LE.
+
+    Structure:
+        LE (shared)
+        +-- TN1 (edge to LE)
+        +-- TN2 (edge to LE)
+
+    Returns dict with 'le', 'tn1', and 'tn2' credential dicts.
+    """
+    le_result = await issuer_client.issue_credential(
+        registry_name=test_registry["name"],
+        schema_said=LEGAL_ENTITY_SCHEMA,
+        attributes={
+            "dt": "2024-01-01T00:00:00Z",
+            "i": test_identity["aid"],
+            "LEI": "254900SHARED0000001",
+        },
+        publish_to_witnesses=False,
+    )
+    le_cred = le_result["credential"]
+
+    tn1_result = await issuer_client.issue_credential(
+        registry_name=test_registry["name"],
+        schema_said=TN_ALLOCATION_SCHEMA,
+        attributes={
+            "dt": "2024-01-01T00:00:00Z",
+            "i": test_identity["aid"],
+            "LEI": "254900SHARED0000001",
+            "tn": ["+14155551111"],
+        },
+        edges={
+            "le": {
+                "n": le_cred["said"],
+                "s": LEGAL_ENTITY_SCHEMA,
+            }
+        },
+        publish_to_witnesses=False,
+    )
+    tn1_cred = tn1_result["credential"]
+
+    tn2_result = await issuer_client.issue_credential(
+        registry_name=test_registry["name"],
+        schema_said=TN_ALLOCATION_SCHEMA,
+        attributes={
+            "dt": "2024-01-01T00:00:00Z",
+            "i": test_identity["aid"],
+            "LEI": "254900SHARED0000001",
+            "tn": ["+14155552222"],
+        },
+        edges={
+            "le": {
+                "n": le_cred["said"],
+                "s": LEGAL_ENTITY_SCHEMA,
+            }
+        },
+        publish_to_witnesses=False,
+    )
+    tn2_cred = tn2_result["credential"]
+
+    return {"le": le_cred, "tn1": tn1_cred, "tn2": tn2_cred}
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def revoked_tn_credential(
+    issuer_client: IssuerClient,
+    test_identity: dict,
+    test_registry: dict,
+) -> dict:
+    """A TN Allocation credential that has been revoked.
+
+    Issued and revoked once per session; shared by tests that only
+    need to read the revoked state (GET, build dossier) without
+    performing the revocation themselves.
+
+    Returns dict with 'credential' (post-revoke) and 'said'.
+    """
+    issue_result = await issuer_client.issue_credential(
+        registry_name=test_registry["name"],
+        schema_said=TN_ALLOCATION_SCHEMA,
+        attributes={
+            "dt": "2024-01-01T00:00:00Z",
+            "i": test_identity["aid"],
+            "LEI": "254900OPPU84GM83MG36",
+            "tn": ["+14155551234"],
+        },
+        publish_to_witnesses=False,
+    )
+    credential = issue_result["credential"]
+
+    revoke_result = await issuer_client.revoke_credential(
+        said=credential["said"],
+        publish_to_witnesses=False,
+    )
+    return revoke_result["credential"]
 
 
 # =============================================================================

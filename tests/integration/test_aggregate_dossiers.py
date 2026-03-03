@@ -7,7 +7,6 @@ import json
 
 import pytest
 
-from .conftest import TN_ALLOCATION_SCHEMA, LEGAL_ENTITY_SCHEMA
 from .helpers import IssuerClient
 
 
@@ -20,37 +19,11 @@ class TestAggregateDossiers:
     async def test_aggregate_two_roots(
         self,
         issuer_client: IssuerClient,
-        test_identity: dict,
-        test_registry: dict,
+        two_standalone_tn_credentials: dict,
     ):
         """Test aggregate dossier with two independent root credentials."""
-        # Issue first credential
-        cred1_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=TN_ALLOCATION_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],
-                "LEI": "254900FIRST00000001",
-                "tn": ["+14155551111"],
-            },
-            publish_to_witnesses=False,
-        )
-        cred1 = cred1_result["credential"]
-
-        # Issue second credential (independent)
-        cred2_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=TN_ALLOCATION_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],
-                "LEI": "254900SECOND0000002",
-                "tn": ["+14155552222"],
-            },
-            publish_to_witnesses=False,
-        )
-        cred2 = cred2_result["credential"]
+        cred1 = two_standalone_tn_credentials["cred1"]
+        cred2 = two_standalone_tn_credentials["cred2"]
 
         # Build aggregate dossier
         dossier_bytes = await issuer_client.build_aggregate_dossier(
@@ -70,8 +43,7 @@ class TestAggregateDossiers:
     async def test_aggregate_with_shared_dependency(
         self,
         issuer_client: IssuerClient,
-        test_identity: dict,
-        test_registry: dict,
+        shared_dependency_credentials: dict,
     ):
         """Test aggregate dossier where roots share a common dependency.
 
@@ -82,58 +54,9 @@ class TestAggregateDossiers:
 
         Dossier should deduplicate the shared LE.
         """
-        # Issue shared LE credential
-        le_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=LEGAL_ENTITY_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],
-                "LEI": "254900SHARED0000001",
-            },
-            publish_to_witnesses=False,
-        )
-        le_cred = le_result["credential"]
-
-        # Issue TN1 with edge to LE
-        tn1_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=TN_ALLOCATION_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],
-                "LEI": "254900SHARED0000001",
-                "tn": ["+14155551111"],
-            },
-            edges={
-                "le": {
-                    "n": le_cred["said"],
-                    "s": LEGAL_ENTITY_SCHEMA,
-                }
-            },
-            publish_to_witnesses=False,
-        )
-        tn1_cred = tn1_result["credential"]
-
-        # Issue TN2 with edge to same LE
-        tn2_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=TN_ALLOCATION_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],
-                "LEI": "254900SHARED0000001",
-                "tn": ["+14155552222"],
-            },
-            edges={
-                "le": {
-                    "n": le_cred["said"],
-                    "s": LEGAL_ENTITY_SCHEMA,
-                }
-            },
-            publish_to_witnesses=False,
-        )
-        tn2_cred = tn2_result["credential"]
+        le_cred = shared_dependency_credentials["le"]
+        tn1_cred = shared_dependency_credentials["tn1"]
+        tn2_cred = shared_dependency_credentials["tn2"]
 
         # Build aggregate dossier with both TN roots
         dossier_bytes = await issuer_client.build_aggregate_dossier(
@@ -156,56 +79,13 @@ class TestAggregateDossiers:
     async def test_aggregate_maintains_order(
         self,
         issuer_client: IssuerClient,
-        test_identity: dict,
-        test_registry: dict,
+        le_tn_chain: dict,
+        standalone_tn_credential: dict,
     ):
         """Test aggregate dossier maintains topological order."""
-        # Issue LE
-        le_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=LEGAL_ENTITY_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],
-                "LEI": "254900ORDER00000001",
-            },
-            publish_to_witnesses=False,
-        )
-        le_cred = le_result["credential"]
-
-        # Issue TN with edge to LE
-        tn_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=TN_ALLOCATION_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],
-                "LEI": "254900ORDER00000001",
-                "tn": ["+14155551111"],
-            },
-            edges={
-                "le": {
-                    "n": le_cred["said"],
-                    "s": LEGAL_ENTITY_SCHEMA,
-                }
-            },
-            publish_to_witnesses=False,
-        )
-        tn_cred = tn_result["credential"]
-
-        # Issue independent credential
-        indep_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=TN_ALLOCATION_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],
-                "LEI": "254900INDEP00000002",
-                "tn": ["+14155553333"],
-            },
-            publish_to_witnesses=False,
-        )
-        indep_cred = indep_result["credential"]
+        le_cred = le_tn_chain["le"]
+        tn_cred = le_tn_chain["tn"]
+        indep_cred = standalone_tn_credential
 
         # Build aggregate
         dossier_bytes = await issuer_client.build_aggregate_dossier(
@@ -226,22 +106,10 @@ class TestAggregateDossiers:
     async def test_single_root_via_aggregate_endpoint(
         self,
         issuer_client: IssuerClient,
-        test_identity: dict,
-        test_registry: dict,
+        standalone_tn_credential: dict,
     ):
         """Test aggregate endpoint works with single root."""
-        cred_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=TN_ALLOCATION_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],
-                "LEI": "254900SINGLE0000001",
-                "tn": ["+14155551234"],
-            },
-            publish_to_witnesses=False,
-        )
-        cred = cred_result["credential"]
+        cred = standalone_tn_credential
 
         # Build "aggregate" with single root
         dossier_bytes = await issuer_client.build_aggregate_dossier(

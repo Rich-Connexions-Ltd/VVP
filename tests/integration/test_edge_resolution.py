@@ -20,42 +20,14 @@ class TestEdgeResolution:
     async def test_structured_edge_with_schema(
         self,
         issuer_client: IssuerClient,
-        test_identity: dict,
-        test_registry: dict,
+        le_tn_chain: dict,
     ):
-        """Test structured edge format: {"n": "SAID", "s": "schema"}."""
-        # Issue LE credential
-        le_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=LEGAL_ENTITY_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],
-                "LEI": "254900STRUCT0000001",
-            },
-            publish_to_witnesses=False,
-        )
-        le_cred = le_result["credential"]
+        """Test structured edge format: {"n": "SAID", "s": "schema"}.
 
-        # Issue TN with structured edge
-        tn_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=TN_ALLOCATION_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],
-                "LEI": "254900STRUCT0000001",
-                "tn": ["+14155551234"],
-            },
-            edges={
-                "le": {
-                    "n": le_cred["said"],
-                    "s": LEGAL_ENTITY_SCHEMA,
-                }
-            },
-            publish_to_witnesses=False,
-        )
-        tn_cred = tn_result["credential"]
+        Uses the shared LE→TN chain which has structured edges.
+        """
+        le_cred = le_tn_chain["le"]
+        tn_cred = le_tn_chain["tn"]
 
         # Build dossier - should resolve edge
         dossier_bytes = await issuer_client.build_dossier(
@@ -146,60 +118,15 @@ class TestEdgeResolution:
     async def test_nested_edge_objects(
         self,
         issuer_client: IssuerClient,
-        test_identity: dict,
-        test_registry: dict,
+        three_level_chain: dict,
     ):
-        """Test nested edge structures are resolved correctly."""
-        # Create a chain with nested edges
-        root_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=LEGAL_ENTITY_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],
-                "LEI": "254900NESTED0000001",
-            },
-            publish_to_witnesses=False,
-        )
-        root_cred = root_result["credential"]
+        """Test nested edge structures are resolved correctly.
 
-        mid_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=LEGAL_ENTITY_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],
-                "LEI": "254900NESTED0000002",
-            },
-            edges={
-                "chain": {
-                    "n": root_cred["said"],
-                    "s": LEGAL_ENTITY_SCHEMA,
-                    "o": "I2I",  # Additional edge properties
-                }
-            },
-            publish_to_witnesses=False,
-        )
-        mid_cred = mid_result["credential"]
-
-        leaf_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=TN_ALLOCATION_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],
-                "LEI": "254900NESTED0000002",
-                "tn": ["+14155551234"],
-            },
-            edges={
-                "auth": {
-                    "n": mid_cred["said"],
-                    "s": LEGAL_ENTITY_SCHEMA,
-                }
-            },
-            publish_to_witnesses=False,
-        )
-        leaf_cred = leaf_result["credential"]
+        Uses the shared three-level chain fixture.
+        """
+        root_cred = three_level_chain["root"]
+        mid_cred = three_level_chain["mid"]
+        leaf_cred = three_level_chain["leaf"]
 
         # Build dossier from leaf
         dossier_bytes = await issuer_client.build_dossier(
@@ -271,22 +198,10 @@ class TestEdgeResolution:
     async def test_credential_without_edges(
         self,
         issuer_client: IssuerClient,
-        test_identity: dict,
-        test_registry: dict,
+        standalone_tn_credential: dict,
     ):
         """Test credential without edges builds single-item dossier."""
-        cred_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=TN_ALLOCATION_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],
-                "LEI": "254900NOEDGE000001",
-                "tn": ["+14155551234"],
-            },
-            publish_to_witnesses=False,
-        )
-        cred = cred_result["credential"]
+        cred = standalone_tn_credential
 
         dossier_bytes = await issuer_client.build_dossier(
             root_said=cred["said"],
@@ -302,48 +217,14 @@ class TestEdgeResolution:
     @pytest.mark.asyncio
     async def test_edge_verification_in_dossier(
         self,
-        issuer_client: IssuerClient,
-        test_identity: dict,
-        test_registry: dict,
+        le_tn_chain: dict,
+        le_tn_chain_dossier: dict,
     ):
         """Verify edge references are preserved in dossier ACDCs."""
-        le_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=LEGAL_ENTITY_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],
-                "LEI": "254900VERIFY000001",
-            },
-            publish_to_witnesses=False,
-        )
-        le_cred = le_result["credential"]
+        le_cred = le_tn_chain["le"]
+        tn_cred = le_tn_chain["tn"]
 
-        tn_result = await issuer_client.issue_credential(
-            registry_name=test_registry["name"],
-            schema_said=TN_ALLOCATION_SCHEMA,
-            attributes={
-                "dt": "2024-01-01T00:00:00Z",
-                "i": test_identity["aid"],
-                "LEI": "254900VERIFY000001",
-                "tn": ["+14155551234"],
-            },
-            edges={
-                "le": {
-                    "n": le_cred["said"],
-                    "s": LEGAL_ENTITY_SCHEMA,
-                }
-            },
-            publish_to_witnesses=False,
-        )
-        tn_cred = tn_result["credential"]
-
-        dossier_bytes = await issuer_client.build_dossier(
-            root_said=tn_cred["said"],
-            format="json",
-        )
-
-        dossier = json.loads(dossier_bytes)
+        dossier = json.loads(le_tn_chain_dossier["json"])
 
         # Find the TN credential
         tn_acdc = next(acdc for acdc in dossier if acdc["d"] == tn_cred["said"])
@@ -449,7 +330,6 @@ class TestEdgeResolution:
         tn_cred = tn_result["credential"]
 
         # Build dossier - should succeed with warning, not fail
-        # The TN credential should be present, but the dangling edge target won't be
         dossier_bytes = await issuer_client.build_dossier(
             root_said=tn_cred["said"],
             format="json",
