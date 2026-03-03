@@ -534,6 +534,10 @@ class CreateVVPResponse(BaseModel):
             "UNTRUSTED results in 403 rejection, not returned here."
         ),
     )
+    timing_ms: Optional[dict[str, float]] = Field(
+        None,
+        description="Per-step timing breakdown in milliseconds (Sprint 76 instrumentation)",
+    )
 
 
 # =============================================================================
@@ -626,6 +630,10 @@ class TNLookupResponse(BaseModel):
     brand_name: Optional[str] = Field(None, description="Brand name")
     brand_logo_url: Optional[str] = Field(None, description="Brand logo URL")
     error: Optional[str] = Field(None, description="Error message if not found")
+    timing_ms: Optional[dict[str, float]] = Field(
+        None,
+        description="Per-step timing breakdown in milliseconds (Sprint 76 instrumentation)",
+    )
 
 
 # =============================================================================

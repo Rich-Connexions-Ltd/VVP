@@ -399,6 +399,7 @@ async def lookup_tn(
         brand_name=result.brand_name,
         brand_logo_url=result.brand_logo_url,
         error=result.error,
+        timing_ms=result.timing_ms,
     )
 
 

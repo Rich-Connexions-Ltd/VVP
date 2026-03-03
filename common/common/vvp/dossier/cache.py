@@ -154,6 +154,8 @@ class DossierCache:
         self._metrics = CacheMetrics()
         # Background revocation task tracking (protected by _lock)
         self._revocation_tasks: Dict[str, asyncio.Task] = {}
+        # Sprint 76: Callbacks invoked when a SAID is invalidated (e.g., attestation cache)
+        self._invalidation_callbacks: list = []
 
     async def get(self, url: str) -> Optional[CachedDossier]:
         """Lookup cached dossier by URL.
@@ -280,7 +282,15 @@ class DossierCache:
             log.info(
                 f"Dossier cache invalidated {count} entries for revoked SAID: {said[:20]}..."
             )
-            return count
+
+        # Sprint 76: Notify registered callbacks (outside lock)
+        for callback in self._invalidation_callbacks:
+            try:
+                callback(said)
+            except Exception as e:
+                log.warning(f"Invalidation callback error for SAID {said[:20]}...: {e}")
+
+        return count
 
     async def invalidate_by_url(self, url: str) -> bool:
         """Invalidate a specific cached dossier by URL.
@@ -299,6 +309,17 @@ class DossierCache:
             self._metrics.invalidations += 1
             log.debug(f"Dossier cache invalidated: {url[:50]}...")
             return True
+
+    def on_invalidate_said(self, callback) -> None:
+        """Register a callback invoked when invalidate_by_said fires.
+
+        Sprint 76: Used by the attestation cache to stay in sync with
+        dossier revocation events.
+
+        Args:
+            callback: Callable[[str], Any] — receives the invalidated SAID.
+        """
+        self._invalidation_callbacks.append(callback)
 
     async def clear(self) -> None:
         """Clear all cache entries."""

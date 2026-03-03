@@ -5721,3 +5721,35 @@ The current DELETE endpoints only remove items from KERI Agent LMDB. Because Pos
 - [x] Witness status badge on identity admin page (green ✓ / red ⚠ + publish button)
 - [x] Dossier wizard Step 4: vetter scope tile shows ECC targets, jurisdiction, expiry
 - [x] All tests pass — 190+900+1848+43=2,981 tests pass
+
+## Sprint 76: Issuer Call-Path Performance — Timing Instrumentation & Concurrency Fix
+
+**Status:** IN PROGRESS
+**Goal:** Eliminate the 6-23 second delay in VVP call setup by adding timing instrumentation, multi-worker uvicorn, intermediate result caching, and async DB wrappers for the hot path.
+
+### Root Cause (diagnosed)
+
+1. Single uvicorn worker (1 event loop) → all requests serialized
+2. Synchronous SQLAlchemy → `db.query()` blocks the event loop
+3. Zero caching in `/vvp/create` → 5-10 redundant KERI Agent HTTP calls per call
+4. No timing instrumentation → impossible to identify bottlenecks
+
+### Deliverables
+
+- [ ] **Shared PhaseTimer** — Move `timing.py` to `common/` for reuse by issuer
+- [ ] **`/vvp/create` timing** — Per-step timing in response (`timing_ms` dict)
+- [ ] **`/tn/lookup` timing** — Per-step timing in TN lookup response
+- [ ] **Event loop monitor** — Detect and log event loop blocking (>100ms)
+- [ ] **Uvicorn `--workers=4`** — Multi-process serving to eliminate serialization
+- [ ] **VVP attestation cache** — Cache identity, brand, URLs across calls for same identity+dossier
+- [ ] **Async DB wrapper** — `asyncio.to_thread()` for hot-path sync DB calls
+- [ ] **SIP redirect timing logging** — Log per-step timing from issuer response
+
+### Exit Criteria
+
+- [ ] `/vvp/create` response includes `timing_ms` breakdown
+- [ ] Event loop health endpoint at `/admin/event-loop-health`
+- [ ] Issuer Dockerfile has `--workers=4`
+- [ ] Attestation cache eliminates redundant KERI Agent calls on 2nd+ call
+- [ ] All existing tests pass
+- [ ] New tests for cache, monitor, and timing

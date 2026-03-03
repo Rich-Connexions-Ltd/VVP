@@ -1997,3 +1997,17 @@ async def bulk_cleanup_identities(
         cascaded_credential_count=agent_result.get("cascaded_credential_count", 0),
         dry_run=body.dry_run,
     )
+
+
+# Sprint 76: Event loop health monitoring endpoint
+@router.get("/event-loop-health")
+async def event_loop_health(
+    principal: Principal = require_admin,
+) -> dict:
+    """Return event loop latency metrics for this worker.
+
+    Requires: issuer:admin role.
+    """
+    from app.core.event_loop_monitor import get_event_loop_monitor
+    monitor = get_event_loop_monitor()
+    return monitor.metrics.to_dict()

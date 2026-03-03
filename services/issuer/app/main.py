@@ -90,6 +90,7 @@ async def lifespan(app: FastAPI):
     log.info("Starting VVP Issuer service...")
     cleanup_task = None
     bootstrap_task = None
+    event_loop_monitor = None
 
     try:
         # Initialize database (Sprint 41: Multi-tenancy)
@@ -121,6 +122,11 @@ async def lifespan(app: FastAPI):
         else:
             log.info("Mock vLEI disabled (VVP_MOCK_VLEI_ENABLED=false)")
 
+        # Sprint 76: Start event loop latency monitor
+        from app.core.event_loop_monitor import get_event_loop_monitor
+        event_loop_monitor = get_event_loop_monitor()
+        await event_loop_monitor.start()
+
         log.info("VVP Issuer service started")
     except Exception as e:
         log.error(f"Failed to initialize: {e}")
@@ -130,6 +136,10 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     log.info("Shutting down VVP Issuer service...")
+
+    # Sprint 76: Stop event loop monitor
+    if event_loop_monitor:
+        await event_loop_monitor.stop()
 
     # Cancel background tasks
     for task, name in [

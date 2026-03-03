@@ -2,15 +2,17 @@
 
 Sprint 42: Validates that TNs are covered by the organization's TN Allocation
 credentials before allowing VVP attestation.
+Sprint 76: Per-step timing instrumentation via PhaseTimer.
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from sqlalchemy.orm import Session
 
 from app.keri_client import KeriAgentUnavailableError
+from common.vvp.timing import PhaseTimer
 from common.vvp.utils.tn_utils import parse_tn_allocation, TNParseError
 
 log = logging.getLogger(__name__)
@@ -36,6 +38,7 @@ class TNLookupResult:
     brand_name: Optional[str] = None
     brand_logo_url: Optional[str] = None
     error: Optional[str] = None
+    timing_ms: Optional[dict[str, float]] = field(default=None)
 
 
 def tn_to_int(tn: str) -> int:
@@ -197,15 +200,20 @@ async def lookup_tn_with_validation(
     from app.db.models import Organization
     from app.tn.store import TNMappingStore
 
+    # Sprint 76: Per-step timing
+    timer = PhaseTimer()
+    timer.start("total")
+
     # Normalize TN to E.164
     if not tn.startswith("+"):
         tn = f"+{tn}"
 
     # Authenticate API key (try system key first, then org key)
-    store = get_api_key_store()
-    principal, _ = store.verify(api_key)
-    if not principal:
-        principal, _ = verify_org_api_key(api_key)
+    with timer.phase("api_key_verify"):
+        store = get_api_key_store()
+        principal, _ = store.verify(api_key)
+        if not principal:
+            principal, _ = verify_org_api_key(api_key)
 
     if not principal:
         return TNLookupResult(found=False, error="Invalid API key")
@@ -216,20 +224,21 @@ async def lookup_tn_with_validation(
         return TNLookupResult(found=False, error="No organization associated with API key")
 
     # Look up mapping — first try direct (API key's own org), then OSP delegation
-    store = TNMappingStore(db)
-    mapping = store.get_by_tn(tn, org_id)
-    owner_org_id = org_id  # For TN ownership validation
+    with timer.phase("tn_mapping_query"):
+        store = TNMappingStore(db)
+        mapping = store.get_by_tn(tn, org_id)
+        owner_org_id = org_id  # For TN ownership validation
 
-    if not mapping:
-        # Fallback: check if API key's org is an OSP for a dossier with this TN
-        mapping = _lookup_via_osp_delegation(db, tn, org_id)
-        if mapping:
-            # TN ownership belongs to the delegating (owner) org, not the OSP
-            owner_org_id = mapping.organization_id
-            log.info(
-                f"TN {tn} resolved via OSP delegation "
-                f"(osp={org_id[:8]}..., owner={owner_org_id[:8]}...)"
-            )
+        if not mapping:
+            # Fallback: check if API key's org is an OSP for a dossier with this TN
+            mapping = _lookup_via_osp_delegation(db, tn, org_id)
+            if mapping:
+                # TN ownership belongs to the delegating (owner) org, not the OSP
+                owner_org_id = mapping.organization_id
+                log.info(
+                    f"TN {tn} resolved via OSP delegation "
+                    f"(osp={org_id[:8]}..., owner={owner_org_id[:8]}...)"
+                )
 
     if not mapping:
         return TNLookupResult(found=False, tn=tn, error=f"No mapping found for TN {tn}")
@@ -239,12 +248,13 @@ async def lookup_tn_with_validation(
 
     # Validate TN ownership (if enabled) — always against the owner org
     if validate_ownership:
-        if not await validate_tn_ownership(db, owner_org_id, tn):
-            return TNLookupResult(
-                found=False,
-                tn=tn,
-                error=f"TN {tn} not covered by organization's TN Allocation credentials",
-            )
+        async with timer.aphase("ownership_validation"):
+            if not await validate_tn_ownership(db, owner_org_id, tn):
+                return TNLookupResult(
+                    found=False,
+                    tn=tn,
+                    error=f"TN {tn} not covered by organization's TN Allocation credentials",
+                )
 
     # Check dossier revocation status via cache (defense in depth).
     # First call: cache miss → TRUSTED (starts background TEL check).
@@ -281,6 +291,9 @@ async def lookup_tn_with_validation(
     org = db.query(Organization).filter(Organization.id == mapping.organization_id).first()
     org_name = org.name if org else None
 
+    timer.stop()  # total
+    log.info(f"TN lookup {tn}: [{timer.to_log_str()}]")
+
     return TNLookupResult(
         found=True,
         tn=mapping.tn,
@@ -290,4 +303,5 @@ async def lookup_tn_with_validation(
         identity_name=mapping.identity_name,
         brand_name=mapping.brand_name,
         brand_logo_url=mapping.brand_logo_url,
+        timing_ms=timer.to_dict(),
     )

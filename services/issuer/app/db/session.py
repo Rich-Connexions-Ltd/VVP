@@ -5,16 +5,19 @@ This module provides SQLAlchemy engine and session management:
 - SessionLocal: Session factory for creating database sessions
 - get_db(): FastAPI dependency for request-scoped sessions
 - get_db_session(): Context manager for non-request code
+- async_db_call(): Sprint 76 — run sync DB ops in thread pool
 
 Sprint 46: PostgreSQL migration with connection pooling.
+Sprint 76: async_db_call() wrapper for non-blocking DB access.
 SQLite fallback retained for local development.
 
 CI/CD Test: Verifying zero-downtime deployment and data persistence.
 """
 
+import asyncio
 import logging
 from contextlib import contextmanager
-from typing import Generator
+from typing import Callable, Generator, TypeVar
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
@@ -114,6 +117,37 @@ def get_db_session() -> Generator[Session, None, None]:
         raise
     finally:
         db.close()
+
+
+T = TypeVar("T")
+
+
+async def async_db_call(fn: Callable[..., T], *args, **kwargs) -> T:
+    """Run a synchronous DB operation in a thread pool with a fresh session.
+
+    Sprint 76: Creates a new SQLAlchemy Session inside the worker thread,
+    passes it to the callable, and closes it before returning. This prevents
+    blocking the async event loop while maintaining session thread-safety.
+
+    The callable signature must accept a `db` keyword argument:
+        def my_db_operation(db: Session, ...) -> T:
+
+    Usage:
+        result = await async_db_call(store.verify, api_key)
+    """
+    def _run():
+        db = SessionLocal()
+        try:
+            result = fn(db=db, *args, **kwargs)
+            db.commit()
+            return result
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    return await asyncio.to_thread(_run)
 
 
 def init_database() -> None:

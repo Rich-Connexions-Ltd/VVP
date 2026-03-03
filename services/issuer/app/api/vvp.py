@@ -4,6 +4,7 @@ Creates VVP-Identity headers and signed PASSporT JWTs for telephone calls.
 This is the issuer-side implementation per VVP spec §4.1A, §5.0-§5.4, §6.3.1.
 
 Sprint 68c: PASSporT signing delegated to KERI Agent via create_vvp_attestation().
+Sprint 76: Per-step timing instrumentation via PhaseTimer.
 """
 
 import logging
@@ -16,7 +17,9 @@ from app.auth.roles import check_credential_write_role, require_auth
 from app.keri_client import get_keri_client, KeriAgentUnavailableError
 from common.vvp.dossier.trust import TrustDecision
 from common.vvp.models.keri_agent import CreateVVPAttestationRequest
+from common.vvp.timing import PhaseTimer
 
+from app.vvp.attestation_cache import get_attestation_cache
 from app.vvp.card import build_card_claim
 from app.vvp.dossier_service import check_dossier_revocation
 from app.vvp.exceptions import (
@@ -90,6 +93,10 @@ async def create_vvp_attestation(
     - "TRUSTED": Credentials active or status still pending (safe to sign)
     - Response 403: Revoked credentials detected (signing rejected)
     """
+    # Sprint 76: Per-step timing instrumentation
+    timer = PhaseTimer()
+    timer.start("total")
+
     # Check authorization (accepts issuer:operator+ OR org:dossier_manager+)
     check_credential_write_role(principal)
 
@@ -102,108 +109,148 @@ async def create_vvp_attestation(
         if not body.dest_tn:
             raise InvalidPhoneNumberError("dest_tn must have at least one phone number")
 
-        # Get identity info via KERI Agent
+        # Sprint 76: Check attestation cache for intermediate results
         client = get_keri_client()
-        identity = await client.get_identity(body.identity_name)
-        if identity is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Identity not found: {body.identity_name}",
-            )
+        attest_cache = get_attestation_cache()
+        cached = attest_cache.get(body.identity_name, body.dossier_said)
 
-        # Construct URLs
-        issuer_base_url = _get_issuer_base_url()
-        witness_url = _get_witness_url()
+        if cached is not None:
+            # Cache hit — skip identity resolve, revocation, constraints, brand extraction
+            timer.record("cache", 0.0)
+            issuer_oobi = cached.issuer_oobi
+            dossier_url = cached.dossier_url
+            card = cached.card
 
-        issuer_oobi = build_issuer_oobi(identity.aid, witness_url)
-        dossier_url = build_dossier_url(body.dossier_said, issuer_base_url)
-
-        # Check dossier revocation status before signing
-        trust, revocation_warning = await check_dossier_revocation(
-            dossier_url=dossier_url,
-            dossier_said=body.dossier_said,
-        )
-
-        if trust == TrustDecision.UNTRUSTED:
-            log.warning(
-                f"Rejecting VVP creation - revoked credentials: {body.dossier_said}"
-            )
-            raise HTTPException(
-                status_code=403,
-                detail="Credential chain contains revoked credentials",
-            )
-
-        if revocation_warning:
-            log.info(f"VVP creation proceeding with warning: {revocation_warning}")
-
-        # Sprint 62: Signing-time vetter constraint validation (ECC + jurisdiction)
-        from app.vetter.constraints import validate_signing_constraints
-        from app.config import ENFORCE_VETTER_CONSTRAINTS
-
-        signing_violations = await validate_signing_constraints(
-            orig_tn=body.orig_tn,
-            dossier_said=body.dossier_said,
-        )
-        failed_constraints = [v for v in signing_violations if not v.is_authorized]
-        if failed_constraints:
-            detail = "; ".join(
-                f"{v.credential_type} {v.check_type}: {v.reason}"
-                for v in failed_constraints
-            )
-            if ENFORCE_VETTER_CONSTRAINTS:
+            # Still check revocation (fast — DossierCache hit)
+            async with timer.aphase("revocation_check"):
+                trust, revocation_warning = await check_dossier_revocation(
+                    dossier_url=dossier_url,
+                    dossier_said=body.dossier_said,
+                )
+            if trust == TrustDecision.UNTRUSTED:
+                log.warning(
+                    f"Rejecting VVP creation - revoked credentials: {body.dossier_said}"
+                )
                 raise HTTPException(
                     status_code=403,
-                    detail=f"Signing constraint violation: {detail}",
+                    detail="Credential chain contains revoked credentials",
                 )
-            else:
-                log.warning(f"Signing constraint warning (soft): {detail}")
+        else:
+            # Cache miss — full computation path
+            # Get identity info via KERI Agent
+            async with timer.aphase("identity_resolve"):
+                identity = await client.get_identity(body.identity_name)
+            if identity is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Identity not found: {body.identity_name}",
+                )
+
+            # Construct URLs
+            issuer_base_url = _get_issuer_base_url()
+            witness_url = _get_witness_url()
+
+            issuer_oobi = build_issuer_oobi(identity.aid, witness_url)
+            dossier_url = build_dossier_url(body.dossier_said, issuer_base_url)
+
+            # Check dossier revocation status before signing
+            async with timer.aphase("revocation_check"):
+                trust, revocation_warning = await check_dossier_revocation(
+                    dossier_url=dossier_url,
+                    dossier_said=body.dossier_said,
+                )
+
+            if trust == TrustDecision.UNTRUSTED:
+                log.warning(
+                    f"Rejecting VVP creation - revoked credentials: {body.dossier_said}"
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail="Credential chain contains revoked credentials",
+                )
+
+            if revocation_warning:
+                log.info(f"VVP creation proceeding with warning: {revocation_warning}")
+
+            # Sprint 62: Signing-time vetter constraint validation (ECC + jurisdiction)
+            from app.vetter.constraints import validate_signing_constraints
+            from app.config import ENFORCE_VETTER_CONSTRAINTS
+
+            async with timer.aphase("signing_constraints"):
+                signing_violations = await validate_signing_constraints(
+                    orig_tn=body.orig_tn,
+                    dossier_said=body.dossier_said,
+                )
+            failed_constraints = [v for v in signing_violations if not v.is_authorized]
+            if failed_constraints:
+                detail = "; ".join(
+                    f"{v.credential_type} {v.check_type}: {v.reason}"
+                    for v in failed_constraints
+                )
+                if ENFORCE_VETTER_CONSTRAINTS:
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"Signing constraint violation: {detail}",
+                    )
+                else:
+                    log.warning(f"Signing constraint warning (soft): {detail}")
+
+            # Sprint 58: Extract brand attributes for vCard card claim.
+            card = None
+            try:
+                from app.dossier.builder import get_dossier_builder
+
+                async with timer.aphase("brand_extraction"):
+                    builder = await get_dossier_builder()
+                    content = await builder.build(body.dossier_said, include_tel=False)
+
+                    for said in content.credential_saids:
+                        cred_info = await client.get_credential(said)
+                        if cred_info and cred_info.attributes:
+                            card = build_card_claim(cred_info.attributes)
+                            if card is not None:
+                                log.debug(f"Card claim from credential {said[:16]}...")
+                                break
+            except Exception as e:
+                log.warning(f"Failed to extract card claim from credentials: {e}")
+
+            # Store in attestation cache for next call
+            attest_cache.put(
+                identity_name=body.identity_name,
+                dossier_said=body.dossier_said,
+                identity_aid=identity.aid,
+                issuer_oobi=issuer_oobi,
+                dossier_url=dossier_url,
+                card=card,
+            )
 
         # Cap exp_seconds to normative maximum (§5.2B)
         exp_seconds = min(body.exp_seconds, MAX_VALIDITY_SECONDS)
 
-        # Sprint 58: Extract brand attributes for vCard card claim.
-        # Walk the dossier credential chain to find the brand credential
-        # (which may not be the root — e.g. root is LE credential, brand
-        # credential is a child linked via edges).
-        card = None
-        try:
-            from app.dossier.builder import get_dossier_builder
-
-            builder = await get_dossier_builder()
-            content = await builder.build(body.dossier_said, include_tel=False)
-
-            for said in content.credential_saids:
-                cred_info = await client.get_credential(said)
-                if cred_info and cred_info.attributes:
-                    card = build_card_claim(cred_info.attributes)
-                    if card is not None:
-                        log.debug(f"Card claim from credential {said[:16]}...")
-                        break
-        except Exception as e:
-            log.warning(f"Failed to extract card claim from credentials: {e}")
-
-        # Sprint 60: Card claim built ONLY from credential chain (above).
-        # No TN mapping fallback — brand must come from dossier evidence.
-
         # Delegate PASSporT signing + header creation to KERI Agent
-        attestation = await client.create_vvp_attestation(
-            CreateVVPAttestationRequest(
-                identity_name=body.identity_name,
-                dossier_said=body.dossier_said,
-                orig_tn=body.orig_tn,
-                dest_tn=body.dest_tn,
-                exp_seconds=exp_seconds,
-                call_id=body.call_id,
-                cseq=str(body.cseq) if body.cseq is not None else None,
-                card=card,
-                dossier_url=dossier_url,
-                kid_oobi=issuer_oobi,
+        async with timer.aphase("attestation_signing"):
+            attestation = await client.create_vvp_attestation(
+                CreateVVPAttestationRequest(
+                    identity_name=body.identity_name,
+                    dossier_said=body.dossier_said,
+                    orig_tn=body.orig_tn,
+                    dest_tn=body.dest_tn,
+                    exp_seconds=exp_seconds,
+                    call_id=body.call_id,
+                    cseq=str(body.cseq) if body.cseq is not None else None,
+                    card=card,
+                    dossier_url=dossier_url,
+                    kid_oobi=issuer_oobi,
+                )
             )
-        )
+
+        timer.stop()  # total
+        timing_dict = timer.to_dict()
 
         log.info(
             f"Created VVP attestation: identity={body.identity_name}, "
-            f"orig={body.orig_tn}, dossier={body.dossier_said[:16]}..."
+            f"orig={body.orig_tn}, dossier={body.dossier_said[:16]}... "
+            f"timing=[{timer.to_log_str()}]"
         )
 
         return CreateVVPResponse(
@@ -215,6 +262,7 @@ async def create_vvp_attestation(
             iat=attestation.iat,
             exp=attestation.exp,
             revocation_status=trust.value,
+            timing_ms=timing_dict,
         )
 
     except InvalidPhoneNumberError as e:

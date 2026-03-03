@@ -35,6 +35,9 @@ def get_issuer_dossier_cache() -> DossierCache:
     The issuer does not have its own WitnessPool, so we don't inject
     a tel_client_factory — the common DossierCache will use its own
     fallback (common.vvp.keri.tel_client.get_tel_client).
+
+    Sprint 76: Registers attestation cache invalidation callback so
+    revoked credentials also evict the attestation cache.
     """
     global _cache
     if _cache is None:
@@ -42,6 +45,14 @@ def get_issuer_dossier_cache() -> DossierCache:
             ttl_seconds=DOSSIER_CACHE_TTL_SECONDS,
             max_entries=DOSSIER_CACHE_MAX_ENTRIES,
         )
+        # Register attestation cache invalidation on dossier SAID revocation
+        try:
+            from app.vvp.attestation_cache import get_attestation_cache
+            attest_cache = get_attestation_cache()
+            _cache.on_invalidate_said(attest_cache.invalidate_by_dossier_said)
+            log.info("Attestation cache invalidation callback registered with DossierCache")
+        except Exception as e:
+            log.warning(f"Failed to register attestation cache callback: {e} — TTL-only invalidation active")
     return _cache
 
 

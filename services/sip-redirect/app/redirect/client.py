@@ -256,7 +256,12 @@ class IssuerClient:
 
             if response.status_code == 200:
                 data = response.json()
-                log.info(f"VVP create OK: orig={orig_tn}, elapsed={elapsed:.0f}ms")
+                # Sprint 76: Log server-side timing breakdown if present
+                timing = data.get("timing_ms")
+                timing_str = ""
+                if timing:
+                    timing_str = ", timing={" + ", ".join(f"{k}={v:.0f}ms" for k, v in timing.items()) + "}"
+                log.info(f"VVP create OK: orig={orig_tn}, elapsed={elapsed:.0f}ms{timing_str}")
                 return VVPCreateResult(
                     success=True,
                     identity_header=data.get("identity_header"),
