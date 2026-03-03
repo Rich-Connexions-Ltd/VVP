@@ -439,33 +439,49 @@ None — the diagnosis is complete and the approach is well-understood.
 
 ### Deviations from Plan
 
-None — all 7 components implemented as specified. The `async_db_call` wrapper is available but not yet applied to TN lookup hot-path callers (the wrapper exists for future use; the immediate queueing fix comes from the 4-worker configuration).
+None — all 7 components implemented as specified.
+
+### Code Review R1 Fixes
+
+Addressed 6 findings from Codex code review R1:
+
+1. **[High] Vetter constraints bypass on cache hit**: Moved `validate_signing_constraints()` and revocation check outside the cache-hit/miss branch so they run on every `/vvp/create` request. Constraints depend on per-call `orig_tn` and must always be enforced.
+
+2. **[High] async_db_call not applied to TN lookup hot path**: Applied `asyncio.to_thread()` to the bcrypt-intensive API key verification in `lookup_tn_with_validation()`. DB queries kept synchronous (sub-millisecond) — the multi-worker architecture (4 workers) handles DB concurrency. Thread-pooling the bcrypt call prevents the main performance bottleneck (bcrypt is deliberately slow: 200-400ms).
+
+3. **[Medium] Event loop monitor measures sleep(0) not interval drift**: Replaced `asyncio.sleep(0)` yield measurement with interval drift measurement. Now compares expected vs actual wake-up time from `asyncio.sleep(interval)`, which directly measures how blocked the event loop was during the interval.
+
+4. **[Medium] DossierCache callback SAID mismatch**: DossierCache `invalidate_by_said()` now collects root dossier SAIDs from affected entries' DAGs before removal, and passes root SAIDs (not credential SAIDs) to callbacks. Fixed `DossierDAG` truthiness issue: empty DAG (no nodes) is falsy due to `__len__`, so check uses `is not None` instead of truthiness.
+
+5. **[Low] Blocked detection test non-assertive**: Test now deliberately blocks the event loop with `time.sleep(0.15)` and asserts `blocked_count > 0` and `max_latency_ms > 10.0`.
+
+6. **[Low] Additional test coverage**: Added DossierCache callback integration tests (verifying root SAID propagation with single and multiple dossiers), and `async_db_call` thread isolation test.
 
 ### Test Results
 
-- 40 new Sprint 76 tests: 40 passed
-- Full issuer suite: 945 passed, 7 skipped
-- Full verifier suite: 1848 passed, 9 skipped (PhaseTimer re-export works)
+- 46 Sprint 76 tests: 46 passed (43 + 3 new)
+- Full issuer suite: 948 passed, 7 skipped
+- Full verifier suite: 1848 passed, 9 skipped
 
 ### Files Changed
 
 | File | Lines | Summary |
 |------|-------|---------|
 | `common/common/vvp/timing.py` | +117 | New: Shared PhaseTimer with async context manager |
-| `common/common/vvp/dossier/cache.py` | +15 | Added on_invalidate_said callback mechanism |
+| `common/common/vvp/dossier/cache.py` | +25 | Invalidation callbacks + root SAID extraction |
 | `services/verifier/app/vvp/timing.py` | ~8 | Re-export from common for backward compatibility |
-| `services/issuer/app/api/vvp.py` | ~+60 | Per-step timing + attestation cache integration |
+| `services/issuer/app/api/vvp.py` | ~+60 | Per-step timing + attestation cache + constraints on every request |
 | `services/issuer/app/api/tn.py` | +3 | Pass timing_ms through to response |
 | `services/issuer/app/api/models.py` | +8 | Added timing_ms to CreateVVPResponse and TNLookupResponse |
 | `services/issuer/app/api/admin.py` | +15 | New endpoint: GET /admin/event-loop-health |
-| `services/issuer/app/tn/lookup.py` | +15 | Per-step timing in lookup_tn_with_validation |
+| `services/issuer/app/tn/lookup.py` | +20 | Per-step timing + async bcrypt offload |
 | `services/issuer/app/vvp/attestation_cache.py` | +200 | New: LRU attestation cache with invalidation |
 | `services/issuer/app/vvp/dossier_service.py` | +10 | Register attestation cache invalidation callback |
-| `services/issuer/app/core/event_loop_monitor.py` | +130 | New: Event loop latency monitor |
+| `services/issuer/app/core/event_loop_monitor.py` | +130 | New: Event loop latency monitor (interval drift) |
 | `services/issuer/app/db/session.py` | +30 | async_db_call() wrapper |
 | `services/issuer/app/main.py` | +8 | Start/stop event loop monitor on lifespan |
 | `services/issuer/Dockerfile` | 1 | Added --workers=4 to uvicorn CMD |
 | `services/sip-redirect/app/redirect/client.py` | +5 | Log timing_ms from issuer response |
-| `services/issuer/tests/test_attestation_cache.py` | +170 | 17 tests: cache ops, TTL, LRU, invalidation |
-| `services/issuer/tests/test_event_loop_monitor.py` | +100 | 10 tests: lifecycle, metrics, singleton |
-| `services/issuer/tests/test_vvp_timing.py` | +120 | 13 tests: PhaseTimer sync+async, async_db_call |
+| `services/issuer/tests/test_attestation_cache.py` | +220 | 19 tests: cache ops, TTL, LRU, invalidation, DossierCache integration |
+| `services/issuer/tests/test_event_loop_monitor.py` | +110 | 10 tests: lifecycle, metrics, blocked detection |
+| `services/issuer/tests/test_vvp_timing.py` | +130 | 14 tests: PhaseTimer, async_db_call, thread isolation |

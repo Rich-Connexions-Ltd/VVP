@@ -96,17 +96,22 @@ class TestEventLoopMonitor:
 
     @pytest.mark.asyncio
     async def test_blocked_detection(self):
-        """Monitor detects event loop blocking (simulated via sleep)."""
-        monitor = EventLoopMonitor(interval=0.05, warn_threshold_ms=0.001)
+        """Monitor detects blocking when event loop is deliberately blocked."""
+        monitor = EventLoopMonitor(interval=0.05, warn_threshold_ms=10.0)
         await monitor.start()
 
-        # Wait for probes — even a healthy loop may exceed 0.001ms threshold
-        await asyncio.sleep(0.2)
+        # Deliberately block the event loop with a sync sleep
+        # This causes asyncio.sleep(0.05) to overshoot by ~100ms
+        import time
+        await asyncio.sleep(0.06)  # Let at least one probe start
+        time.sleep(0.15)  # Block the loop — probe will see >100ms drift
+        await asyncio.sleep(0.15)  # Let blocked probe complete
 
         await monitor.stop()
 
-        # With such a low threshold, some probes should exceed it
-        assert monitor.metrics.blocked_count >= 0  # May or may not trigger
+        # The sync sleep should have caused at least one probe to exceed 10ms threshold
+        assert monitor.metrics.blocked_count > 0
+        assert monitor.metrics.max_latency_ms > 10.0
 
     @pytest.mark.asyncio
     async def test_metrics_property(self):

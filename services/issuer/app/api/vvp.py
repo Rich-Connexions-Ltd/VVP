@@ -115,26 +115,11 @@ async def create_vvp_attestation(
         cached = attest_cache.get(body.identity_name, body.dossier_said)
 
         if cached is not None:
-            # Cache hit — skip identity resolve, revocation, constraints, brand extraction
+            # Cache hit — skip identity resolve, brand extraction
             timer.record("cache", 0.0)
             issuer_oobi = cached.issuer_oobi
             dossier_url = cached.dossier_url
             card = cached.card
-
-            # Still check revocation (fast — DossierCache hit)
-            async with timer.aphase("revocation_check"):
-                trust, revocation_warning = await check_dossier_revocation(
-                    dossier_url=dossier_url,
-                    dossier_said=body.dossier_said,
-                )
-            if trust == TrustDecision.UNTRUSTED:
-                log.warning(
-                    f"Rejecting VVP creation - revoked credentials: {body.dossier_said}"
-                )
-                raise HTTPException(
-                    status_code=403,
-                    detail="Credential chain contains revoked credentials",
-                )
         else:
             # Cache miss — full computation path
             # Get identity info via KERI Agent
@@ -152,48 +137,6 @@ async def create_vvp_attestation(
 
             issuer_oobi = build_issuer_oobi(identity.aid, witness_url)
             dossier_url = build_dossier_url(body.dossier_said, issuer_base_url)
-
-            # Check dossier revocation status before signing
-            async with timer.aphase("revocation_check"):
-                trust, revocation_warning = await check_dossier_revocation(
-                    dossier_url=dossier_url,
-                    dossier_said=body.dossier_said,
-                )
-
-            if trust == TrustDecision.UNTRUSTED:
-                log.warning(
-                    f"Rejecting VVP creation - revoked credentials: {body.dossier_said}"
-                )
-                raise HTTPException(
-                    status_code=403,
-                    detail="Credential chain contains revoked credentials",
-                )
-
-            if revocation_warning:
-                log.info(f"VVP creation proceeding with warning: {revocation_warning}")
-
-            # Sprint 62: Signing-time vetter constraint validation (ECC + jurisdiction)
-            from app.vetter.constraints import validate_signing_constraints
-            from app.config import ENFORCE_VETTER_CONSTRAINTS
-
-            async with timer.aphase("signing_constraints"):
-                signing_violations = await validate_signing_constraints(
-                    orig_tn=body.orig_tn,
-                    dossier_said=body.dossier_said,
-                )
-            failed_constraints = [v for v in signing_violations if not v.is_authorized]
-            if failed_constraints:
-                detail = "; ".join(
-                    f"{v.credential_type} {v.check_type}: {v.reason}"
-                    for v in failed_constraints
-                )
-                if ENFORCE_VETTER_CONSTRAINTS:
-                    raise HTTPException(
-                        status_code=403,
-                        detail=f"Signing constraint violation: {detail}",
-                    )
-                else:
-                    log.warning(f"Signing constraint warning (soft): {detail}")
 
             # Sprint 58: Extract brand attributes for vCard card claim.
             card = None
@@ -223,6 +166,47 @@ async def create_vvp_attestation(
                 dossier_url=dossier_url,
                 card=card,
             )
+
+        # Revocation check runs on every request (fast — DossierCache hit on repeat calls)
+        async with timer.aphase("revocation_check"):
+            trust, revocation_warning = await check_dossier_revocation(
+                dossier_url=dossier_url,
+                dossier_said=body.dossier_said,
+            )
+        if trust == TrustDecision.UNTRUSTED:
+            log.warning(
+                f"Rejecting VVP creation - revoked credentials: {body.dossier_said}"
+            )
+            raise HTTPException(
+                status_code=403,
+                detail="Credential chain contains revoked credentials",
+            )
+        if revocation_warning:
+            log.info(f"VVP creation proceeding with warning: {revocation_warning}")
+
+        # Sprint 62: Signing-time vetter constraint validation (ECC + jurisdiction)
+        # Runs on EVERY request (cache hit and miss) because orig_tn varies per call
+        from app.vetter.constraints import validate_signing_constraints
+        from app.config import ENFORCE_VETTER_CONSTRAINTS
+
+        async with timer.aphase("signing_constraints"):
+            signing_violations = await validate_signing_constraints(
+                orig_tn=body.orig_tn,
+                dossier_said=body.dossier_said,
+            )
+        failed_constraints = [v for v in signing_violations if not v.is_authorized]
+        if failed_constraints:
+            detail = "; ".join(
+                f"{v.credential_type} {v.check_type}: {v.reason}"
+                for v in failed_constraints
+            )
+            if ENFORCE_VETTER_CONSTRAINTS:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Signing constraint violation: {detail}",
+                )
+            else:
+                log.warning(f"Signing constraint warning (soft): {detail}")
 
         # Cap exp_seconds to normative maximum (§5.2B)
         exp_seconds = min(body.exp_seconds, MAX_VALIDITY_SECONDS)

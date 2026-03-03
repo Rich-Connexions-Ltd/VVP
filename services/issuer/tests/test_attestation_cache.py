@@ -182,6 +182,74 @@ class TestAttestationCacheMetrics:
         assert metrics["hit_rate_pct"] == pytest.approx(66.7, abs=0.1)
 
 
+class TestDossierCacheCallbackIntegration:
+    """Test that DossierCache passes root SAIDs (not credential SAIDs) to callbacks."""
+
+    @pytest.mark.asyncio
+    async def test_callback_receives_root_said(self):
+        """DossierCache invalidation callback should receive root dossier SAID."""
+        from common.vvp.dossier.cache import DossierCache, CachedDossier
+        from common.vvp.models.dossier import DossierDAG
+
+        received_saids = []
+
+        def capture_callback(said):
+            received_saids.append(said)
+
+        dossier_cache = DossierCache(ttl_seconds=60, max_entries=10)
+        dossier_cache.on_invalidate_said(capture_callback)
+
+        # Create a dossier entry with root_said="ROOT_SAID_1" containing "CHILD_SAID_A"
+        dag = DossierDAG(root_said="ROOT_SAID_1", root_saids=["ROOT_SAID_1"])
+        dossier = CachedDossier(
+            dag=dag,
+            raw_content=b"",
+            fetch_timestamp=1000.0,
+            content_type="application/cesr",
+            contained_saids={"ROOT_SAID_1", "CHILD_SAID_A"},
+        )
+        await dossier_cache.put("http://example.com/dossier/ROOT_SAID_1", dossier)
+
+        # Invalidate by child credential SAID
+        count = await dossier_cache.invalidate_by_said("CHILD_SAID_A")
+        assert count == 1
+
+        # Callback should receive the ROOT dossier SAID, not the child credential SAID
+        assert "ROOT_SAID_1" in received_saids
+        assert "CHILD_SAID_A" not in received_saids
+
+    @pytest.mark.asyncio
+    async def test_callback_receives_multiple_root_saids(self):
+        """When multiple dossiers share a child SAID, all root SAIDs are passed."""
+        from common.vvp.dossier.cache import DossierCache, CachedDossier
+        from common.vvp.models.dossier import DossierDAG
+
+        received_saids = []
+
+        def capture_callback(said):
+            received_saids.append(said)
+
+        dossier_cache = DossierCache(ttl_seconds=60, max_entries=10)
+        dossier_cache.on_invalidate_said(capture_callback)
+
+        # Two dossiers sharing the same child credential SAID
+        for root_said in ["ROOT_1", "ROOT_2"]:
+            dag = DossierDAG(root_said=root_said, root_saids=[root_said])
+            dossier = CachedDossier(
+                dag=dag,
+                raw_content=b"",
+                fetch_timestamp=1000.0,
+                content_type="application/cesr",
+                contained_saids={root_said, "SHARED_CHILD"},
+            )
+            await dossier_cache.put(f"http://example.com/dossier/{root_said}", dossier)
+
+        count = await dossier_cache.invalidate_by_said("SHARED_CHILD")
+        assert count == 2
+        assert "ROOT_1" in received_saids
+        assert "ROOT_2" in received_saids
+
+
 class TestAttestationCacheSingleton:
     """Singleton management."""
 

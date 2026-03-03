@@ -134,3 +134,17 @@ class TestAsyncDbCall:
 
         with pytest.raises(ValueError, match="test error"):
             await async_db_call(failing_func)
+
+    @pytest.mark.asyncio
+    async def test_runs_in_separate_thread(self):
+        """async_db_call runs the callable in a non-main thread."""
+        import threading
+        from app.db.session import async_db_call
+
+        main_thread = threading.current_thread()
+
+        def check_thread(db=None):
+            return threading.current_thread()
+
+        worker_thread = await async_db_call(check_thread)
+        assert worker_thread is not main_thread

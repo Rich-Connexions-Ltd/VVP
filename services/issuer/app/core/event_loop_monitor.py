@@ -89,28 +89,27 @@ class EventLoopMonitor:
         log.info("Event loop monitor stopped")
 
     async def _probe_loop(self) -> None:
-        """Main probe loop — runs until cancelled."""
+        """Main probe loop — runs until cancelled.
+
+        Measures the drift between expected and actual wake-up time from
+        asyncio.sleep(interval). If the event loop is blocked by sync ops,
+        the sleep will take longer than the configured interval — the excess
+        is the measured latency/drift.
+        """
         while True:
             try:
+                expected_wake = time.monotonic() + self._interval
                 await asyncio.sleep(self._interval)
-                await self._measure_latency()
+                actual_wake = time.monotonic()
+                drift_ms = max(0.0, (actual_wake - expected_wake) * 1000.0)
+                self._record_latency(drift_ms)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 log.warning(f"Event loop monitor probe error: {e}")
 
-    async def _measure_latency(self) -> None:
-        """Measure event loop latency with a single probe.
-
-        Schedules a no-op callback and measures how long the event loop
-        takes to execute it. The difference between expected and actual
-        execution time indicates how blocked the loop is.
-        """
-        scheduled_at = time.monotonic()
-        # Yield control — the event loop should resume us almost immediately
-        await asyncio.sleep(0)
-        latency_ms = (time.monotonic() - scheduled_at) * 1000.0
-
+    def _record_latency(self, latency_ms: float) -> None:
+        """Record a latency measurement and check threshold."""
         self._metrics.current_latency_ms = latency_ms
         self._metrics.probe_count += 1
 
@@ -120,7 +119,7 @@ class EventLoopMonitor:
         if latency_ms > self._threshold:
             self._metrics.blocked_count += 1
             log.warning(
-                f"Event loop blocked: latency={latency_ms:.1f}ms "
+                f"Event loop blocked: drift={latency_ms:.1f}ms "
                 f"(threshold={self._threshold}ms, pid={os.getpid()})"
             )
 

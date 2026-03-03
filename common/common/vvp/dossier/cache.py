@@ -266,6 +266,7 @@ class DossierCache:
         Returns:
             Number of cache entries invalidated.
         """
+        root_saids: Set[str] = set()
         async with self._lock:
             urls = self._said_to_urls.get(said)
             if not urls:
@@ -275,6 +276,14 @@ class DossierCache:
             urls_to_invalidate = set(urls)
             count = len(urls_to_invalidate)
 
+            # Collect root dossier SAIDs before removing entries.
+            # Callbacks (e.g., attestation cache) are keyed by root dossier SAID,
+            # not the individual credential SAID that was revoked.
+            for url in urls_to_invalidate:
+                entry = self._cache.get(url)
+                if entry and entry.dossier.dag is not None and entry.dossier.dag.root_said:
+                    root_saids.add(entry.dossier.dag.root_said)
+
             for url in urls_to_invalidate:
                 self._remove_entry(url)
 
@@ -283,10 +292,11 @@ class DossierCache:
                 f"Dossier cache invalidated {count} entries for revoked SAID: {said[:20]}..."
             )
 
-        # Sprint 76: Notify registered callbacks (outside lock)
+        # Sprint 76: Notify callbacks with root dossier SAIDs (outside lock)
         for callback in self._invalidation_callbacks:
             try:
-                callback(said)
+                for root_said in root_saids:
+                    callback(root_said)
             except Exception as e:
                 log.warning(f"Invalidation callback error for SAID {said[:20]}...: {e}")
 

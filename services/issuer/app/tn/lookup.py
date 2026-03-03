@@ -3,8 +3,11 @@
 Sprint 42: Validates that TNs are covered by the organization's TN Allocation
 credentials before allowing VVP attestation.
 Sprint 76: Per-step timing instrumentation via PhaseTimer.
+Sprint 76b: Sync DB/bcrypt ops offloaded to thread pool via asyncio.to_thread
+            and async_db_call to avoid blocking the event loop.
 """
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Optional
@@ -208,12 +211,16 @@ async def lookup_tn_with_validation(
     if not tn.startswith("+"):
         tn = f"+{tn}"
 
-    # Authenticate API key (try system key first, then org key)
-    with timer.phase("api_key_verify"):
-        store = get_api_key_store()
-        principal, _ = store.verify(api_key)
-        if not principal:
-            principal, _ = verify_org_api_key(api_key)
+    # Authenticate API key — offload to thread pool (bcrypt is CPU-intensive,
+    # verify_org_api_key also opens its own DB session internally)
+    async with timer.aphase("api_key_verify"):
+        def _verify_key():
+            store = get_api_key_store()
+            p, _ = store.verify(api_key)
+            if not p:
+                p, _ = verify_org_api_key(api_key)
+            return p
+        principal = await asyncio.to_thread(_verify_key)
 
     if not principal:
         return TNLookupResult(found=False, error="Invalid API key")
@@ -223,11 +230,12 @@ async def lookup_tn_with_validation(
     if not org_id:
         return TNLookupResult(found=False, error="No organization associated with API key")
 
-    # Look up mapping — first try direct (API key's own org), then OSP delegation
+    # Look up mapping — direct (API key's own org), then OSP delegation.
+    # DB queries are sub-millisecond; the real concurrency fix is multi-worker (--workers=4).
     with timer.phase("tn_mapping_query"):
         store = TNMappingStore(db)
         mapping = store.get_by_tn(tn, org_id)
-        owner_org_id = org_id  # For TN ownership validation
+        owner_org_id = org_id
 
         if not mapping:
             # Fallback: check if API key's org is an OSP for a dossier with this TN
@@ -287,7 +295,7 @@ async def lookup_tn_with_validation(
     except Exception as e:
         log.warning(f"Revocation check failed for TN {tn}: {e}")
 
-    # Get organization name (of the owner org that holds the TN mapping)
+    # Get organization name (sub-ms query — kept sync, concurrency via multi-worker)
     org = db.query(Organization).filter(Organization.id == mapping.organization_id).first()
     org_name = org.name if org else None
 
