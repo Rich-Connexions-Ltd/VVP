@@ -258,10 +258,7 @@ async def handle_invite(request: SIPRequest) -> SIPResponse:
             api_key_prefix=api_key_prefix,
             status_code=302,
             vvp_status="VALID",
-            details={
-                "org_id": lookup_result.organization_id,
-                "org_name": lookup_result.organization_name,
-            },
+            details={},  # org_id/org_name not available from create-for-tn response
         )
 
         await _capture_event(request, 302, "VALID", api_key_prefix, redirect_uri=contact_uri, response=response)

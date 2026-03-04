@@ -102,6 +102,27 @@ class TestCorsPreflightBlockedPaths:
         )
         assert "access-control-allow-origin" not in resp.headers
 
+    async def test_preflight_dot_segment_org_id_no_cors(self, client: AsyncClient):
+        """Dot-segment org_id ('..' only, no slash) does not match the allowlist regex.
+
+        The regex [a-zA-Z0-9][a-zA-Z0-9_-]* requires the org_id segment to start
+        with alphanumeric — a leading dot is rejected by the character class.
+        """
+        resp = await client.options(
+            "/pbx/organizations/../api-keys",
+            headers=_PREFLIGHT_HEADERS,
+        )
+        # After URL normalization '..' resolves to /pbx/api-keys which is not in allowlist
+        assert "access-control-allow-origin" not in resp.headers
+
+    async def test_blocked_path_preflight_no_allow_credentials(self, client: AsyncClient):
+        """Blocked path preflight must NOT return Access-Control-Allow-Credentials."""
+        resp = await client.options(
+            "/organizations",
+            headers=_PREFLIGHT_HEADERS,
+        )
+        assert "access-control-allow-credentials" not in resp.headers
+
 
 @pytest.mark.asyncio
 class TestCorsBlockedOrigins:

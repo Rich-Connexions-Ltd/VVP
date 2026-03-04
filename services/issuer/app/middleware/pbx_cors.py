@@ -1,9 +1,11 @@
 """Path-scoped CORS middleware for the PBX portal.
 
 Allows https://pbx.rcnx.io to call issuer PBX API endpoints cross-origin.
-CORS scope is intentionally restricted to an explicit allowlist of /pbx/*
-endpoints — generic organization endpoints are accessed via PBX facade
-endpoints (also under /pbx/).
+CORS scope is restricted to an explicit allowlist of specific /pbx/ endpoints
+(see _PBX_CORS_PATHS) — NOT a broad /pbx/* prefix. New endpoints added under
+/pbx/ do NOT automatically receive CORS access; they must be explicitly added
+to the allowlist. Generic organization endpoints are accessed via PBX facade
+endpoints (also under /pbx/) specifically to keep the CORS scope narrow.
 
 Sprint 77: Required so the static PBX management UI on pbx.rcnx.io can call
 the issuer's PBX backend (which remains on vvp-issuer.rcnx.io because it

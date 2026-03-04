@@ -558,7 +558,7 @@ All endpoints require `issuer:admin` role. Router: `app/api/pbx.py`.
 
 **`POST /pbx/deploy`** — Body: `{ "dry_run": true|false }`. Dry run returns generated XML without deploying. Real deploy: wraps Azure SDK `begin_run_command().result()` in `asyncio.to_thread()` to avoid blocking the event loop (the VM command can take 30–120s).
 
-**CORS:** All `/pbx/*` paths support cross-origin requests from `https://pbx.rcnx.io` via `PbxCorsMiddleware` (Sprint 77). The `X-API-Key` header is the only auth mechanism for cross-origin requests — no session cookies forwarded. The two facade endpoints (`/pbx/organizations/*`) exist specifically so the PBX portal's CORS scope is a single `/pbx/*` prefix with no exceptions for generic org endpoints.
+**CORS:** An explicit allowlist of 5 specific endpoints (`/pbx/config`, `/pbx/deploy`, `/pbx/dialplan-preview`, `/pbx/organizations/names`, `/pbx/organizations/{org_id}/api-keys`) supports cross-origin requests from `https://pbx.rcnx.io` only, via `PbxCorsMiddleware` (Sprint 77). This is an explicit per-endpoint allowlist, NOT a broad `/pbx/*` prefix — new endpoints under `/pbx/` do NOT automatically get CORS access. The `X-API-Key` header is the only auth mechanism for cross-origin requests — no session cookies. The facade endpoints exist so the PBX portal needs no exceptions for generic org endpoints.
 
 ### Issuer UI Pages (all `GET`, return HTML)
 

@@ -199,3 +199,50 @@ class TestPBXOrganizationAPIKeys:
         for api_key in data["api_keys"]:
             # Exact set check: catches any new field added (roles, key_hash, etc.)
             assert set(api_key.keys()) == {"id", "name"}
+
+    async def test_revoked_keys_excluded_from_response(self, client: AsyncClient):
+        """Revoked API keys must NOT appear in the facade listing."""
+        _init_db()
+        from app.db.session import SessionLocal
+        from app.db.models import Organization, OrgAPIKey
+        import uuid
+
+        db = SessionLocal()
+        try:
+            org_id = "test-org-revoked-facade"
+            db.query(OrgAPIKey).filter(OrgAPIKey.organization_id == org_id).delete()
+            db.query(Organization).filter(Organization.id == org_id).delete()
+            db.commit()
+            db.add(Organization(
+                id=org_id,
+                name="Revoked Keys Test Org",
+                pseudo_lei="XREVOK0001",
+                enabled=True,
+            ))
+            db.flush()
+            # One active key, one revoked key
+            active_key_id = str(uuid.uuid4())
+            db.add(OrgAPIKey(
+                id=active_key_id,
+                name="Active Key",
+                organization_id=org_id,
+                key_hash="hash-active",
+                revoked=False,
+            ))
+            db.add(OrgAPIKey(
+                id=str(uuid.uuid4()),
+                name="Revoked Key",
+                organization_id=org_id,
+                key_hash="hash-revoked",
+                revoked=True,
+            ))
+            db.commit()
+        finally:
+            db.close()
+
+        resp = await client.get(f"/pbx/organizations/{org_id}/api-keys")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["count"] == 1
+        assert len(data["api_keys"]) == 1
+        assert data["api_keys"][0]["id"] == active_key_id
