@@ -166,6 +166,7 @@ docker compose down
 | Issuer UI | http://localhost:8001/create | Identity creation web UI |
 | Issuer UI | http://localhost:8001/registry/ui | Registry management web UI |
 | Issuer UI | http://localhost:8001/schemas/ui | Schema browser web UI |
+| PBX Portal | http://localhost:8001/pbx | PBX configuration portal (Sprint 77; facade endpoints under /pbx/) |
 | Verifier | http://localhost:8000 | VVP Verifier API |
 | Witness (wan) | http://localhost:5642 | KERI witness HTTP |
 | Witness (wil) | http://localhost:5643 | KERI witness HTTP |
@@ -315,10 +316,10 @@ When the user says "Sprint N" (e.g., "Sprint 27"), begin pair programming on tha
 
 4. **Follow pair programming workflow** - As defined in the "Pair Programming Workflow" section:
    - Draft plan in `PLAN_Sprint<N>.md` with sufficient detail for review
-   - Request plan review: `./scripts/council-review.py plan <N> "<title>"`
+   - Request plan review: `./scripts/council-review.py --allow-external-code-review plan <N> "<title>"`
    - Read `REVIEW_Sprint<N>.md` for verdict; iterate until APPROVED
    - Implement according to plan
-   - Request code review: `./scripts/council-review.py code <N> "<title>"`
+   - Request code review: `./scripts/council-review.py --allow-external-code-review code <N> "<title>"`
    - Archive completed plan using `./scripts/archive-plan.sh <N> "<title>"`
 
 **Sprint Definitions:** See `SPRINTS.md` for the full sprint roadmap (Sprints 1-25 were verifier implementation, Sprints 26+ are issuer implementation).
@@ -328,10 +329,10 @@ When the user says "Sprint N" (e.g., "Sprint 27"), begin pair programming on tha
 User: Sprint 27
 Agent: [Reads SPRINTS.md for Sprint 27 details]
 Agent: [Writes PLAN_Sprint27.md with implementation plan]
-Agent: [Runs ./scripts/council-review.py plan 27 "Local Witness Infrastructure"]
+Agent: [Runs ./scripts/council-review.py --allow-external-code-review plan 27 "Local Witness Infrastructure"]
 Agent: [Reads REVIEW_Sprint27.md — Council verdict: APPROVED]
 Agent: [Implements according to plan]
-Agent: [Runs ./scripts/council-review.py code 27 "Local Witness Infrastructure"]
+Agent: [Runs ./scripts/council-review.py --allow-external-code-review code 27 "Local Witness Infrastructure"]
 Agent: [Reads REVIEW_Sprint27.md — Council verdict: APPROVED]
 Agent: [Runs ./scripts/archive-plan.sh 27 "Local Witness Infrastructure"]
 ```
@@ -341,13 +342,13 @@ Agent: [Runs ./scripts/archive-plan.sh 27 "Local Witness Infrastructure"]
 User: Sprint 27
 Agent: [Reads SPRINTS.md for Sprint 27 details]
 Agent: [Writes PLAN_Sprint27.md with implementation plan]
-Agent: [Runs ./scripts/council-review.py plan 27 "Local Witness Infrastructure"]
+Agent: [Runs ./scripts/council-review.py --allow-external-code-review plan 27 "Local Witness Infrastructure"]
 Agent: [Reads REVIEW_Sprint27.md — Council verdict: APPROVED]
 Agent: [Presents summary of PLAN + REVIEW to human, asks to accept]
 Human: [Accepts / edits REVIEW / pauses]
 Agent: [Re-reads REVIEW_Sprint27.md if edited]
 Agent: [Implements according to plan]
-Agent: [Runs ./scripts/council-review.py code 27 "Local Witness Infrastructure"]
+Agent: [Runs ./scripts/council-review.py --allow-external-code-review code 27 "Local Witness Infrastructure"]
 Agent: [Reads REVIEW_Sprint27.md — Council verdict: APPROVED]
 Agent: [Presents summary of implementation + REVIEW to human, asks to accept]
 Human: [Accepts]
@@ -411,9 +412,15 @@ The default review method submits plans/code to multiple focused expert reviewer
 
 Key features (all implemented in `scripts/council-review.py`):
 - **Phase-specific composition**: Each member has a `phases` field — e.g., Cost Modeller runs only for plan reviews, Test Quality Expert only for code reviews
+- **Domain expert**: Validates KERI/ACDC/vLEI domain correctness with enriched context from `knowledge/` directory
 - **Automatic fallback**: Each member has an optional fallback platform/model, tried automatically when the primary API fails (rate limit, credits exhausted)
 - **Quorum**: 3 of N members must succeed; individual failures produce placeholder reviews
 - **Context-aware**: Builds and includes the KERI/ACDC/vLEI/VVP context pack from `codex/skills/keri-acdc-vlei-vvp/references/`
+- **Findings tracker**: Auto-generates `FINDINGS_Sprint<N>.md` tracking resolution of each finding across rounds
+- **Convergence guardrails**: Max round limits (plan: 5, code: 6) with escalation — consolidator auto-approves with "Known Debt" when exceeded
+- **Sprint-aware diffs**: Records base commit at plan start, ensuring code reviews capture all sprint changes
+- **Actionable findings**: Each finding includes file path, location, current behavior, required change, and acceptance criteria
+- **Process testing**: `scripts/process-test.py` validates the entire pipeline end-to-end with a trivial test sprint
 
 ### Legacy Single-Reviewer Setup
 
@@ -457,13 +464,21 @@ Files are **namespaced by sprint number** so multiple sprints can run concurrent
 | File | Purpose | Owner |
 |------|---------|-------|
 | `PLAN_Sprint<N>.md` | Current phase design with rationale and revision history | Editor |
-| `REVIEW_Sprint<N>.md` | Reviewer feedback with round number (R1, R2, ...) | Reviewer (Codex) |
+| `REVIEW_Sprint<N>.md` | Reviewer feedback with round number (R1, R2, ...) | Reviewer (Council) |
+| `FINDINGS_Sprint<N>.md` | Findings tracker with resolution status (auto-generated) | Script + Editor |
 | `.review-round-sprint<N>-plan` | Plan review round counter (transient, gitignored) | Script |
 | `.review-round-sprint<N>-code` | Code review round counter (transient, gitignored) | Script |
+| `.sprint-base-commit-<N>` | Base commit SHA for sprint diff (transient, gitignored) | Script |
 | `Documentation/archive/PLAN_Sprint<N>.md` | Archive of accepted plans | Both |
 | `CHANGES.md` | Change log with commit SHAs | Both |
 
-**Round tracking:** The review script (`request-review.sh`) automatically tracks the round number per sprint per review type (plan/code). Each invocation increments the counter and includes the round number in the REVIEW file header (e.g., `R1`, `R2`). The PLAN file includes a **Revision History** section at the bottom that the Editor updates when revising the plan, documenting what changed in each round. Round state files are cleaned up by `archive-plan.sh`.
+**Findings tracker:** After each review round, `council-review.py` auto-generates `FINDINGS_Sprint<N>.md` with a table of all findings and their status. The Editor updates the **Status** and **Resolution** columns after addressing findings (OPEN → ADDRESSED). The consolidator reads the tracker on subsequent rounds and will not re-flag ADDRESSED items unless the fix is demonstrably incomplete.
+
+**Convergence guardrails:** The council config defines `max_plan_rounds` (default 5) and `max_code_rounds` (default 6). When exceeded, the consolidator is instructed to only flag genuinely NEW [High] findings and approve with "Known Debt" for remaining issues.
+
+**Round tracking:** The review script automatically tracks the round number per sprint per review type (plan/code). Each invocation increments the counter and includes the round number in the REVIEW file header (e.g., `R1`, `R2`). The PLAN file includes a **Revision History** section at the bottom that the Editor updates when revising the plan, documenting what changed in each round. Round state files are cleaned up by `archive-plan.sh`.
+
+**Sprint-aware diffs:** The base commit SHA is recorded when the first plan review starts (`.sprint-base-commit-<N>`). Code reviews diff from this base commit to HEAD, ensuring all sprint changes are captured regardless of how many commits have been made.
 
 **Concurrency:** Sprint 35 uses `PLAN_Sprint35.md` / `REVIEW_Sprint35.md`, Sprint 36 uses `PLAN_Sprint36.md` / `REVIEW_Sprint36.md`, etc. Two sprints can be in-flight simultaneously without clobbering each other's files. The scripts derive filenames from the sprint number argument automatically.
 
@@ -548,8 +563,8 @@ The **Revision History** table at the bottom of the PLAN file tracks revisions a
 Run the council review script to invoke the Council of Experts:
 
 ```bash
-./scripts/council-review.py plan <sprint-number> "<title>"
-# Example: ./scripts/council-review.py plan 35 "Credential Issuance"
+./scripts/council-review.py --allow-external-code-review plan <sprint-number> "<title>"
+# Example: ./scripts/council-review.py --allow-external-code-review plan 35 "Credential Issuance"
 ```
 
 The script:
@@ -571,7 +586,7 @@ If human review mode is ON (check `memory/human-review-mode`), perform the human
 If Reviewer returns `CHANGES_REQUESTED`:
 1. Editor revises `PLAN_Sprint<N>.md` addressing all required changes
 2. Editor appends a row to the **Revision History** table in `PLAN_Sprint<N>.md` documenting what changed (e.g., `| R2 | 2025-01-15 | Added issuer-binding enforcement per R1 finding [High] |`)
-3. Re-run `./scripts/council-review.py plan <N> "<title>"` (the script auto-increments the round counter)
+3. Re-run `./scripts/council-review.py --allow-external-code-review plan <N> "<title>"` (the script auto-increments the round counter)
 4. Repeat from Step 1.3 until `APPROVED`
 
 ---
@@ -619,8 +634,8 @@ The Editor updates `PLAN_Sprint<N>.md` with an implementation appendix:
 Run the council review script to invoke the Council of Experts:
 
 ```bash
-./scripts/council-review.py code <sprint-number> "<title>"
-# Example: ./scripts/council-review.py code 35 "Credential Issuance"
+./scripts/council-review.py --allow-external-code-review code <sprint-number> "<title>"
+# Example: ./scripts/council-review.py --allow-external-code-review code 35 "Credential Issuance"
 ```
 
 The script:
@@ -639,7 +654,7 @@ If human review mode is ON (check `memory/human-review-mode`), perform the human
 
 #### Step 2.5: Iterate Until Approved
 
-- If `CHANGES_REQUESTED`: Fix issues, re-run `./scripts/council-review.py code ...`, repeat from Step 2.4
+- If `CHANGES_REQUESTED`: Fix issues, re-run `./scripts/council-review.py --allow-external-code-review code ...`, repeat from Step 2.4
 - If `PLAN_REVISION_REQUIRED`: Return to Phase 1 with revised plan
 - If `APPROVED`: Proceed to Phase 3
 

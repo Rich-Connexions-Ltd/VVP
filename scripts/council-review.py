@@ -20,6 +20,7 @@ Requires environment variables:
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -32,6 +33,35 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 QUORUM_THRESHOLD = 3  # Minimum successful council reviews needed
+
+# ---------------------------------------------------------------------------
+# Secret Redaction
+# ---------------------------------------------------------------------------
+
+_SECRET_PATTERNS = [
+    # OpenAI / Anthropic key prefixes
+    re.compile(r"sk-[A-Za-z0-9\-_]{20,}", re.IGNORECASE),
+    re.compile(r"sk-ant-[A-Za-z0-9\-_]{20,}", re.IGNORECASE),
+    # Google API keys
+    re.compile(r"AIza[0-9A-Za-z\-_]{35}"),
+    # Slack tokens
+    re.compile(r"xox[bprs]-[A-Za-z0-9\-_]{10,}"),
+    # Generic: VAR=value or VAR: value patterns for secret-sounding names
+    re.compile(
+        r"(api[_-]?key|api[_-]?token|auth[_-]?token|access[_-]?token|secret|password|private[_-]?key)"
+        r"\s*[=:]\s*['\"]?[A-Za-z0-9\-_\.+/=]{8,}['\"]?",
+        re.IGNORECASE,
+    ),
+    # Bearer tokens
+    re.compile(r"Bearer\s+[A-Za-z0-9\-_\.+/=]{8,}", re.IGNORECASE),
+]
+
+
+def redact_secrets(text: str) -> str:
+    """Redact common secret patterns from text before sending to external APIs."""
+    for pattern in _SECRET_PATTERNS:
+        text = pattern.sub("[REDACTED]", text)
+    return text
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -210,9 +240,11 @@ def call_codex(
     except FileNotFoundError:
         raise RuntimeError("Codex CLI not found. Install: npm install -g @openai/codex")
     if result.returncode != 0:
-        raise RuntimeError(
-            f"Codex exited {result.returncode}: {(result.stderr or result.stdout)[:500]}"
-        )
+        # Log to stderr only (local-only), not included in review artifacts.
+        # stderr/stdout may contain prompt material — never embed in review files.
+        stderr_first_line = (result.stderr or "").split("\n")[0][:120]
+        print(f"  [debug] Codex stderr: {stderr_first_line}", file=sys.stderr)
+        raise RuntimeError(f"Codex exited {result.returncode} (see stderr for details)")
     output = result.stdout.strip()
     if not output:
         raise RuntimeError("Codex produced no output")
@@ -686,7 +718,10 @@ def run_council_member(
         return role, review, elapsed
 
     except Exception as primary_err:
-        primary_msg = f"{type(primary_err).__name__}: {primary_err}"
+        # Log detailed error to stderr (local-only). Never embed raw error text
+        # in review artifacts — it may contain prompt material or API keys.
+        primary_type = type(primary_err).__name__
+        print(f"  [debug] {member['label']} primary error: {primary_type}: {primary_err}", file=sys.stderr)
         fallback = member.get("fallback")
 
         # Try fallback model if configured and its API key is available
@@ -710,17 +745,18 @@ def run_council_member(
                 elapsed = time.monotonic() - start
                 return role, review, elapsed
             except Exception as fb_err:
-                fb_msg = f"{type(fb_err).__name__}: {fb_err}"
-                error_msg = f"Primary: {primary_msg} | Fallback: {fb_msg}"
+                fb_type = type(fb_err).__name__
+                print(f"  [debug] {member['label']} fallback error: {fb_type}: {fb_err}", file=sys.stderr)
+                opaque_msg = f"{primary_type} (primary) / {fb_type} (fallback) — check console output for details"
         else:
-            error_msg = primary_msg
+            opaque_msg = f"{primary_type} — check console output for details"
 
         elapsed = time.monotonic() - start
-        print(f"  WARNING: {member['label']} failed ({elapsed:.1f}s): {error_msg}", file=sys.stderr)
+        print(f"  WARNING: {member['label']} failed ({elapsed:.1f}s) — see debug output above", file=sys.stderr)
         placeholder = (
             f"### {role} Review: Sprint {sprint} (R{round_num})\n\n"
             f"**Status:** UNAVAILABLE\n"
-            f"**Error:** {error_msg}\n\n"
+            f"**Error:** [Error: API response hidden for security. Check logs for details.] ({opaque_msg})\n\n"
             f"This expert was unable to complete their review."
         )
         return role, placeholder, elapsed
@@ -780,9 +816,12 @@ def run_consolidator(
                     timeout=timeout,
                 )
             except Exception as fb_err:
-                print(f"  WARNING: Consolidator fallback also failed: {fb_err}", file=sys.stderr)
+                # Log to stderr only — may contain prompt material
+                print(f"  [debug] Consolidator fallback error: {type(fb_err).__name__}: {fb_err}", file=sys.stderr)
+                print(f"  WARNING: Consolidator fallback also failed ({type(fb_err).__name__}) — see debug output", file=sys.stderr)
 
-        print(f"  WARNING: Consolidator failed: {primary_err}", file=sys.stderr)
+        print(f"  [debug] Consolidator primary error: {type(primary_err).__name__}: {primary_err}", file=sys.stderr)
+        print(f"  WARNING: Consolidator failed ({type(primary_err).__name__}) — using fallback consolidation", file=sys.stderr)
         return fallback_consolidation(council_reviews, sprint, title, round_num, review_type)
 
 
@@ -1069,15 +1108,23 @@ def print_header(
 
 
 def main():
-    if len(sys.argv) < 4:
-        print("Usage: ./scripts/council-review.py <plan|code> <sprint> <title>")
+    # Strip flags before parsing positional args
+    allow_external = "--allow-external-code-review" in sys.argv
+    positional = [a for a in sys.argv[1:] if not a.startswith("--")]
+
+    if len(positional) < 3:
+        print("Usage: ./scripts/council-review.py [--allow-external-code-review] <plan|code> <sprint> <title>")
         print()
         print("  plan  — Review the implementation plan in PLAN_Sprint<N>.md")
         print("  code  — Review the implementation (changed files since plan approval)")
         print()
+        print("Flags:")
+        print("  --allow-external-code-review  Required to send repository content to third-party LLMs.")
+        print("                                Without this flag the script exits before sending any materials.")
+        print()
         print("Examples:")
-        print('  ./scripts/council-review.py plan 77 "Credential Revocation"')
-        print('  ./scripts/council-review.py code 77 "Credential Revocation"')
+        print('  ./scripts/council-review.py --allow-external-code-review plan 77 "Credential Revocation"')
+        print('  ./scripts/council-review.py --allow-external-code-review code 77 "Credential Revocation"')
         print()
         print("Required environment variables:")
         print("  ANTHROPIC_API_KEY  — Claude models")
@@ -1086,9 +1133,9 @@ def main():
         print("  (Codex platform members authenticate via 'codex' CLI automatically)")
         sys.exit(1)
 
-    review_type = sys.argv[1]
-    sprint = sys.argv[2]
-    title = " ".join(sys.argv[3:])
+    review_type = positional[0]
+    sprint = positional[1]
+    title = " ".join(positional[2:])
 
     if review_type not in ("plan", "code"):
         print(f"ERROR: review_type must be 'plan' or 'code', got '{review_type}'", file=sys.stderr)
@@ -1133,10 +1180,39 @@ def main():
     else:
         materials = gather_code_materials(sprint, repo_root)
     print(f"  Materials: {len(materials):,} chars")
+
+    # Guard: refuse to send repository content to external APIs without explicit opt-in.
+    if materials and not allow_external:
+        print(
+            "\nERROR: Repository content would be sent to external LLM providers.",
+            file=sys.stderr,
+        )
+        print(
+            "Re-run with --allow-external-code-review to permit this:\n"
+            f"  ./scripts/council-review.py --allow-external-code-review {review_type} {sprint} \"{title}\"",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # Redact common secret patterns from materials before sending externally.
+    materials = redact_secrets(materials)
     print()
 
-    # Prepare council output directory
-    council_dir = repo_root / config["council"].get("output_dir", "council")
+    # Prepare council output directory — validate path stays inside repo root.
+    # A crafted config with output_dir="../" or output_dir="/" could otherwise
+    # trigger arbitrary filesystem deletion via shutil.rmtree.
+    output_dir_value = config["council"].get("output_dir", "council")
+    council_dir = (repo_root / output_dir_value).resolve()
+    repo_root_resolved = repo_root.resolve()
+    # Path must be a strict subdirectory (not the repo root itself)
+    if not str(council_dir).startswith(str(repo_root_resolved) + os.sep):
+        print(
+            f"ERROR: council.output_dir '{output_dir_value}' resolves to '{council_dir}', "
+            f"which is outside or equal to the repo root '{repo_root_resolved}'. "
+            f"Refusing to delete.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     if council_dir.exists():
         shutil.rmtree(council_dir)
     council_dir.mkdir(parents=True)
@@ -1193,13 +1269,15 @@ def main():
                 print(f"    {member['label']:25s} {status:12s} ({elapsed:.1f}s)")
             except Exception as e:
                 role = member["role"]
+                # Log full error to stderr only — may contain prompt material
+                print(f"  [debug] {member['label']} future error: {type(e).__name__}: {e}", file=sys.stderr)
                 council_reviews[role] = (
                     f"### {role} Review: Sprint {sprint} (R{round_num})\n\n"
                     f"**Status:** UNAVAILABLE\n"
-                    f"**Error:** Timeout or execution error: {e}\n\n"
+                    f"**Error:** [Error: API response hidden for security. Check logs for details.] ({type(e).__name__})\n\n"
                     f"This expert was unable to complete their review."
                 )
-                print(f"    {member['label']:25s} FAILED       ({e})")
+                print(f"    {member['label']:25s} FAILED       ({type(e).__name__} — see debug output)")
 
     # Check quorum
     successful = sum(1 for r in council_reviews.values() if "UNAVAILABLE" not in r)
@@ -1277,7 +1355,7 @@ def main():
         else:
             print(f'  Next: ./scripts/archive-plan.sh {sprint} "{title}"')
     else:
-        print("  Next: Address findings in FINDINGS_Sprint{sprint}.md, then re-run:")
+        print(f"  Next: Address findings in FINDINGS_Sprint{sprint}.md, then re-run:")
         print(f'        ./scripts/council-review.py {review_type} {sprint} "{title}"')
 
 
