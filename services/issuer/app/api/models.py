@@ -774,7 +774,12 @@ class UpdatePBXConfigRequest(BaseModel):
 
     api_key_org_id: Optional[str] = Field(None, description="Organization ID for API key")
     api_key_id: Optional[str] = Field(None, description="API key ID within the org")
-    api_key_value: Optional[str] = Field(None, description="Raw API key value (needed for dialplan)")
+    api_key_value: Optional[str] = Field(
+        None,
+        description="Raw API key value (needed for dialplan). Printable ASCII only, max 512 chars.",
+        max_length=512,
+        pattern=r"^[\x20-\x7e]+$",  # Printable ASCII — value is XML-escaped in generate_dialplan()
+    )
     extensions: Optional[list[PBXExtension]] = Field(None, description="Extension configs (1000-1009)")
     default_caller_id: Optional[str] = Field(
         None,

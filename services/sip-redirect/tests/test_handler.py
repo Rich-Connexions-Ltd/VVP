@@ -67,11 +67,17 @@ class TestHandleInviteSuccess:
 
         assert response.status_code == 302
 
-    async def test_302_response_contains_vvp_identity(self, invite_request, mock_client):
-        """Success path: 302 response carries VVP identity header."""
+    async def test_302_response_carries_all_attestation_headers(self, invite_request, mock_client):
+        """Success path: 302 response carries all three VVP attestation headers.
+
+        This test validates the core purpose of handle_invite — it must forward
+        the identity (RFC 8224), vvp_identity, and vvp_passport values returned
+        by the issuer onto the SIP response. A regression that drops any of these
+        would break call attestation without causing a status code failure.
+        """
         mock_client.create_vvp_from_tn.return_value = VVPCreateResult(
             success=True,
-            identity_header="test-identity",
+            identity_header="eyJhbGciOiJFZERTQSJ9.test.sig",
             vvp_identity="vvp-identity-value",
             vvp_passport="vvp-passport-value",
         )
@@ -80,7 +86,11 @@ class TestHandleInviteSuccess:
             response = await handle_invite(invite_request)
 
         assert response.status_code == 302
+        # RFC 8224 Identity header — must be forwarded verbatim
+        assert response.identity == "eyJhbGciOiJFZERTQSJ9.test.sig"
+        # VVP-specific attestation headers
         assert response.vvp_identity == "vvp-identity-value"
+        assert response.vvp_passport == "vvp-passport-value"
 
     async def test_create_vvp_called_with_correct_args(self, invite_request, mock_client):
         """Success path: create_vvp_from_tn is called with the request TNs and call_id."""
