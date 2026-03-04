@@ -315,10 +315,10 @@ When the user says "Sprint N" (e.g., "Sprint 27"), begin pair programming on tha
 
 4. **Follow pair programming workflow** - As defined in the "Pair Programming Workflow" section:
    - Draft plan in `PLAN_Sprint<N>.md` with sufficient detail for review
-   - Request plan review: `./scripts/request-review-with-context.sh plan <N> "<title>"`
+   - Request plan review: `./scripts/council-review.py plan <N> "<title>"`
    - Read `REVIEW_Sprint<N>.md` for verdict; iterate until APPROVED
    - Implement according to plan
-   - Request code review: `./scripts/request-review-with-context.sh code <N> "<title>"`
+   - Request code review: `./scripts/council-review.py code <N> "<title>"`
    - Archive completed plan using `./scripts/archive-plan.sh <N> "<title>"`
 
 **Sprint Definitions:** See `SPRINTS.md` for the full sprint roadmap (Sprints 1-25 were verifier implementation, Sprints 26+ are issuer implementation).
@@ -328,11 +328,11 @@ When the user says "Sprint N" (e.g., "Sprint 27"), begin pair programming on tha
 User: Sprint 27
 Agent: [Reads SPRINTS.md for Sprint 27 details]
 Agent: [Writes PLAN_Sprint27.md with implementation plan]
-Agent: [Runs ./scripts/request-review-with-context.sh plan 27 "Local Witness Infrastructure"]
-Agent: [Reads REVIEW_Sprint27.md — Codex verdict: APPROVED]
+Agent: [Runs ./scripts/council-review.py plan 27 "Local Witness Infrastructure"]
+Agent: [Reads REVIEW_Sprint27.md — Council verdict: APPROVED]
 Agent: [Implements according to plan]
-Agent: [Runs ./scripts/request-review-with-context.sh code 27 "Local Witness Infrastructure"]
-Agent: [Reads REVIEW_Sprint27.md — Codex verdict: APPROVED]
+Agent: [Runs ./scripts/council-review.py code 27 "Local Witness Infrastructure"]
+Agent: [Reads REVIEW_Sprint27.md — Council verdict: APPROVED]
 Agent: [Runs ./scripts/archive-plan.sh 27 "Local Witness Infrastructure"]
 ```
 
@@ -341,14 +341,14 @@ Agent: [Runs ./scripts/archive-plan.sh 27 "Local Witness Infrastructure"]
 User: Sprint 27
 Agent: [Reads SPRINTS.md for Sprint 27 details]
 Agent: [Writes PLAN_Sprint27.md with implementation plan]
-Agent: [Runs ./scripts/request-review-with-context.sh plan 27 "Local Witness Infrastructure"]
-Agent: [Reads REVIEW_Sprint27.md — Codex verdict: APPROVED]
+Agent: [Runs ./scripts/council-review.py plan 27 "Local Witness Infrastructure"]
+Agent: [Reads REVIEW_Sprint27.md — Council verdict: APPROVED]
 Agent: [Presents summary of PLAN + REVIEW to human, asks to accept]
 Human: [Accepts / edits REVIEW / pauses]
 Agent: [Re-reads REVIEW_Sprint27.md if edited]
 Agent: [Implements according to plan]
-Agent: [Runs ./scripts/request-review-with-context.sh code 27 "Local Witness Infrastructure"]
-Agent: [Reads REVIEW_Sprint27.md — Codex verdict: APPROVED]
+Agent: [Runs ./scripts/council-review.py code 27 "Local Witness Infrastructure"]
+Agent: [Reads REVIEW_Sprint27.md — Council verdict: APPROVED]
 Agent: [Presents summary of implementation + REVIEW to human, asks to accept]
 Human: [Accepts]
 Agent: [Runs ./scripts/archive-plan.sh 27 "Local Witness Infrastructure"]
@@ -382,59 +382,42 @@ The test script sets `DYLD_LIBRARY_PATH="/opt/homebrew/lib"` automatically. If l
 
 ## Pair Programming Workflow
 
-This project uses a **heterogeneous two-agent workflow**: Claude (Editor/Implementor) and OpenAI Codex (Reviewer). Using different AI platforms for each role provides genuine independence — the Reviewer catches different classes of issues than the Editor's own model would.
+This project uses a **heterogeneous multi-agent workflow**: Claude (Editor/Implementor) and a Council of Experts (Reviewer). The council submits plans/code to 5 focused expert reviewers across 3 AI platforms in parallel, then consolidates their findings into a single unified review. Using different platforms and focused lenses provides genuine independence and comprehensive coverage.
 
 ### Reviewer Setup
 
 | Role | Platform | Invocation |
 |------|----------|------------|
 | Editor / Implementor | Claude Code | Interactive session (this agent) |
-| Reviewer | OpenAI Codex | `./scripts/request-review-with-context.sh` (automated, context-aware) |
+| Reviewer (default) | Council of Experts | `./scripts/council-review.py` (5 experts + consolidator) |
+| Reviewer (fallback) | Gemini | `python3 scripts/gemini-review.py` (single reviewer) |
+| Reviewer (fallback) | Codex | `./scripts/request-review-with-context.sh` (single reviewer) |
 
 **Prerequisites:**
 ```bash
+# Council review (default) — requires all 3 API keys:
+export ANTHROPIC_API_KEY=...   # Claude models (Security expert, Consolidator)
+export GOOGLE_API_KEY=...      # Gemini models (Performance, UX experts)
+export OPENAI_API_KEY=...      # OpenAI models (Documentation, Simplicity experts)
+
+# Fallback: Codex (single reviewer)
 npm install -g @openai/codex   # Install Codex CLI
 codex                           # Authenticate (follow prompts)
 ```
 
-**Custom reviewer:** Set `VVP_REVIEWER` to override the default Codex invocation:
-```bash
-VVP_REVIEWER="claude -p" ./scripts/request-review-with-context.sh plan 35 "Title"  # Use Claude instead
-```
+### Council of Experts Review
 
-### Context-Aware Review
+The default review method submits plans/code to multiple focused expert reviewers in parallel across 3 AI platforms, then consolidates into one unified review. Council composition, models, fallbacks, and phase assignments are all configured in `scripts/council-config.json` — see that file for the current council lineup.
 
-Reviews are augmented with a KERI/ACDC/vLEI/VVP context pack so the Reviewer understands domain concepts without being trained on the codebase. The context pack is assembled from reference docs in `codex/skills/keri-acdc-vlei-vvp/references/`.
+Key features (all implemented in `scripts/council-review.py`):
+- **Phase-specific composition**: Each member has a `phases` field — e.g., Cost Modeller runs only for plan reviews, Test Quality Expert only for code reviews
+- **Automatic fallback**: Each member has an optional fallback platform/model, tried automatically when the primary API fails (rate limit, credits exhausted)
+- **Quorum**: 3 of N members must succeed; individual failures produce placeholder reviews
+- **Context-aware**: Builds and includes the KERI/ACDC/vLEI/VVP context pack from `codex/skills/keri-acdc-vlei-vvp/references/`
 
-**Architecture:**
-```
-request-review-with-context.sh
-  ├── build_context_pack.sh  → codex/context/CONTEXT_PACK.md
-  ├── VVP_REVIEWER=codex-reviewer.sh
-  └── request-review.sh      → codex-reviewer.sh prepends context → codex exec
-```
+### Legacy Single-Reviewer Setup
 
-**Profiles:**
-
-| Profile | Files | Lines | Auto-selected for |
-|---------|-------|-------|-------------------|
-| `review-plan` | glossary, keri, acdc, vlei, vvp, source-map | ~480 | `plan` reviews |
-| `review-code` | glossary, acdc, vvp, source-map | ~350 | `code` reviews |
-| `default` | glossary, source-map | ~140 | fallback |
-
-**Environment controls:**
-
-| Variable | Purpose | Default |
-|----------|---------|---------|
-| `VVP_CONTEXT_PROFILE` | Override auto-selected profile | auto (plan→review-plan, code→review-code) |
-| `VVP_CONTEXT_DISABLE` | Set to `1` to skip context packing | `0` |
-| `VVP_REVIEWER` | Override reviewer command | `codex-reviewer.sh` |
-| `VVP_CODEX_CMD` | Override Codex CLI invocation | `codex exec --full-auto` |
-
-**Caveats:**
-- Context pack adds ~350-480 lines to the Codex prompt — may increase latency slightly
-- Reference docs must be kept in sync with codebase changes (update when schemas, APIs, or architecture change)
-- The `codex/context/` directory is git-ignored (transient output)
+The original single-reviewer scripts remain as fallbacks (Gemini for quick iterations, Codex if needed). Set `VVP_REVIEWER` to override. Context profiles and environment controls are documented in `scripts/build_context_pack.sh` and `scripts/request-review-with-context.sh`.
 
 ### Guiding Principles
 
@@ -562,19 +545,20 @@ The **Revision History** table at the bottom of the PLAN file tracks revisions a
 
 #### Step 1.2: Request Plan Review
 
-Run the review script to invoke the Reviewer (Codex) automatically:
+Run the council review script to invoke the Council of Experts:
 
 ```bash
-./scripts/request-review-with-context.sh plan <sprint-number> "<title>"
-# Example: ./scripts/request-review-with-context.sh plan 35 "Credential Issuance"
+./scripts/council-review.py plan <sprint-number> "<title>"
+# Example: ./scripts/council-review.py plan 35 "Credential Issuance"
 ```
 
 The script:
 1. Increments the plan review round counter (stored in `.review-round-sprint<N>-plan`)
-2. Assembles a prompt instructing the Reviewer to read `CHANGES.md`, `Documentation/PLAN_history.md`, and `PLAN_Sprint<N>.md`
-3. Invokes Codex (or the configured `VVP_REVIEWER`) with the prompt, including the round number
-4. Codex writes its verdict and findings to `REVIEW_Sprint<N>.md` with the round number in the header (e.g., `R1`, `R2`)
-5. Reports the verdict, round number, and next steps
+2. Builds context pack and gathers plan materials
+3. Submits to 5 expert reviewers in parallel (Security, Performance, Documentation, UX, Code Simplicity)
+4. Individual reviews written to `council/` directory
+5. Consolidator synthesizes all reviews into `REVIEW_Sprint<N>.md` with verdict
+6. Reports the verdict, round number, and next steps
 
 After the script completes, read `REVIEW_Sprint<N>.md` to see the verdict. The review file header will show the round number (e.g., `## Plan Review: Sprint 35 - Credential Issuance (R1)`).
 
@@ -587,7 +571,7 @@ If human review mode is ON (check `memory/human-review-mode`), perform the human
 If Reviewer returns `CHANGES_REQUESTED`:
 1. Editor revises `PLAN_Sprint<N>.md` addressing all required changes
 2. Editor appends a row to the **Revision History** table in `PLAN_Sprint<N>.md` documenting what changed (e.g., `| R2 | 2025-01-15 | Added issuer-binding enforcement per R1 finding [High] |`)
-3. Re-run `./scripts/request-review-with-context.sh plan <N> "<title>"` (the script auto-increments the round counter)
+3. Re-run `./scripts/council-review.py plan <N> "<title>"` (the script auto-increments the round counter)
 4. Repeat from Step 1.3 until `APPROVED`
 
 ---
@@ -632,19 +616,20 @@ The Editor updates `PLAN_Sprint<N>.md` with an implementation appendix:
 
 #### Step 2.3: Request Code Review
 
-Run the review script to invoke the Reviewer (Codex) automatically:
+Run the council review script to invoke the Council of Experts:
 
 ```bash
-./scripts/request-review-with-context.sh code <sprint-number> "<title>"
-# Example: ./scripts/request-review-with-context.sh code 35 "Credential Issuance"
+./scripts/council-review.py code <sprint-number> "<title>"
+# Example: ./scripts/council-review.py code 35 "Credential Issuance"
 ```
 
 The script:
 1. Increments the code review round counter (stored in `.review-round-sprint<N>-code`)
-2. Detects changed files from git history
-3. Assembles a prompt instructing the Reviewer to read `CHANGES.md`, `PLAN_Sprint<N>.md`, and the changed files
-4. Invokes Codex, which writes its verdict to `REVIEW_Sprint<N>.md` with the round number in the header
-5. Reports the verdict, round number, and next steps
+2. Detects changed files from git history and gathers code materials
+3. Submits to 5 expert reviewers in parallel
+4. Individual reviews written to `council/` directory
+5. Consolidator synthesizes all reviews into `REVIEW_Sprint<N>.md` with verdict
+6. Reports the verdict, round number, and next steps
 
 After the script completes, read `REVIEW_Sprint<N>.md` to see the verdict. The review file header will show the round number (e.g., `## Code Review: Sprint 35 - Credential Issuance (R1)`).
 
@@ -654,7 +639,7 @@ If human review mode is ON (check `memory/human-review-mode`), perform the human
 
 #### Step 2.5: Iterate Until Approved
 
-- If `CHANGES_REQUESTED`: Fix issues, re-run `./scripts/request-review-with-context.sh code ...`, repeat from Step 2.4
+- If `CHANGES_REQUESTED`: Fix issues, re-run `./scripts/council-review.py code ...`, repeat from Step 2.4
 - If `PLAN_REVISION_REQUIRED`: Return to Phase 1 with revised plan
 - If `APPROVED`: Proceed to Phase 3
 

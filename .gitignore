@@ -55,6 +55,9 @@ REVIEW_Sprint*.md
 # Generated context packs (transient)
 codex/context/
 
+# Council review working files (transient)
+council/
+
 # Logs
 *_debug.log
 *.log
