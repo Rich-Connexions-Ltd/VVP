@@ -30,6 +30,11 @@ Migrated the PBX Management UI and Phone PWA from `vvp-issuer.rcnx.io` to a new 
 | `services/pbx/web/phone/js/vvp-display.js` | Fixed: `/static/phone/img/` → relative `img/` path |
 | `services/sip-redirect/app/redirect/handler.py` | Sprint 77: Refactored to use `/vvp/create-for-tn` combined endpoint (single bcrypt auth per call instead of two). Fixed audit log NameError (lookup_result removed in refactor). |
 | `services/sip-redirect/tests/test_handler.py` | New: 12 handle_invite tests covering 302/404/500 paths and pre-condition checks (no key, non-INVITE, missing TN, rate-limited) |
+| `.gitignore` | Added `council/` (transient member review files), `.sprint-base-commit-*`, `FINDINGS_Sprint*.md` |
+| `scripts/archive-plan.sh` | Added cleanup of `.sprint-base-commit-<N>` and `FINDINGS_Sprint<N>.md`; updated header docs |
+| `scripts/council-config.json` | New: Council composition, models, API key env vars, timeouts, fallbacks |
+| `scripts/council-review.py` | New: Council of Experts review script (5-7 parallel reviewers + consolidator) |
+| `scripts/gemini-review.py` | Fixed `get_changed_files` docstring (removed false Strategy 4); sanitized API error messages |
 | `services/pbx/config/nginx-pbx-portal.conf` | New: nginx config for pbx.rcnx.io |
 | `.github/workflows/deploy.yml` | Added `deploy-pbx-portal` job |
 | `knowledge/api-reference.md` | Marked removed routes; documented facade endpoints |

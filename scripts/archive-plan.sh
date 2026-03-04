@@ -15,7 +15,11 @@
 #   1. Appends PLAN_Sprint<N>.md content to Documentation/PLAN_history.md under a sprint header
 #   2. Moves PLAN_Sprint<N>.md to Documentation/archive/PLAN_Sprint<N>.md
 #   3. Removes REVIEW_Sprint<N>.md
-#   4. Prints a reminder to update CHANGES.md (left manual since it needs human-written summary)
+#   4. Removes transient round-tracking artifacts:
+#      - .review-round-sprint<N>-plan, .review-round-sprint<N>-code
+#      - .sprint-base-commit-<N>
+#      - FINDINGS_Sprint<N>.md
+#   5. Prints a reminder to update CHANGES.md (left manual since it needs human-written summary)
 
 set -euo pipefail
 
@@ -99,9 +103,11 @@ fi
 
 PLAN_ROUND_FILE="$REPO_ROOT/.review-round-sprint${SPRINT_NUM}-plan"
 CODE_ROUND_FILE="$REPO_ROOT/.review-round-sprint${SPRINT_NUM}-code"
-for rf in "$PLAN_ROUND_FILE" "$CODE_ROUND_FILE"; do
+BASE_COMMIT_FILE="$REPO_ROOT/.sprint-base-commit-${SPRINT_NUM}"
+FINDINGS_FILE="$REPO_ROOT/FINDINGS_Sprint${SPRINT_NUM}.md"
+for rf in "$PLAN_ROUND_FILE" "$CODE_ROUND_FILE" "$BASE_COMMIT_FILE" "$FINDINGS_FILE"; do
     if [ -f "$rf" ]; then
-        echo "==> Removing round state: $(basename "$rf")"
+        echo "==> Removing: $(basename "$rf")"
         rm "$rf"
     fi
 done
