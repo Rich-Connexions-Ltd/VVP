@@ -28,6 +28,8 @@ Migrated the PBX Management UI and Phone PWA from `vvp-issuer.rcnx.io` to a new 
 | `services/pbx/web/phone/` | New: Phone PWA (moved from `services/issuer/web/phone/`) |
 | `services/pbx/web/phone/sw.js` | Credential safety comment; relative asset paths |
 | `services/pbx/web/phone/js/vvp-display.js` | Fixed: `/static/phone/img/` → relative `img/` path |
+| `services/sip-redirect/app/redirect/handler.py` | Sprint 77: Refactored to use `/vvp/create-for-tn` combined endpoint (single bcrypt auth per call instead of two). Fixed audit log NameError (lookup_result removed in refactor). |
+| `services/sip-redirect/tests/test_handler.py` | New: 12 handle_invite tests covering 302/404/500 paths and pre-condition checks (no key, non-INVITE, missing TN, rate-limited) |
 | `services/pbx/config/nginx-pbx-portal.conf` | New: nginx config for pbx.rcnx.io |
 | `.github/workflows/deploy.yml` | Added `deploy-pbx-portal` job |
 | `knowledge/api-reference.md` | Marked removed routes; documented facade endpoints |

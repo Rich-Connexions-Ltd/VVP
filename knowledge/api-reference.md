@@ -543,7 +543,7 @@ When found via OSP delegation, the response contains the **owner org's** data (o
 
 ### PBX Management (`/pbx`) — Sprint 71, 77
 
-All endpoints require `issuer:admin` role. Router: `app/api/pbx.py`.
+Most endpoints require `issuer:admin` role. The `/pbx/organizations/{org_id}/api-keys` facade endpoint additionally allows `org:administrator` for the same org. Router: `app/api/pbx.py`.
 
 | Method | Path | Purpose |
 |--------|------|---------|

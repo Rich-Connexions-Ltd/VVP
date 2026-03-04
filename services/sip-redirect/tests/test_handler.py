@@ -224,3 +224,30 @@ class TestHandleInvitePreConditions:
 
         response = await handle_invite(request)
         assert response.status_code == 403
+
+    async def test_403_when_from_tn_missing(self):
+        """Missing From TN: handle_invite returns 403 (cannot create PASSporT without originator)."""
+        request = SIPRequest(
+            method="INVITE",
+            request_uri="sip:+442071234567@carrier.example.com",
+            sip_version="SIP/2.0",
+            via=["SIP/2.0/UDP 192.168.1.100:5060;branch=z9hG4bK-test"],
+            from_header="<sip:anonymous@example.com>;tag=abc",
+            to_header="<sip:+442071234567@carrier.example.com>",
+            call_id="no-from-tn@enterprise.com",
+            cseq="1 INVITE",
+            from_tn=None,  # Explicitly no TN
+            vvp_api_key="test-api-key",
+        )
+
+        response = await handle_invite(request)
+        assert response.status_code == 403
+
+    async def test_403_when_rate_limited(self, invite_request):
+        """Rate-limited request: handle_invite returns 403."""
+        with patch("app.redirect.handler._rate_limiter") as mock_limiter:
+            mock_limiter.check.return_value = False
+            mock_limiter.get_retry_after.return_value = 1.0
+            response = await handle_invite(invite_request)
+
+        assert response.status_code == 403

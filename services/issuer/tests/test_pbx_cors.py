@@ -8,6 +8,8 @@ that non-PBX origins and non-PBX paths never receive CORS headers.
 import pytest
 from httpx import AsyncClient
 
+from tests.conftest import TEST_OPERATOR_KEY
+
 PBX_ORIGIN = "https://pbx.rcnx.io"
 OTHER_ORIGIN = "https://evil.example.com"
 
@@ -166,13 +168,19 @@ class TestCorsOn4xxResponses:
     """
 
     async def test_cors_headers_on_403_response(self, client_with_auth: AsyncClient):
-        """GET /pbx/config with insufficient role from pbx.rcnx.io gets CORS headers on 403."""
+        """GET /pbx/config with insufficient role from pbx.rcnx.io gets CORS headers on 403.
+
+        TEST_OPERATOR_KEY has roles ['issuer:operator', 'issuer:readonly'] — no
+        'issuer:admin'. /pbx/config requires issuer:admin, so this produces a
+        role-insufficiency 403, not a credential-missing 401.
+        """
         from app.db.session import init_database
         init_database()
 
         resp = await client_with_auth.get(
             "/pbx/config",
-            headers={"Origin": PBX_ORIGIN, "X-API-Key": "test-operator-key-12345"},
+            # TEST_OPERATOR_KEY: roles=['issuer:operator','issuer:readonly'] — no issuer:admin
+            headers={"Origin": PBX_ORIGIN, "X-API-Key": TEST_OPERATOR_KEY},
         )
         assert resp.status_code == 403
         # CORS middleware must add the header even to error responses so the
