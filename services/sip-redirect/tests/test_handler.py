@@ -193,15 +193,22 @@ class TestHandleInviteServerError:
 
 
 # ---------------------------------------------------------------------------
-# Pre-condition checks (no API key, wrong method)
+# Pre-condition checks (no API key, wrong method, missing TN, rate-limited)
+# Each test also asserts that get_issuer_client() is NOT called — precondition
+# failures must short-circuit without making external requests.
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 class TestHandleInvitePreConditions:
-    """handle_invite validates pre-conditions before calling the issuer."""
+    """handle_invite validates pre-conditions before calling the issuer.
+
+    Each test asserts both the expected error response AND that the issuer
+    client is never called. This validates the short-circuit behaviour and
+    prevents regressions that introduce unnecessary external calls on failure paths.
+    """
 
     async def test_401_when_no_api_key(self):
-        """Missing X-VVP-API-Key: handle_invite returns 401."""
+        """Missing X-VVP-API-Key: handle_invite returns 401, no issuer call made."""
         request = SIPRequest(
             method="INVITE",
             request_uri="sip:+442071234567@carrier.example.com",
@@ -215,11 +222,14 @@ class TestHandleInvitePreConditions:
             to_tn="+442071234567",
         )
 
-        response = await handle_invite(request)
+        with patch("app.redirect.handler.get_issuer_client", new_callable=AsyncMock) as mock_get_client:
+            response = await handle_invite(request)
+
         assert response.status_code == 401
+        mock_get_client.assert_not_called()
 
     async def test_403_when_non_invite_method(self):
-        """Non-INVITE method: handle_invite returns 403."""
+        """Non-INVITE method: handle_invite returns 403, no issuer call made."""
         request = SIPRequest(
             method="REGISTER",
             request_uri="sip:pbx.example.com",
@@ -232,11 +242,14 @@ class TestHandleInvitePreConditions:
             vvp_api_key="test-api-key",
         )
 
-        response = await handle_invite(request)
+        with patch("app.redirect.handler.get_issuer_client", new_callable=AsyncMock) as mock_get_client:
+            response = await handle_invite(request)
+
         assert response.status_code == 403
+        mock_get_client.assert_not_called()
 
     async def test_403_when_from_tn_missing(self):
-        """Missing From TN: handle_invite returns 403 (cannot create PASSporT without originator)."""
+        """Missing From TN: handle_invite returns 403, no issuer call made."""
         request = SIPRequest(
             method="INVITE",
             request_uri="sip:+442071234567@carrier.example.com",
@@ -246,18 +259,23 @@ class TestHandleInvitePreConditions:
             to_header="<sip:+442071234567@carrier.example.com>",
             call_id="no-from-tn@enterprise.com",
             cseq="1 INVITE",
-            from_tn=None,  # Explicitly no TN
+            from_tn=None,  # Explicitly no TN — cannot create PASSporT without originator
             vvp_api_key="test-api-key",
         )
 
-        response = await handle_invite(request)
+        with patch("app.redirect.handler.get_issuer_client", new_callable=AsyncMock) as mock_get_client:
+            response = await handle_invite(request)
+
         assert response.status_code == 403
+        mock_get_client.assert_not_called()
 
     async def test_403_when_rate_limited(self, invite_request):
-        """Rate-limited request: handle_invite returns 403."""
-        with patch("app.redirect.handler._rate_limiter") as mock_limiter:
+        """Rate-limited request: handle_invite returns 403, no issuer call made."""
+        with patch("app.redirect.handler._rate_limiter") as mock_limiter, \
+             patch("app.redirect.handler.get_issuer_client", new_callable=AsyncMock) as mock_get_client:
             mock_limiter.check.return_value = False
             mock_limiter.get_retry_after.return_value = 1.0
             response = await handle_invite(invite_request)
 
         assert response.status_code == 403
+        mock_get_client.assert_not_called()
