@@ -807,3 +807,31 @@ class PBXDeployResponse(BaseModel):
     dialplan_size_bytes: int = 0
     message: str
     deployed_at: Optional[str] = None
+
+
+class PBXOrgNameItem(BaseModel):
+    """A single organization entry in the PBX facade org listing."""
+
+    id: str
+    name: str
+
+
+class PBXOrgNamesResponse(BaseModel):
+    """Response from GET /pbx/organizations/names."""
+
+    count: int
+    organizations: list[PBXOrgNameItem]
+
+
+class PBXAPIKeyItem(BaseModel):
+    """A single API key entry in the PBX facade key listing (id + name only)."""
+
+    id: str
+    name: str
+
+
+class PBXAPIKeysResponse(BaseModel):
+    """Response from GET /pbx/organizations/{org_id}/api-keys."""
+
+    count: int
+    api_keys: list[PBXAPIKeyItem]

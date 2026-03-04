@@ -8,7 +8,7 @@
 
 ### Summary
 
-Migrated the PBX Management UI and Phone PWA from `vvp-issuer.rcnx.io` to a new static portal on `pbx.rcnx.io`. The issuer backend API stays on the issuer (it depends on the database, auth, and Azure SDK) and is now accessible cross-origin via path-scoped CORS middleware. Key changes: `PbxCorsMiddleware` (explicit allowlist of `/pbx/*` paths, `https://pbx.rcnx.io` origin only), two PBX facade endpoints (`/pbx/organizations/names`, `/pbx/organizations/{id}/api-keys`) so the CORS scope needs no exceptions for `/organizations/*`, async dialplan deploy (`asyncio.to_thread`), API key preview truncated to last-4 chars. Phone PWA and PBX Management UI routes removed from issuer. 29 new tests (14 CORS middleware, 10 facade endpoint, 5 route-removal). 972 issuer tests pass.
+Migrated the PBX Management UI and Phone PWA from `vvp-issuer.rcnx.io` to a new static portal on `pbx.rcnx.io`. The issuer backend API stays on the issuer (it depends on the database, auth, and Azure SDK) and is now accessible cross-origin via path-scoped CORS middleware. Key changes: `PbxCorsMiddleware` (explicit regex allowlist of 5 specific `/pbx/` endpoints — not a broad `/pbx/*` prefix — `https://pbx.rcnx.io` origin only), two PBX facade endpoints (`/pbx/organizations/names`, `/pbx/organizations/{id}/api-keys`) so the CORS scope needs no exceptions for `/organizations/*`, async dialplan deploy (`asyncio.to_thread`), API key preview truncated to last-4 chars. Phone PWA and PBX Management UI routes removed from issuer. 29 new tests (14 CORS middleware, 10 facade endpoint, 5 route-removal). 972 issuer tests pass.
 
 ### Files Changed
 

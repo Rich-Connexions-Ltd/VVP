@@ -6,7 +6,7 @@ CORS policy only needs to allow the /pbx/* prefix — no exceptions for
 
 Sprint 77: Covers access-control branching for pbx_organization_api_keys:
   - issuer:admin can access any org
-  - org:administrator can access their own org (untestable without org DB key)
+  - org:administrator can access their own org but NOT other orgs (cross-org 403)
   - any key without issuer:admin and without org:administrator gets 403
   - unknown org_id returns 404 (even for admin)
 """
@@ -118,6 +118,33 @@ class TestPBXOrganizationAPIKeys:
         )
         assert resp.status_code == 403
 
+    async def test_org_admin_cross_org_returns_403(self, client: AsyncClient):
+        """org:administrator for org-A is rejected when accessing org-B.
+
+        Tests the `principal.organization_id != org_id` check specifically:
+        a principal with org:administrator and organization_id="test-cross-org-a"
+        must not access "/pbx/organizations/test-cross-org-b/api-keys".
+        """
+        _init_db()
+        import app.main as main_module
+        from app.auth.api_key import Principal
+        from app.auth.roles import require_admin
+
+        async def org_admin_for_org_a():
+            return Principal(
+                key_id="test-org-a-admin",
+                name="Org A Admin",
+                roles=["org:administrator"],
+                organization_id="test-cross-org-a",
+            )
+
+        main_module.app.dependency_overrides[require_admin.dependency] = org_admin_for_org_a
+        try:
+            resp = await client.get("/pbx/organizations/test-cross-org-b/api-keys")
+            assert resp.status_code == 403
+        finally:
+            main_module.app.dependency_overrides.pop(require_admin.dependency, None)
+
     async def test_admin_bypasses_org_scope_check(self, client_with_auth: AsyncClient):
         """issuer:admin is not rejected by org-scoping — gets 404 from DB, not 403."""
         _init_db()
@@ -170,7 +197,5 @@ class TestPBXOrganizationAPIKeys:
         assert "count" in data
         assert data["count"] == 1
         for api_key in data["api_keys"]:
-            assert "id" in api_key
-            assert "name" in api_key
-            assert "roles" not in api_key
-            assert "hash_value" not in api_key
+            # Exact set check: catches any new field added (roles, key_hash, etc.)
+            assert set(api_key.keys()) == {"id", "name"}

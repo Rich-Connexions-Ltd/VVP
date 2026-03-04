@@ -20,6 +20,10 @@ from app.api.models import (
     UpdatePBXConfigRequest,
     PBXDeployRequest,
     PBXDeployResponse,
+    PBXOrgNamesResponse,
+    PBXOrgNameItem,
+    PBXAPIKeysResponse,
+    PBXAPIKeyItem,
 )
 from app.auth.api_key import Principal
 from app.auth.roles import require_admin
@@ -243,11 +247,11 @@ async def deploy_pbx(
     )
 
 
-@router.get("/organizations/names")
+@router.get("/organizations/names", response_model=PBXOrgNamesResponse)
 async def pbx_organization_names(
     principal: Principal = require_admin,
     db: Session = Depends(get_db),
-) -> dict:
+) -> PBXOrgNamesResponse:
     """PBX facade: list organization names for API key selection.
 
     Thin proxy to /organizations/names, restricted to admin role.
@@ -262,18 +266,18 @@ async def pbx_organization_names(
         .order_by(Organization.name)
         .all()
     )
-    return {
-        "count": len(orgs),
-        "organizations": [{"id": o.id, "name": o.name} for o in orgs],
-    }
+    return PBXOrgNamesResponse(
+        count=len(orgs),
+        organizations=[PBXOrgNameItem(id=o.id, name=o.name) for o in orgs],
+    )
 
 
-@router.get("/organizations/{org_id}/api-keys")
+@router.get("/organizations/{org_id}/api-keys", response_model=PBXAPIKeysResponse)
 async def pbx_organization_api_keys(
     org_id: str,
     principal: Principal = require_admin,
     db: Session = Depends(get_db),
-) -> dict:
+) -> PBXAPIKeysResponse:
     """PBX facade: list API keys for an organization (id + name only).
 
     Applies the same org-scoping as the canonical /organizations/{id}/api-keys
@@ -311,8 +315,10 @@ async def pbx_organization_api_keys(
         .all()
     )
 
-    api_keys = [{"id": key.id, "name": key.name} for key in keys]
-    return {"count": len(api_keys), "api_keys": api_keys}
+    return PBXAPIKeysResponse(
+        count=len(keys),
+        api_keys=[PBXAPIKeyItem(id=key.id, name=key.name) for key in keys],
+    )
 
 
 @router.get("/dialplan-preview")

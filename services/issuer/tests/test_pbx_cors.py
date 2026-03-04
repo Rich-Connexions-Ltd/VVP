@@ -28,6 +28,10 @@ class TestCorsPreflightAllowedPaths:
         assert resp.headers.get("access-control-allow-origin") == PBX_ORIGIN
         assert "Vary" in resp.headers
         assert "Origin" in resp.headers["Vary"]
+        # Verify specific security-relevant header values defined in the plan
+        assert resp.headers.get("access-control-max-age") == "3600"
+        assert "GET" in (resp.headers.get("access-control-allow-methods") or "")
+        assert "X-API-Key" in (resp.headers.get("access-control-allow-headers") or "")
 
     async def test_preflight_pbx_config_credentials_false(self, client: AsyncClient):
         """Preflight to /pbx/config returns Access-Control-Allow-Credentials: false."""
@@ -141,6 +145,50 @@ class TestCorsActualRequests:
         init_database()
 
         resp = await client.get("/pbx/config", headers={"Origin": PBX_ORIGIN})
+        assert resp.headers.get("access-control-allow-origin") == PBX_ORIGIN
+        assert "Origin" in resp.headers.get("Vary", "")
+        assert resp.headers.get("access-control-allow-credentials") == "false"
+
+    async def test_get_facade_names_from_pbx_origin_has_cors_headers(self, client: AsyncClient):
+        """GET /pbx/organizations/names from pbx.rcnx.io includes CORS response headers."""
+        from app.db.session import init_database
+        init_database()
+
+        resp = await client.get(
+            "/pbx/organizations/names", headers={"Origin": PBX_ORIGIN}
+        )
+        assert resp.status_code == 200
+        assert resp.headers.get("access-control-allow-origin") == PBX_ORIGIN
+        assert "Origin" in resp.headers.get("Vary", "")
+        assert resp.headers.get("access-control-allow-credentials") == "false"
+
+    async def test_get_facade_api_keys_from_pbx_origin_has_cors_headers(self, client: AsyncClient):
+        """GET /pbx/organizations/{org_id}/api-keys from pbx.rcnx.io includes CORS headers."""
+        from app.db.session import init_database
+        from app.db.session import SessionLocal
+        from app.db.models import Organization
+        init_database()
+
+        db = SessionLocal()
+        try:
+            org_id = "test-cors-actual-org"
+            db.query(Organization).filter(Organization.id == org_id).delete()
+            db.commit()
+            db.add(Organization(
+                id=org_id,
+                name="CORS Actual Test Org",
+                pseudo_lei="XCORSACT01",
+                enabled=True,
+            ))
+            db.commit()
+        finally:
+            db.close()
+
+        resp = await client.get(
+            f"/pbx/organizations/{org_id}/api-keys",
+            headers={"Origin": PBX_ORIGIN},
+        )
+        assert resp.status_code == 200
         assert resp.headers.get("access-control-allow-origin") == PBX_ORIGIN
         assert "Origin" in resp.headers.get("Vary", "")
         assert resp.headers.get("access-control-allow-credentials") == "false"
