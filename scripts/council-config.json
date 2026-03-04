@@ -1,8 +1,11 @@
 {
-  "version": 3,
+  "version": 4,
   "council": {
     "parallel_timeout_seconds": 120,
     "consolidator_timeout_seconds": 120,
+    "max_plan_rounds": 5,
+    "max_code_rounds": 6,
+    "convergence_warning_at": 3,
     "output_dir": "council",
     "members": [
       {
@@ -116,6 +119,22 @@
         "max_tokens": 2048,
         "temperature": 0.2,
         "lens": "You are a test quality and coverage expert. Focus EXCLUSIVELY on: test adequacy (are the right things being tested?), missing edge case coverage, assertion quality (are assertions specific and meaningful, or vague like '>= 0'?), test isolation (do tests depend on external state or ordering?), missing integration tests for critical paths, mock fidelity (do mocks accurately represent real behavior?), flaky test risk (timing dependencies, race conditions), and whether tests would catch regressions if the implementation changed. Ignore security, performance, documentation, and UX — those are handled by other reviewers."
+      },
+      {
+        "role": "domain",
+        "label": "Domain Expert (KERI/ACDC/vLEI)",
+        "phases": ["plan", "code"],
+        "platform": "anthropic",
+        "model": "claude-sonnet-4-6",
+        "api_key_env": "ANTHROPIC_API_KEY",
+        "fallback": {
+          "platform": "google",
+          "model": "gemini-2.5-pro",
+          "api_key_env": "GOOGLE_API_KEY"
+        },
+        "max_tokens": 3072,
+        "temperature": 0.2,
+        "lens": "You are a domain expert in KERI (Key Event Receipt Infrastructure), ACDC (Authentic Chained Data Containers), vLEI (verifiable Legal Entity Identifiers), and VVP (Verified Voice Protocol). Focus EXCLUSIVELY on: correctness of credential chain structures (edge operators like I2I and NI2I, issuer-holder-verifier relationships), SAID computation algorithms and their application, delegation rules and trust hierarchy correctness, schema governance (correct SAIDs, field definitions, required vs optional attributes), TEL (Transaction Event Log) usage for credential status, CESR encoding correctness, key management and rotation event handling, OOBI resolution and witness receipt distribution, PASSporT JWT structure compliance, and dossier assembly correctness. Reference the domain context pack provided. Ignore general code quality, security (unless cryptographically specific to KERI), performance, documentation formatting, and UX — those are handled by other reviewers."
       }
     ],
     "consolidator": {
