@@ -17,19 +17,49 @@ import sys
 from pathlib import Path
 
 
-def get_changed_files() -> list[str]:
-    """Get list of changed files (uncommitted or recent commits)."""
+def get_changed_files(sprint: str | None = None, repo_root: Path | None = None) -> list[str]:
+    """Get list of changed files for code review.
+
+    Strategy (priority order):
+    1. Sprint base commit exists -> diff from that commit to HEAD
+    2. Uncommitted changes (staged + unstaged vs HEAD)
+    3. Recent commits (HEAD~10..HEAD)
+    """
+    # Strategy 1: Sprint-aware diff from recorded base commit
+    if sprint and repo_root:
+        base_file = repo_root / f".sprint-base-commit-{sprint}"
+        if base_file.exists():
+            base_sha = base_file.read_text().strip()
+            result = subprocess.run(
+                ["git", "diff", "--name-only", f"{base_sha}..HEAD"],
+                capture_output=True, text=True,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                files = [f for f in result.stdout.strip().split("\n") if f]
+                if files:
+                    return files
+
+    # Strategy 2: Uncommitted changes (staged + unstaged)
     result = subprocess.run(
-        ["git", "diff", "--name-only"], capture_output=True, text=True
+        ["git", "diff", "--name-only", "HEAD"],
+        capture_output=True, text=True,
     )
-    files = result.stdout.strip().split("\n") if result.stdout.strip() else []
-    if not files or files == [""]:
-        result = subprocess.run(
-            ["git", "diff", "--name-only", "HEAD~5..HEAD"],
-            capture_output=True, text=True,
-        )
-        files = result.stdout.strip().split("\n") if result.stdout.strip() else []
-    return [f for f in files if f]
+    if result.stdout.strip():
+        files = [f for f in result.stdout.strip().split("\n") if f]
+        if files:
+            return files
+
+    # Strategy 3: Recent commits (increased window)
+    result = subprocess.run(
+        ["git", "diff", "--name-only", "HEAD~10..HEAD"],
+        capture_output=True, text=True,
+    )
+    if result.stdout.strip():
+        files = [f for f in result.stdout.strip().split("\n") if f]
+        if files:
+            return files
+
+    return []
 
 
 def read_file_safe(path: str, max_lines: int = 500) -> str:
@@ -151,7 +181,7 @@ def build_code_prompt(sprint: str, title: str, round_num: int) -> str:
     changes_file = repo_root / "CHANGES.md"
 
     # Get changed files
-    changed_files = get_changed_files()
+    changed_files = get_changed_files(sprint=sprint, repo_root=repo_root)
 
     # Build file contents section
     file_sections = []

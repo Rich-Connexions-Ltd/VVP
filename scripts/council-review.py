@@ -126,7 +126,12 @@ def call_anthropic(
         },
         timeout=timeout,
     )
-    resp.raise_for_status()
+    try:
+        resp.raise_for_status()
+    except Exception as e:
+        # Re-raise without the original request object to avoid leaking the API key
+        # that was present in the x-api-key request header.
+        raise RuntimeError(f"Anthropic API error: {e.response.status_code} {e.response.reason_phrase}") from None
     data = resp.json()
     return data["content"][0]["text"]
 
@@ -155,7 +160,12 @@ def call_openai(
         },
         timeout=timeout,
     )
-    resp.raise_for_status()
+    try:
+        resp.raise_for_status()
+    except Exception as e:
+        # Re-raise without the original request object to avoid leaking the Bearer token
+        # that was present in the Authorization request header.
+        raise RuntimeError(f"OpenAI API error: {e.response.status_code} {e.response.reason_phrase}") from None
     data = resp.json()
     return data["choices"][0]["message"]["content"]
 
@@ -189,8 +199,12 @@ def call_codex(
     """
     combined_prompt = f"{system}\n\n---\n\n{user_content}"
     try:
+        # Pass prompt via stdin, not as a CLI argument. Command-line arguments
+        # are visible to other processes via `ps aux`, which would expose the
+        # full review context (potentially including API keys in the materials).
         result = subprocess.run(
-            ["codex", "exec", "--full-auto", combined_prompt],
+            ["codex", "exec", "--full-auto"],
+            input=combined_prompt,
             capture_output=True, text=True, timeout=timeout,
         )
     except FileNotFoundError:
@@ -243,19 +257,79 @@ def read_file_safe(path: Path, max_lines: int = 500) -> str:
         return f"[Error reading {path}: {e}]"
 
 
-def get_changed_files() -> list[str]:
-    """Get list of changed files (uncommitted or recent commits)."""
+def get_changed_files(sprint: str | None = None, repo_root: Path | None = None) -> list[str]:
+    """Get list of changed files for code review.
+
+    Strategy (priority order):
+    1. Sprint base commit exists → diff from that commit to HEAD
+    2. Uncommitted changes (staged + unstaged vs HEAD)
+    3. Recent commits (HEAD~10..HEAD, increased from 5)
+    4. Parse PLAN file "Files to Create/Modify" table as last resort
+    """
+    # Strategy 1: Sprint-aware diff from recorded base commit
+    if sprint and repo_root:
+        base_file = repo_root / f".sprint-base-commit-{sprint}"
+        if base_file.exists():
+            base_sha = base_file.read_text().strip()
+            result = subprocess.run(
+                ["git", "diff", "--name-only", f"{base_sha}..HEAD"],
+                capture_output=True, text=True,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                files = [f for f in result.stdout.strip().split("\n") if f]
+                if files:
+                    return files
+
+    # Strategy 2: Uncommitted changes (staged + unstaged)
     result = subprocess.run(
-        ["git", "diff", "--name-only"], capture_output=True, text=True
+        ["git", "diff", "--name-only", "HEAD"],
+        capture_output=True, text=True,
     )
-    files = result.stdout.strip().split("\n") if result.stdout.strip() else []
-    if not files or files == [""]:
-        result = subprocess.run(
-            ["git", "diff", "--name-only", "HEAD~5..HEAD"],
-            capture_output=True, text=True,
-        )
-        files = result.stdout.strip().split("\n") if result.stdout.strip() else []
-    return [f for f in files if f]
+    if result.stdout.strip():
+        files = [f for f in result.stdout.strip().split("\n") if f]
+        if files:
+            return files
+
+    # Strategy 3: Recent commits (increased window)
+    result = subprocess.run(
+        ["git", "diff", "--name-only", "HEAD~10..HEAD"],
+        capture_output=True, text=True,
+    )
+    if result.stdout.strip():
+        files = [f for f in result.stdout.strip().split("\n") if f]
+        if files:
+            return files
+
+    # Strategy 4: Parse plan file for expected files
+    if sprint and repo_root:
+        plan_file = repo_root / f"PLAN_Sprint{sprint}.md"
+        if plan_file.exists():
+            files = _parse_plan_file_list(plan_file)
+            if files:
+                return files
+
+    return []
+
+
+def _parse_plan_file_list(plan_file: Path) -> list[str]:
+    """Extract file paths from the 'Files to Create/Modify' table in a PLAN file."""
+    in_table = False
+    files = []
+    for line in plan_file.read_text().splitlines():
+        if "Files to Create/Modify" in line or "Files Changed" in line:
+            in_table = True
+            continue
+        if in_table:
+            if line.startswith("|") and "`" in line:
+                # Extract backtick-quoted path
+                parts = line.split("`")
+                if len(parts) >= 2:
+                    path = parts[1].strip()
+                    if path and not path.startswith("--"):
+                        files.append(path)
+            elif line.strip() == "" or line.startswith("#"):
+                in_table = False
+    return files
 
 
 def gather_plan_materials(sprint: str, repo_root: Path) -> str:
@@ -297,7 +371,7 @@ def gather_code_materials(sprint: str, repo_root: Path) -> str:
         content = read_file_safe(changes_file, max_lines=200)
         sections.append(f"### CHANGES.md\n```\n{content}\n```")
 
-    changed_files = get_changed_files()
+    changed_files = get_changed_files(sprint=sprint, repo_root=repo_root)
     source_files = [
         f for f in changed_files
         if f.endswith((".py", ".yml", ".yaml", ".toml", ".json", ".html"))
@@ -352,6 +426,7 @@ def build_context_pack(review_type: str, repo_root: Path) -> str:
 def build_council_prompt(
     member: dict, materials: str, context_pack: str,
     sprint: str, title: str, round_num: int, review_type: str,
+    knowledge_context: str | None = None,
 ) -> tuple[str, str]:
     """Build system + user prompts for a council member. Returns (system, user)."""
     role = member["role"]
@@ -371,13 +446,25 @@ def build_council_prompt(
 ## Your Review Lens
 {lens}"""
 
+    # Domain expert gets enriched context from knowledge/ directory
+    domain_section = ""
+    if role == "domain" and knowledge_context:
+        domain_section = f"""
+
+## Deep Domain Reference
+The following are authoritative reference documents for KERI/ACDC/vLEI/VVP.
+Use these to validate correctness of designs and implementations.
+
+{knowledge_context}
+"""
+
     user_prompt = f"""## Review Type
 This is a {review_type_label} review for Sprint {sprint}: {title} (Round {round_num}).
 {round_context}
 
 ## Domain Context
 {context_pack if context_pack else "[No domain context available]"}
-
+{domain_section}
 ## Materials Under Review
 {materials}
 
@@ -390,10 +477,14 @@ Write your review in EXACTLY this structure:
 **Scope:** {label}
 
 #### Findings
-List findings ONLY within your area of focus. For each finding:
-- **[High]** description — Critical issue that should block approval
-- **[Medium]** description — Important issue that should be addressed
-- **[Low]** description — Suggestion for improvement
+List findings ONLY within your area of focus. For each finding, include the file path and location:
+- **[High]** description (File: `path/to/file.py`, Location: function_name or line range)
+  - Current: what exists now
+  - Fix: specific action to take
+- **[Medium]** description (File: `path/to/file.py`, Location: function_name or line range)
+  - Current: what exists now
+  - Fix: specific action to take
+- **[Low]** description (File: `path/to/file.py` if applicable)
 
 If you find NO issues in your area, write: "No findings in this area."
 
@@ -404,6 +495,7 @@ IMPORTANT:
 - Stay strictly within your area of expertise
 - Do NOT comment on areas outside your lens
 - Be specific: cite file paths, line numbers (for code), or section names (for plans)
+- For each finding, explain WHAT is wrong AND HOW to fix it
 - Distinguish between genuine issues and stylistic preferences
 - If uncertain, note the uncertainty rather than asserting"""
 
@@ -414,6 +506,8 @@ def build_consolidator_prompt(
     council_reviews: dict[str, str],
     sprint: str, title: str, round_num: int, review_type: str,
     member_labels: dict[str, str],
+    tracker_content: str | None = None,
+    escalation_note: str | None = None,
 ) -> tuple[str, str]:
     """Build system + user prompts for the consolidator. Returns (system, user)."""
     review_type_cap = "Plan" if review_type == "plan" else "Code"
@@ -448,10 +542,29 @@ def build_consolidator_prompt(
 ### Test Coverage
 [Synthesized assessment of test adequacy]"""
 
+    # Build optional tracker section
+    tracker_section = ""
+    if tracker_content and round_num > 1:
+        tracker_section = f"""
+
+## Prior Findings Tracker
+The editor has been tracking resolution of prior findings. Items marked ADDRESSED
+have been fixed by the editor. Do NOT re-flag items marked ADDRESSED unless you have
+specific evidence the fix is incomplete or incorrect. Focus on OPEN items and genuinely
+NEW issues not covered by the tracker.
+
+{tracker_content}
+"""
+
+    # Build optional escalation note
+    escalation_section = ""
+    if escalation_note:
+        escalation_section = f"\n{escalation_note}\n"
+
     user_prompt = f"""## Council Reviews
 
 {all_reviews}
-
+{tracker_section}{escalation_section}
 ## Consolidation Instructions
 
 1. **Identify overlapping concerns**: If multiple experts flagged the same underlying issue from different angles, merge them into one finding and cite all relevant perspectives.
@@ -464,6 +577,12 @@ def build_consolidator_prompt(
    - [High]: Would cause a bug, security vulnerability, data loss, or spec violation if shipped. Blocks approval.
    - [Medium]: Would cause maintainability, performance, or usability problems. Should be fixed but does not block.
    - [Low]: Improvement suggestion. Optional.
+
+   **Severity calibrations:**
+   - A finding that was ADDRESSED in the tracker and re-appears MUST only be flagged if you can demonstrate the fix was incomplete — otherwise exclude it
+   - Style preferences (naming, comment wording) are ALWAYS [Low], never higher
+   - "Should extract/refactor" is [Low] unless it causes a concrete bug, security issue, or test failure
+   - Test coverage gaps are [Medium] unless the untested path is a critical security/data-loss path
 
 5. **Determine verdict**:
    - APPROVED: Zero [High] findings AND the overall design/implementation is sound
@@ -483,9 +602,9 @@ def build_consolidator_prompt(
 {assessment_sections}
 
 ### Findings
-- [High]: description (Source: expert_name)
-- [Medium]: description (Source: expert_name)
-- [Low]: description (Source: expert_name)
+- **[High]** description (File: `path/to/file`, Location: function_name) (Source: expert_name)
+- **[Medium]** description (File: `path/to/file`, Location: function_name) (Source: expert_name)
+- **[Low]** description (Source: expert_name)
 
 ### Excluded Findings
 - description — Reason: why excluded (Source: expert_name)
@@ -495,7 +614,12 @@ def build_consolidator_prompt(
 [Synthesized from experts who addressed them. If none, write "No open questions."]
 
 ### Required Changes (if CHANGES_REQUESTED)
-1. [Specific change required]
+For each required change, provide ALL of the following:
+1. **File**: exact file path
+   **Location**: function/class name or line range
+   **Current behavior**: what the code does now (or what the plan says now)
+   **Required change**: exactly what must change
+   **Acceptance criteria**: how to verify the fix is correct
 
 {"### Plan Revisions (if PLAN_REVISION_REQUIRED)" + chr(10) + "[What needs to change in the plan]" + chr(10) if review_type == "code" else ""}
 ### Recommendations
@@ -539,6 +663,7 @@ def run_council_member(
     member: dict, materials: str, context_pack: str, api_keys: dict,
     sprint: str, title: str, round_num: int, review_type: str,
     timeout: float,
+    knowledge_context: str | None = None,
 ) -> tuple[str, str, float]:
     """Run a single council member with automatic fallback. Returns (role, review_text, elapsed_seconds)."""
     role = member["role"]
@@ -546,6 +671,7 @@ def run_council_member(
 
     system_prompt, user_prompt = build_council_prompt(
         member, materials, context_pack, sprint, title, round_num, review_type,
+        knowledge_context=knowledge_context,
     )
 
     # Try primary model
@@ -605,6 +731,8 @@ def run_consolidator(
     member_labels: dict[str, str],
     sprint: str, title: str, round_num: int, review_type: str,
     api_keys: dict,
+    tracker_content: str | None = None,
+    escalation_note: str | None = None,
 ) -> str:
     """Run the consolidator with automatic fallback to produce the final unified review."""
     consolidator = config["council"]["consolidator"]
@@ -612,6 +740,8 @@ def run_consolidator(
 
     system_prompt, user_prompt = build_consolidator_prompt(
         council_reviews, sprint, title, round_num, review_type, member_labels,
+        tracker_content=tracker_content,
+        escalation_note=escalation_note,
     )
 
     # Try primary
@@ -700,6 +830,18 @@ def increment_round(sprint: str, review_type: str, repo_root: Path) -> int:
     round_num = int(round_file.read_text().strip()) if round_file.exists() else 0
     round_num += 1
     round_file.write_text(str(round_num))
+
+    # Record base commit on first plan review (used for code review diffs)
+    if review_type == "plan" and round_num == 1:
+        base_file = repo_root / f".sprint-base-commit-{sprint}"
+        if not base_file.exists():
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                capture_output=True, text=True,
+            )
+            if result.returncode == 0:
+                base_file.write_text(result.stdout.strip())
+
     return round_num
 
 
@@ -714,6 +856,189 @@ def extract_verdict(review_text: str) -> str:
         if "**Verdict:**" in line:
             return line.strip()
     return ""
+
+
+# ---------------------------------------------------------------------------
+# Findings Tracker
+# ---------------------------------------------------------------------------
+
+
+def _parse_findings(review_text: str, round_num: int) -> list[dict]:
+    """Extract findings from consolidated review markdown."""
+    findings = []
+    finding_id = 0
+    for line in review_text.splitlines():
+        line_stripped = line.strip()
+        # Match lines like: - **[High]** description or -   **[High]** description
+        if not (line_stripped.startswith("-") and "**[" in line_stripped):
+            continue
+        severity = None
+        for sev in ("High", "Medium", "Low"):
+            if f"[{sev}]" in line_stripped:
+                severity = sev
+                break
+        if not severity:
+            continue
+        finding_id += 1
+        # Extract description after severity marker
+        desc = line_stripped
+        marker = f"**[{severity}]**"
+        idx = desc.find(marker)
+        if idx >= 0:
+            desc = desc[idx + len(marker):].strip().lstrip("-").strip()
+        # Truncate for table width
+        if len(desc) > 120:
+            desc = desc[:117] + "..."
+        findings.append({
+            "id": finding_id,
+            "round": round_num,
+            "severity": severity,
+            "description": desc,
+            "status": "OPEN",
+            "resolution": "",
+        })
+    return findings
+
+
+def _read_tracker(tracker_file: Path) -> list[dict]:
+    """Parse existing tracker file into findings list."""
+    findings = []
+    in_table = False
+    for line in tracker_file.read_text().splitlines():
+        if line.startswith("| #"):
+            in_table = True
+            continue
+        if in_table and line.startswith("|---"):
+            continue
+        if in_table and line.startswith("|"):
+            parts = [p.strip() for p in line.split("|")[1:-1]]
+            if len(parts) >= 6:
+                fid = parts[0]
+                findings.append({
+                    "id": int(fid) if fid.isdigit() else 0,
+                    "round": int(parts[1].lstrip("R")) if parts[1].lstrip("R").isdigit() else 0,
+                    "severity": parts[2],
+                    "description": parts[3],
+                    "status": parts[4],
+                    "resolution": parts[5],
+                })
+        elif in_table and not line.startswith("|"):
+            in_table = False
+    return findings
+
+
+def _text_similarity(a: str, b: str) -> float:
+    """Simple word-overlap similarity (Jaccard)."""
+    words_a = set(a.lower().split())
+    words_b = set(b.lower().split())
+    if not words_a or not words_b:
+        return 0.0
+    return len(words_a & words_b) / len(words_a | words_b)
+
+
+def _merge_findings(
+    existing: list[dict], new_findings: list[dict], round_num: int,
+) -> list[dict]:
+    """Merge new findings with existing tracker, avoiding re-flagging of resolved items."""
+    merged = list(existing)
+    next_id = max((f["id"] for f in merged), default=0) + 1
+
+    for nf in new_findings:
+        matched = False
+        for ef in merged:
+            # Fuzzy match: same severity + substantial text overlap
+            if (ef["severity"] == nf["severity"]
+                    and _text_similarity(ef["description"], nf["description"]) > 0.4):
+                matched = True
+                if ef["status"] == "ADDRESSED":
+                    ef["status"] = "REOPENED"
+                    ef["resolution"] += f" [Reopened R{round_num}]"
+                break
+        if not matched:
+            nf["id"] = next_id
+            nf["round"] = round_num
+            next_id += 1
+            merged.append(nf)
+
+    # Warn about circular findings
+    for ef in merged:
+        reopens = ef.get("resolution", "").count("[Reopened")
+        if reopens >= 2:
+            print(
+                f"  WARNING: Finding #{ef['id']} reopened {reopens} times — "
+                f"consider accepting as known debt or escalating.",
+                file=sys.stderr,
+            )
+
+    return merged
+
+
+def _write_tracker(
+    tracker_file: Path, sprint: str, findings: list[dict], review_type: str,
+) -> None:
+    """Write findings tracker as markdown table."""
+    lines = [
+        f"# Findings Tracker: Sprint {sprint} ({review_type})",
+        "",
+        "Editor: Update the **Status** and **Resolution** columns after addressing each finding.",
+        "Status values: `OPEN` | `ADDRESSED` | `VERIFIED` | `WONTFIX` | `REOPENED`",
+        "",
+        "| # | Round | Severity | Finding | Status | Resolution |",
+        "|---|-------|----------|---------|--------|------------|",
+    ]
+    for f in findings:
+        lines.append(
+            f"| {f['id']} | R{f['round']} | {f['severity']} "
+            f"| {f['description']} | {f['status']} | {f['resolution']} |"
+        )
+    lines.append("")
+    tracker_file.write_text("\n".join(lines))
+
+
+def update_findings_tracker(
+    sprint: str, round_num: int, review_text: str,
+    review_type: str, repo_root: Path,
+) -> Path:
+    """Parse findings from consolidated review and update the tracker file.
+
+    On first round: creates tracker with all findings as OPEN.
+    On subsequent rounds: adds new findings, preserves editor resolution notes.
+    Returns the tracker file path.
+    """
+    tracker_file = repo_root / f"FINDINGS_Sprint{sprint}.md"
+    new_findings = _parse_findings(review_text, round_num)
+
+    if not tracker_file.exists():
+        _write_tracker(tracker_file, sprint, new_findings, review_type)
+    else:
+        existing = _read_tracker(tracker_file)
+        merged = _merge_findings(existing, new_findings, round_num)
+        _write_tracker(tracker_file, sprint, merged, review_type)
+
+    return tracker_file
+
+
+def compute_convergence_score(tracker_file: Path) -> tuple[float, str]:
+    """Compute convergence score from tracker: ratio of resolved to total findings.
+
+    Returns (score 0.0-1.0, description).
+    """
+    if not tracker_file.exists():
+        return 0.0, "No tracker"
+
+    findings = _read_tracker(tracker_file)
+    if not findings:
+        return 1.0, "No findings"
+
+    total = len(findings)
+    resolved = sum(1 for f in findings if f["status"] in ("ADDRESSED", "VERIFIED", "WONTFIX"))
+    open_count = sum(1 for f in findings if f["status"] == "OPEN")
+    reopened = sum(1 for f in findings if f["status"] == "REOPENED")
+
+    score = resolved / total if total > 0 else 1.0
+    desc = f"{resolved}/{total} resolved, {open_count} open, {reopened} reopened"
+
+    return score, desc
 
 
 def print_header(
@@ -819,6 +1144,23 @@ def main():
     # Build member label lookup (active members only)
     member_labels = {m["role"]: m["label"] for m in active_members}
 
+    # Load knowledge files for domain expert (if active)
+    knowledge_context = None
+    has_domain_expert = any(m["role"] == "domain" for m in active_members)
+    if has_domain_expert:
+        knowledge_dir = repo_root / "knowledge"
+        if knowledge_dir.exists():
+            domain_files = ["keri-primer.md", "schemas.md", "verification-pipeline.md"]
+            sections = []
+            for fname in domain_files:
+                fpath = knowledge_dir / fname
+                if fpath.exists():
+                    content = read_file_safe(fpath, max_lines=200)
+                    sections.append(f"### {fname}\n{content}")
+            if sections:
+                knowledge_context = "\n\n".join(sections)
+                print(f"  Domain knowledge: {len(knowledge_context):,} chars ({len(sections)} files)")
+
     # Run council in parallel
     parallel_timeout = config["council"].get("parallel_timeout_seconds", 60)
 
@@ -832,6 +1174,7 @@ def main():
                 member, materials, context_pack, api_keys,
                 sprint, title, round_num, review_type,
                 parallel_timeout,
+                knowledge_context=knowledge_context,
             ): member
             for member in active_members
         }
@@ -867,12 +1210,36 @@ def main():
         print(f"  ERROR: Quorum not met ({successful} < {QUORUM_THRESHOLD}). Aborting.", file=sys.stderr)
         sys.exit(1)
 
+    # Read existing findings tracker for consolidator context
+    tracker_file = repo_root / f"FINDINGS_Sprint{sprint}.md"
+    tracker_content = tracker_file.read_text() if tracker_file.exists() else None
+
+    # Convergence guardrails
+    max_rounds_key = "max_plan_rounds" if review_type == "plan" else "max_code_rounds"
+    max_rounds = config["council"].get(max_rounds_key, 8)
+    warning_at = config["council"].get("convergence_warning_at", 3)
+
+    escalation_note = None
+    if round_num > max_rounds:
+        print(f"\n  WARNING: Round {round_num} exceeds max ({max_rounds}) for {review_type} reviews.")
+        print(f"  ESCALATION: Consider accepting remaining issues as known debt.")
+        escalation_note = (
+            f"\nESCALATION: This is round {round_num}, exceeding the configured maximum "
+            f"of {max_rounds}. The process has not converged. You MUST:\n"
+            f"1. Only flag genuinely NEW [High] findings not present in prior rounds\n"
+            f"2. Downgrade previously-flagged issues that are partially addressed to [Low]\n"
+            f"3. If no new [High] findings exist, verdict MUST be APPROVED\n"
+            f"4. List all unresolved items in a 'Known Debt' section instead of blocking\n"
+        )
+
     # Run consolidator
     print(f"  Running consolidator ({config['council']['consolidator']['model']})...")
     start = time.monotonic()
     consolidated = run_consolidator(
         config, council_reviews, member_labels,
         sprint, title, round_num, review_type, api_keys,
+        tracker_content=tracker_content,
+        escalation_note=escalation_note,
     )
     elapsed = time.monotonic() - start
     print(f"  Consolidator complete ({elapsed:.1f}s)")
@@ -883,12 +1250,24 @@ def main():
     print()
     print(f"==> Review written to {review_file.name}")
 
+    # Update findings tracker
+    tracker_file = update_findings_tracker(sprint, round_num, consolidated, review_type, repo_root)
+    print(f"    Findings tracker: {tracker_file.name}")
+
     # Extract and display verdict
     verdict = extract_verdict(consolidated)
     if verdict:
         print(f"    {verdict}")
     else:
         print("    WARNING: No verdict found in consolidated review")
+
+    # Display convergence score (round 2+)
+    if round_num > 1:
+        score, desc = compute_convergence_score(tracker_file)
+        print(f"    Convergence: {score:.0%} ({desc})")
+        if score < 0.5 and round_num >= warning_at:
+            print(f"    WARNING: Low convergence ({score:.0%}) at round {round_num}.")
+            print(f"    Consider addressing [High] items only and deferring [Medium]/[Low].")
 
     # Next steps
     print()
@@ -898,7 +1277,7 @@ def main():
         else:
             print(f'  Next: ./scripts/archive-plan.sh {sprint} "{title}"')
     else:
-        print("  Next: Address findings, then re-run review:")
+        print("  Next: Address findings in FINDINGS_Sprint{sprint}.md, then re-run:")
         print(f'        ./scripts/council-review.py {review_type} {sprint} "{title}"')
 
 
