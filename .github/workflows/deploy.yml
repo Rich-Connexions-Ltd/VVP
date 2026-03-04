@@ -1190,6 +1190,9 @@ jobs:
   deploy-sip-redirect:
     needs: [changes, test-sip-redirect]
     if: needs.changes.outputs.sip-redirect == 'true'
+    concurrency:
+      group: pbx-vm
+      cancel-in-progress: false
     runs-on: ubuntu-latest
 
     steps:
@@ -1404,6 +1407,9 @@ jobs:
   deploy-sip-verify:
     needs: [changes, test-sip-verify, deploy-sip-redirect]
     if: needs.changes.outputs.sip-verify == 'true' && !failure()
+    concurrency:
+      group: pbx-vm
+      cancel-in-progress: false
     runs-on: ubuntu-latest
 
     steps:
@@ -1569,6 +1575,9 @@ jobs:
   deploy-pbx-config:
     needs: [changes, deploy-sip-redirect, deploy-sip-verify]
     if: needs.changes.outputs.pbx-config == 'true' && !failure()
+    concurrency:
+      group: pbx-vm
+      cancel-in-progress: false
     runs-on: ubuntu-latest
 
     steps:
@@ -1764,6 +1773,9 @@ jobs:
   deploy-pbx-portal:
     needs: [changes]
     if: needs.changes.outputs.pbx-portal == 'true' && !failure() && github.ref == 'refs/heads/main'
+    concurrency:
+      group: pbx-vm
+      cancel-in-progress: false
     runs-on: ubuntu-latest
 
     steps:
