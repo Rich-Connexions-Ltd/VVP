@@ -128,7 +128,7 @@ class TestPBXOrganizationAPIKeys:
         _init_db()
         import app.main as main_module
         from app.auth.api_key import Principal
-        from app.auth.roles import require_admin
+        from app.auth.roles import require_auth
 
         async def org_admin_for_org_a():
             return Principal(
@@ -138,12 +138,14 @@ class TestPBXOrganizationAPIKeys:
                 organization_id="test-cross-org-a",
             )
 
-        main_module.app.dependency_overrides[require_admin.dependency] = org_admin_for_org_a
+        # Override require_auth (the endpoint's dependency after the High-2 fix)
+        # to inject an org:administrator principal for org-A attempting to access org-B.
+        main_module.app.dependency_overrides[require_auth.dependency] = org_admin_for_org_a
         try:
             resp = await client.get("/pbx/organizations/test-cross-org-b/api-keys")
             assert resp.status_code == 403
         finally:
-            main_module.app.dependency_overrides.pop(require_admin.dependency, None)
+            main_module.app.dependency_overrides.pop(require_auth.dependency, None)
 
     async def test_admin_bypasses_org_scope_check(self, client_with_auth: AsyncClient):
         """issuer:admin is not rejected by org-scoping — gets 404 from DB, not 403."""

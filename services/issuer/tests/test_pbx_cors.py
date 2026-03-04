@@ -157,6 +157,42 @@ class TestCorsBlockedOrigins:
 
 
 @pytest.mark.asyncio
+class TestCorsOn4xxResponses:
+    """CORS headers must be present even on 403/401 responses.
+
+    The CORS middleware wraps the auth middleware, so error responses from
+    auth checks should still receive CORS headers when the path is in the
+    allowlist and the origin is pbx.rcnx.io.
+    """
+
+    async def test_cors_headers_on_403_response(self, client_with_auth: AsyncClient):
+        """GET /pbx/config with insufficient role from pbx.rcnx.io gets CORS headers on 403."""
+        from app.db.session import init_database
+        init_database()
+
+        resp = await client_with_auth.get(
+            "/pbx/config",
+            headers={"Origin": PBX_ORIGIN, "X-API-Key": "test-operator-key-12345"},
+        )
+        assert resp.status_code == 403
+        # CORS middleware must add the header even to error responses so the
+        # browser shows the auth error, not a misleading CORS error.
+        assert resp.headers.get("access-control-allow-origin") == PBX_ORIGIN
+
+    async def test_cors_headers_on_401_response(self, client_with_auth: AsyncClient):
+        """GET /pbx/config with no key from pbx.rcnx.io gets CORS headers on 401."""
+        from app.db.session import init_database
+        init_database()
+
+        resp = await client_with_auth.get(
+            "/pbx/config",
+            headers={"Origin": PBX_ORIGIN},
+        )
+        assert resp.status_code == 401
+        assert resp.headers.get("access-control-allow-origin") == PBX_ORIGIN
+
+
+@pytest.mark.asyncio
 class TestCorsActualRequests:
     """Actual (non-preflight) requests from pbx.rcnx.io get CORS response headers."""
 

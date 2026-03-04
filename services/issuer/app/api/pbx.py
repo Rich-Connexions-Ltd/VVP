@@ -26,7 +26,7 @@ from app.api.models import (
     PBXAPIKeyItem,
 )
 from app.auth.api_key import Principal
-from app.auth.roles import require_admin
+from app.auth.roles import require_admin, require_auth
 from app.audit import get_audit_logger
 from app.db.session import get_db
 from app.db.models import Organization, OrgAPIKey, PBXConfig
@@ -275,7 +275,7 @@ async def pbx_organization_names(
 @router.get("/organizations/{org_id}/api-keys", response_model=PBXAPIKeysResponse)
 async def pbx_organization_api_keys(
     org_id: str,
-    principal: Principal = require_admin,
+    principal: Principal = require_auth,
     db: Session = Depends(get_db),
 ) -> PBXAPIKeysResponse:
     """PBX facade: list API keys for an organization (id + name only).

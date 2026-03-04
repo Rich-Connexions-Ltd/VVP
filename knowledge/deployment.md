@@ -197,7 +197,7 @@ Static files served from `/var/www/pbx-portal/` on the PBX VM. Deployed by `depl
 
 **nginx config**: `services/pbx/config/nginx-pbx-portal.conf` — CSP applied per-location (not globally), no `'unsafe-inline'` in `style-src`, HSTS on portal locations. FusionPBX (`/fusion/`) has no restrictive CSP to avoid breaking the PHP admin console.
 
-**Auth**: PBX management UI uses `sessionStorage` for the issuer API key — persists within a browser tab session, cleared on tab close. API calls go to `https://vvp-issuer.rcnx.io/pbx/*` (HTTPS hardcoded, no HTTP fallback). CORS on the issuer is handled by `PbxCorsMiddleware` restricted to `/pbx/*`.
+**Auth**: PBX management UI uses `sessionStorage` for the issuer API key — persists within a browser tab session, cleared on tab close. API calls go to `https://vvp-issuer.rcnx.io/pbx/*` (HTTPS hardcoded, no HTTP fallback). CORS on the issuer is handled by `PbxCorsMiddleware` with an explicit allowlist of 5 specific `/pbx/` endpoints — NOT a broad `/pbx/*` prefix. New `/pbx/` endpoints do not automatically receive CORS headers; the allowlist in `services/issuer/app/middleware/pbx_cors.py` must be explicitly updated.
 
 **Manual deployment** (if CI unavailable):
 ```bash

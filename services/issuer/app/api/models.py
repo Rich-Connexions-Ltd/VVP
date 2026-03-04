@@ -762,7 +762,7 @@ class PBXConfigResponse(BaseModel):
     api_key_org_name: Optional[str] = None
     api_key_id: Optional[str] = None
     api_key_name: Optional[str] = None
-    api_key_preview: Optional[str] = None  # First 8 chars of raw key
+    api_key_preview: Optional[str] = None  # Last 4 chars of raw key, prefixed with "..."
     extensions: list[PBXExtension] = Field(default_factory=list)
     default_caller_id: str = "+441923311000"
     last_deployed_at: Optional[str] = None
