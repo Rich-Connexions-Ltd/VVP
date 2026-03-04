@@ -2,6 +2,8 @@
 
 Sprint 42: Processes SIP INVITEs and returns VVP-attested redirects.
 Sprint 47: Added event capture for monitoring dashboard.
+Sprint 77: Uses /vvp/create-for-tn combined endpoint — single bcrypt auth
+           per call instead of two (one for /tn/lookup + one for /vvp/create).
 """
 
 import logging
@@ -187,22 +189,9 @@ async def handle_invite(request: SIPRequest) -> SIPResponse:
         return build_403_forbidden(request, "Could not extract originating TN from From header")
 
     try:
-        # Look up TN mapping
+        # Sprint 77: Use combined endpoint — single bcrypt auth for both TN
+        # lookup and VVP creation instead of two separate requests.
         client = await get_issuer_client()
-        lookup_result = await client.lookup_tn(from_tn, api_key)
-
-        if not lookup_result.found:
-            audit.log(
-                action="invite.tn_not_found",
-                call_id=call_id,
-                from_tn=from_tn,
-                api_key_prefix=api_key_prefix,
-                status_code=404,
-                vvp_status="INVALID",
-                details={"error": lookup_result.error},
-            )
-            await _capture_event(request, 404, "INVALID", api_key_prefix, error=lookup_result.error)
-            return build_404_not_found(request, lookup_result.error or f"No mapping for {from_tn}")
 
         # Parse CSeq number from header (format: "314159 INVITE")
         cseq_num = None
@@ -212,16 +201,8 @@ async def handle_invite(request: SIPRequest) -> SIPResponse:
             except (ValueError, IndexError):
                 pass
 
-        # Create VVP headers
-        # Note: brand_name/brand_logo_url omitted from create request to
-        # avoid card claim in PASSporT when no brand credential exists in
-        # the dossier. Card claim triggers mandatory brand verification
-        # which fails without a brand credential. Brand info still flows
-        # via X-VVP-* headers set by the verification service.
-        vvp_result = await client.create_vvp(
+        vvp_result = await client.create_vvp_from_tn(
             api_key=api_key,
-            identity_name=lookup_result.identity_name,
-            dossier_said=lookup_result.dossier_said,
             orig_tn=from_tn,
             dest_tn=to_tn or "",
             call_id=call_id,
@@ -229,6 +210,19 @@ async def handle_invite(request: SIPRequest) -> SIPResponse:
         )
 
         if not vvp_result.success:
+            # 404 means TN not found/mapped — surface as such
+            if vvp_result.http_status == 404:
+                audit.log(
+                    action="invite.tn_not_found",
+                    call_id=call_id,
+                    from_tn=from_tn,
+                    api_key_prefix=api_key_prefix,
+                    status_code=404,
+                    vvp_status="INVALID",
+                    details={"error": vvp_result.error},
+                )
+                await _capture_event(request, 404, "INVALID", api_key_prefix, error=vvp_result.error)
+                return build_404_not_found(request, vvp_result.error or f"No mapping for {from_tn}")
             audit.log(
                 action="invite.vvp_create_failed",
                 call_id=call_id,

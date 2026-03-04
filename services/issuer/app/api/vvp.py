@@ -5,13 +5,18 @@ This is the issuer-side implementation per VVP spec §4.1A, §5.0-§5.4, §6.3.1
 
 Sprint 68c: PASSporT signing delegated to KERI Agent via create_vvp_attestation().
 Sprint 76: Per-step timing instrumentation via PhaseTimer.
+Sprint 77: Combined /vvp/create-for-tn endpoint — TN lookup + VVP creation in
+           one request, halving bcrypt overhead vs two separate calls.
 """
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
 
-from app.api.models import CreateVVPRequest, CreateVVPResponse, ErrorResponse
+from app.db.session import get_db
+
+from app.api.models import CreateVVPFromTNRequest, CreateVVPRequest, CreateVVPResponse, ErrorResponse
 from app.auth.api_key import Principal
 from app.auth.roles import check_credential_write_role, require_auth
 from app.keri_client import get_keri_client, KeriAgentUnavailableError
@@ -273,3 +278,120 @@ async def create_vvp_attestation(
     except Exception as e:
         log.exception(f"Unexpected error creating VVP attestation: {e}")
         raise HTTPException(status_code=500, detail=f"Internal error: {e}")
+
+
+@router.post(
+    "/create-for-tn",
+    response_model=CreateVVPResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid request or TN not found"},
+        403: {"model": ErrorResponse, "description": "Revoked credentials"},
+        404: {"model": ErrorResponse, "description": "TN not mapped"},
+        500: {"model": ErrorResponse, "description": "Signing failed"},
+    },
+)
+async def create_vvp_attestation_from_tn(
+    body: CreateVVPFromTNRequest,
+    principal: Principal = require_auth,
+    db: Session = Depends(get_db),
+) -> CreateVVPResponse:
+    """Create VVP attestation using just the originating TN.
+
+    Sprint 77: Combined endpoint that performs TN lookup and VVP creation in a
+    single authenticated request. The SIP redirect service can call this instead
+    of making two separate requests (/tn/lookup then /vvp/create), which halves
+    the bcrypt verification overhead — one auth check via the middleware instead
+    of two.
+
+    TN ownership is validated against the org's TN Allocation credentials.
+    The dossier SAID and identity name are resolved from the TN mapping.
+
+    **Authentication:** Requires `issuer:operator` or `org:dossier_manager` role.
+    """
+    from app.tn.lookup import lookup_tn_with_validation
+
+    timer = PhaseTimer()
+    timer.start("total")
+
+    check_credential_write_role(principal)
+
+    # Validate orig_tn before doing any lookups
+    try:
+        validate_e164(body.orig_tn, "orig_tn")
+        for i, tn in enumerate(body.dest_tn):
+            validate_e164(tn, f"dest_tn[{i}]")
+    except InvalidPhoneNumberError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # TN lookup — use the already-authenticated principal's org to avoid a
+    # second bcrypt.  We derive the API key from the request headers only if
+    # the TN lookup path truly needs it; here we pass "" and let the
+    # lookup function use the principal's org_id directly.
+    async with timer.aphase("tn_lookup"):
+        # Look up TN ownership using the principal's org_id directly,
+        # bypassing a second bcrypt verification.
+        from app.tn.store import TNMappingStore
+        from app.db.models import Organization
+
+        tn = body.orig_tn
+        if not tn.startswith("+"):
+            tn = f"+{tn}"
+
+        org_id = principal.organization_id
+
+        # Direct TN mapping lookup (no auth — principal already authenticated)
+        store = TNMappingStore(db)
+        mapping = store.get_by_tn(tn, org_id) if org_id else None
+        owner_org_id = org_id
+
+        if not mapping and org_id:
+            # OSP delegation fallback
+            from app.tn.lookup import _lookup_via_osp_delegation
+            mapping = _lookup_via_osp_delegation(db, tn, org_id)
+            if mapping:
+                owner_org_id = mapping.organization_id
+                log.info(f"TN {tn} resolved via OSP delegation (combined endpoint)")
+
+        if not mapping:
+            raise HTTPException(status_code=404, detail=f"No TN mapping found for {tn}")
+        if not mapping.enabled:
+            raise HTTPException(status_code=404, detail=f"TN mapping for {tn} is disabled")
+
+        # TN ownership validation
+        from app.tn.lookup import validate_tn_ownership
+        if owner_org_id and not await validate_tn_ownership(db, owner_org_id, tn):
+            raise HTTPException(
+                status_code=403,
+                detail=f"TN {tn} not covered by organization's TN Allocation credentials",
+            )
+
+        identity_name = mapping.identity_name
+        dossier_said = mapping.dossier_said
+
+    if not identity_name or not dossier_said:
+        raise HTTPException(status_code=400, detail="TN mapping is missing identity or dossier")
+
+    # Delegate to the core VVP creation logic via a synthetic CreateVVPRequest
+    vvp_body = CreateVVPRequest(
+        identity_name=identity_name,
+        dossier_said=dossier_said,
+        orig_tn=body.orig_tn,
+        dest_tn=body.dest_tn,
+        exp_seconds=body.exp_seconds,
+        call_id=body.call_id,
+        cseq=body.cseq,
+    )
+
+    # Run the core creation logic (shares cache, revocation, signing paths)
+    result = await create_vvp_attestation(vvp_body, principal)
+
+    # Merge timing: prepend tn_lookup into the result timing_ms
+    if result.timing_ms is not None:
+        merged = {"tn_lookup": timer.timings.get("tn_lookup", 0.0)}
+        merged.update(result.timing_ms)
+        result = result.model_copy(update={"timing_ms": merged})
+
+    log.info(
+        f"create-for-tn: tn={tn}, identity={identity_name}, dossier={dossier_said[:16]}..."
+    )
+    return result

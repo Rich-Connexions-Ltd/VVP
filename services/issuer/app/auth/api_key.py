@@ -3,16 +3,26 @@
 Uses bcrypt for secure key hashing with constant-time verification.
 Supports key rotation via file mtime polling or admin reload endpoint.
 
-Bcrypt cost factor: 12 (default). To change cost factor for new keys,
-update the generator script. Existing keys remain valid until re-hashed.
+Bcrypt cost factor: 10 (2^10 = 1024 iterations). Lowered from 12 for
+API keys (long random strings — cost-10 is still very secure) to reduce
+per-request latency on constrained containers. Existing keys hashed at
+cost-12 remain valid; they are transparently verified at their embedded cost.
+
+Sprint 77: Short-lived API key result cache (5 min TTL) eliminates repeated
+bcrypt verification for the same key within a session. The authenticate()
+middleware is also offloaded to asyncio.to_thread() to avoid blocking the
+event loop during bcrypt.
 """
 
+import asyncio
 import json
 import logging
 import os
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 import bcrypt as bcrypt_lib
@@ -26,8 +36,17 @@ from starlette.requests import HTTPConnection
 
 log = logging.getLogger(__name__)
 
-# Default bcrypt cost factor (2^12 = 4096 iterations)
-BCRYPT_COST_FACTOR = 12
+# Default bcrypt cost factor (2^10 = 1024 iterations)
+# Lowered from 12: API keys are long random strings; cost-10 is sufficient.
+# Existing cost-12 hashes are transparently verified at their embedded cost.
+BCRYPT_COST_FACTOR = 10
+
+# Short-lived API key verification cache — acceptable for non-production use.
+# Eliminates repeated bcrypt for the same key within a 5-minute window.
+_API_KEY_CACHE_TTL = 300.0   # 5 minutes
+_API_KEY_CACHE_MAX = 256      # max entries (LRU eviction above this)
+_api_key_cache: OrderedDict[str, tuple] = OrderedDict()  # key → (principal, error, ts)
+_api_key_cache_lock = Lock()
 
 # Session cookie name (must match api/auth.py)
 SESSION_COOKIE_NAME = "vvp_session"
@@ -346,6 +365,62 @@ def verify_org_key_still_valid(key_id: str) -> bool:
         return False
 
 
+def verify_api_key_with_cache(
+    raw_key: str,
+    store: "APIKeyStore | None" = None,
+) -> tuple["Principal | None", "str | None"]:
+    """Verify an API key with a short-lived result cache.
+
+    Checks the in-memory cache first (TTL=5min). On a miss, runs the full
+    bcrypt verification via the file-based store then the DB org key store,
+    and caches the result.
+
+    Thread-safe: safe to call from asyncio.to_thread().
+
+    Args:
+        raw_key: Raw API key from the request
+        store: Optional pre-fetched APIKeyStore (uses global if not provided)
+
+    Returns:
+        (Principal, None) on success, (None, error_str) on failure
+    """
+    now = time.monotonic()
+
+    # Cache lookup (fast path)
+    with _api_key_cache_lock:
+        if raw_key in _api_key_cache:
+            principal, error, ts = _api_key_cache[raw_key]
+            if now - ts < _API_KEY_CACHE_TTL:
+                _api_key_cache.move_to_end(raw_key)  # LRU promotion
+                log.debug("API key cache hit")
+                return principal, error
+            else:
+                del _api_key_cache[raw_key]  # expired
+
+    # Cache miss — full bcrypt verification
+    if store is None:
+        store = get_api_key_store()
+
+    principal, error = store.verify(raw_key)
+    if principal is None and error == "invalid":
+        principal, error = verify_org_api_key(raw_key)
+
+    # Cache the result (including failures, to resist brute-force enumeration)
+    with _api_key_cache_lock:
+        _api_key_cache[raw_key] = (principal, error, time.monotonic())
+        while len(_api_key_cache) > _API_KEY_CACHE_MAX:
+            _api_key_cache.popitem(last=False)  # evict LRU
+
+    return principal, error
+
+
+def reset_api_key_verification_cache() -> None:
+    """Clear the API key verification cache (for testing / key rotation)."""
+    with _api_key_cache_lock:
+        _api_key_cache.clear()
+    log.info("API key verification cache cleared")
+
+
 def get_api_key_store() -> APIKeyStore:
     """Get the global API key store instance.
 
@@ -449,12 +524,12 @@ class APIKeyBackend(AuthenticationBackend):
         store = get_api_key_store()
         store.reload_if_stale()
 
-        # Verify the key against file-based store first
-        principal, error = store.verify(api_key)
-
-        # Sprint 41: If not found in file-based store, try org API keys
-        if principal is None and error == "invalid":
-            principal, error = verify_org_api_key(api_key)
+        # Sprint 77: Offload to thread pool — bcrypt blocks the event loop.
+        # verify_api_key_with_cache() checks the 5-min cache first, only
+        # runs bcrypt on a cache miss.
+        principal, error = await asyncio.to_thread(
+            verify_api_key_with_cache, api_key, store
+        )
 
         if principal is None:
             # Key is invalid or revoked - raise error

@@ -13,7 +13,7 @@
 
 const VVPDisplay = {
 
-  placeholderLogo: '/static/phone/img/vvp-logo-placeholder.svg',
+  placeholderLogo: 'img/vvp-logo-placeholder.svg',
 
   /** Verification status configuration */
   statusConfig: {

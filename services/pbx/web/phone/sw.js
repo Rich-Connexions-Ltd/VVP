@@ -3,20 +3,26 @@
  *
  * Caches the app shell for offline startup. SIP/WebSocket traffic
  * is not cached (it's real-time over WebSocket, not HTTP).
+ *
+ * Credential safety: This service worker is scoped to /phone/ on pbx.rcnx.io.
+ * API calls (to vvp-issuer.rcnx.io) are cross-origin requests — service workers
+ * do NOT intercept cross-origin fetch requests. No credentials or API keys can
+ * be captured or cached by this worker. The APP_SHELL list is the complete set
+ * of cacheable resources; everything else falls through to the network.
  */
 
 const CACHE_NAME = 'vvp-phone-v1';
 
 const APP_SHELL = [
   '/phone',
-  '/static/phone/css/phone.css',
-  '/static/phone/js/app.js',
-  '/static/phone/js/vvp-display.js',
-  '/static/phone/js/ui.js',
-  '/static/phone/manifest.json',
-  '/static/phone/img/icon-192.png',
-  '/static/phone/img/icon-512.png',
-  '/static/phone/img/vvp-logo-placeholder.svg',
+  'css/phone.css',
+  'js/app.js',
+  'js/vvp-display.js',
+  'js/ui.js',
+  'manifest.json',
+  'img/icon-192.png',
+  'img/icon-512.png',
+  'img/vvp-logo-placeholder.svg',
   'https://cdn.jsdelivr.net/npm/sip.js@0.15.11/dist/sip.min.js',
 ];
 

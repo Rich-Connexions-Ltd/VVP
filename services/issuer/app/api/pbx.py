@@ -1,13 +1,16 @@
 """PBX Management API endpoints.
 
 Sprint 71: Configure PBX extensions, API key, and deploy dialplan.
+Sprint 77: Added facade endpoints for PBX portal CORS access, async deploy.
 """
 
+import asyncio
 import json
 import logging
+import re
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
@@ -26,6 +29,15 @@ from app.db.models import Organization, OrgAPIKey, PBXConfig
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/pbx", tags=["pbx"])
+
+# Only printable ASCII + common whitespace — strips control chars, ANSI escapes,
+# and non-ASCII bytes that could corrupt structured audit log JSON.
+_PRINTABLE_ASCII = re.compile(r"[^\x20-\x7e\n\r\t]")
+
+
+def _sanitize_vm_output(text: str) -> str:
+    """Strip non-printable characters from VM command output before audit logging."""
+    return _PRINTABLE_ASCII.sub("", text)
 
 
 def _get_or_create_config(db: Session) -> PBXConfig:
@@ -69,7 +81,11 @@ def _config_to_response(config: PBXConfig, db: Session) -> PBXConfigResponse:
         api_key_org_name=org_name,
         api_key_id=config.api_key_id,
         api_key_name=key_name,
-        api_key_preview=config.api_key_value[:8] if config.api_key_value else None,
+        # Return only the last 4 characters as a preview.
+        # The value must be stored in plaintext (it is embedded verbatim in
+        # the FreeSWITCH dialplan XML). Returning fewer characters limits
+        # the entropy exposed if the config endpoint is called cross-origin.
+        api_key_preview=("..." + config.api_key_value[-4:]) if config.api_key_value else None,
         extensions=extensions,
         default_caller_id=config.default_caller_id or "+441923311000",
         last_deployed_at=config.last_deployed_at.isoformat() if config.last_deployed_at else None,
@@ -194,10 +210,13 @@ async def deploy_pbx(
             message="Dry run — XML generated but not deployed",
         )
 
-    # Deploy to PBX
+    # Deploy to PBX — run in thread pool to avoid blocking the async event loop.
+    # The Azure SDK's begin_run_command().result() is a synchronous blocking call
+    # that can take 30–120s; wrapping it in asyncio.to_thread() keeps the server
+    # responsive to other requests while the VM command executes.
     from app.pbx.deploy import deploy_dialplan_to_pbx
 
-    success, output = deploy_dialplan_to_pbx(dialplan_xml)
+    success, output = await asyncio.to_thread(deploy_dialplan_to_pbx, dialplan_xml)
 
     if success:
         config.last_deployed_at = datetime.utcnow()
@@ -212,7 +231,7 @@ async def deploy_pbx(
             resource_id="vvp-pbx",
             details={
                 "size_bytes": len(dialplan_xml.encode()),
-                "output": output[:500],
+                "output": _sanitize_vm_output(output)[:500],
             },
         )
 
@@ -222,6 +241,78 @@ async def deploy_pbx(
         message=output,
         deployed_at=datetime.utcnow().isoformat() if success else None,
     )
+
+
+@router.get("/organizations/names")
+async def pbx_organization_names(
+    principal: Principal = require_admin,
+    db: Session = Depends(get_db),
+) -> dict:
+    """PBX facade: list organization names for API key selection.
+
+    Thin proxy to /organizations/names, restricted to admin role.
+    Exposed under /pbx/ so the PBX portal CORS policy only needs to
+    allow a single /pbx/* prefix — no exceptions for /organizations/*.
+
+    Sprint 77: Required for PBX portal cross-origin access.
+    """
+    orgs = (
+        db.query(Organization.id, Organization.name)
+        .filter(Organization.enabled == True)  # noqa: E712
+        .order_by(Organization.name)
+        .all()
+    )
+    return {
+        "count": len(orgs),
+        "organizations": [{"id": o.id, "name": o.name} for o in orgs],
+    }
+
+
+@router.get("/organizations/{org_id}/api-keys")
+async def pbx_organization_api_keys(
+    org_id: str,
+    principal: Principal = require_admin,
+    db: Session = Depends(get_db),
+) -> dict:
+    """PBX facade: list API keys for an organization (id + name only).
+
+    Applies the same org-scoping as the canonical /organizations/{id}/api-keys
+    endpoint: issuer:admin can access any org; org:administrator can only
+    access their own org.
+
+    Returns only id and name — role assignments are not needed for the PBX
+    config selection use case and are excluded to limit RBAC structure exposure.
+
+    Uses eager-loading to avoid an N+1 query on the roles relationship.
+
+    Sprint 77: Required for PBX portal cross-origin access.
+    """
+    # Apply same access control as the canonical org API keys endpoint.
+    if "issuer:admin" not in principal.roles:
+        if (
+            principal.organization_id != org_id
+            or "org:administrator" not in principal.roles
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="Insufficient permissions. Requires issuer:admin or org:administrator role.",
+            )
+
+    org = db.query(Organization).filter(Organization.id == org_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    # Select id and name only — roles are not needed for PBX key selection
+    # and are excluded from the response to limit RBAC structure exposure.
+    keys = (
+        db.query(OrgAPIKey.id, OrgAPIKey.name)
+        .filter(OrgAPIKey.organization_id == org_id, OrgAPIKey.revoked == False)  # noqa: E712
+        .order_by(OrgAPIKey.created_at.desc())
+        .all()
+    )
+
+    api_keys = [{"id": key.id, "name": key.name} for key in keys]
+    return {"count": len(api_keys), "api_keys": api_keys}
 
 
 @router.get("/dialplan-preview")

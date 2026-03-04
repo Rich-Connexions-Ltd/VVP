@@ -540,6 +540,21 @@ class CreateVVPResponse(BaseModel):
     )
 
 
+class CreateVVPFromTNRequest(BaseModel):
+    """Request to create VVP attestation using just the originating TN.
+
+    Sprint 77: Combined endpoint — performs TN lookup and VVP creation in a
+    single authenticated request, halving bcrypt overhead vs calling
+    /tn/lookup + /vvp/create separately.
+    """
+
+    orig_tn: str = Field(..., description="Originating phone number (E.164). Used for TN lookup.")
+    dest_tn: list[str] = Field(..., description="Destination phone numbers (E.164 format)")
+    exp_seconds: int = Field(300, ge=1, le=300, description="Validity window in seconds (max 300)")
+    call_id: Optional[str] = Field(None, description="SIP Call-ID for dialog binding")
+    cseq: Optional[int] = Field(None, description="SIP CSeq number for dialog binding")
+
+
 # =============================================================================
 # TN Mapping Models (Sprint 42)
 # =============================================================================

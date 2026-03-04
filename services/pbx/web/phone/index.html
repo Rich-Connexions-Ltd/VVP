@@ -6,14 +6,14 @@
   <title>VVP Phone</title>
 
   <!-- PWA -->
-  <link rel="manifest" href="/static/phone/manifest.json">
+  <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#2a9d8f">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="apple-touch-icon" href="/static/phone/img/icon-192.png">
+  <link rel="apple-touch-icon" href="img/icon-192.png">
 
   <!-- Styles -->
-  <link rel="stylesheet" href="/static/phone/css/phone.css">
+  <link rel="stylesheet" href="css/phone.css">
 </head>
 <body>
 
@@ -23,7 +23,7 @@
   <div id="screen-login" class="screen screen-login active">
     <div class="login-card">
       <div class="login-logo">
-        <img src="/static/phone/img/vvp-logo-placeholder.svg" alt="VVP" width="72" height="72">
+        <img src="img/vvp-logo-placeholder.svg" alt="VVP" width="72" height="72">
       </div>
       <h1>VVP Phone</h1>
       <p class="login-subtitle">Select your extension to connect</p>
@@ -67,7 +67,7 @@
 
     <!-- Header -->
     <div class="dialer-header">
-      <img src="/static/phone/img/vvp-logo-placeholder.svg" alt="VVP" class="dialer-logo" width="32" height="32">
+      <img src="img/vvp-logo-placeholder.svg" alt="VVP" class="dialer-logo" width="32" height="32">
       <div class="dialer-title">
         <span class="label">VVP Phone</span>
         <span class="ext-label" id="ext-display">Ext 1001</span>
@@ -168,7 +168,7 @@
   <!-- ================================================================== -->
   <div id="call-overlay" class="call-overlay">
     <div class="call-avatar" id="call-avatar">
-      <img id="call-logo" src="/static/phone/img/vvp-logo-placeholder.svg" alt="" width="96" height="96">
+      <img id="call-logo" src="img/vvp-logo-placeholder.svg" alt="" width="96" height="96">
     </div>
 
     <div class="call-brand-name" id="call-brand-name">Unknown Caller</div>
@@ -204,9 +204,9 @@
 
   <!-- Scripts -->
   <script src="https://cdn.jsdelivr.net/npm/sip.js@0.15.11/dist/sip.min.js"></script>
-  <script src="/static/phone/js/vvp-display.js"></script>
-  <script src="/static/phone/js/ui.js"></script>
-  <script src="/static/phone/js/app.js"></script>
+  <script src="js/vvp-display.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/app.js"></script>
 
   <!-- Service Worker -->
   <script>

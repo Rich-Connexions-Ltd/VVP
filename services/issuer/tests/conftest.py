@@ -13,7 +13,7 @@ import bcrypt
 import pytest
 from httpx import AsyncClient, ASGITransport
 
-from app.auth.api_key import reset_api_key_store
+from app.auth.api_key import reset_api_key_store, reset_api_key_verification_cache
 from app.auth.session import reset_session_store, reset_rate_limiter
 from app.auth.users import reset_user_store
 from app.audit.logger import reset_audit_logger
@@ -31,6 +31,19 @@ from common.vvp.models.keri_agent import (
     RotationResponse,
     VVPAttestationResponse,
 )
+
+
+# =============================================================================
+# Global test isolation: clear the API key verification cache between tests
+# so that mocked store.verify() results from one test don't bleed into the next.
+# =============================================================================
+
+@pytest.fixture(autouse=True)
+def _clear_api_key_verification_cache():
+    """Clear the API key verification cache before each test."""
+    reset_api_key_verification_cache()
+    yield
+    reset_api_key_verification_cache()
 
 
 # =============================================================================
@@ -490,6 +503,7 @@ async def client(temp_dir: Path) -> AsyncGenerator[AsyncClient, None]:
 
     # Reset singletons to pick up new config
     reset_api_key_store()
+    reset_api_key_verification_cache()
     reset_user_store()
     reset_session_store()
     reset_rate_limiter()

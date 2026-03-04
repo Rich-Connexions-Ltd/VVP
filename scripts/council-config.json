@@ -1,0 +1,134 @@
+{
+  "version": 3,
+  "council": {
+    "parallel_timeout_seconds": 120,
+    "consolidator_timeout_seconds": 120,
+    "output_dir": "council",
+    "members": [
+      {
+        "role": "security",
+        "label": "Security Expert",
+        "phases": ["plan", "code"],
+        "platform": "anthropic",
+        "model": "claude-sonnet-4-6",
+        "api_key_env": "ANTHROPIC_API_KEY",
+        "fallback": {
+          "platform": "codex",
+          "model": "codex",
+          "api_key_env": null
+        },
+        "max_tokens": 2048,
+        "temperature": 0.2,
+        "lens": "You are a security-focused code reviewer. Focus EXCLUSIVELY on: authentication and authorization flaws, cryptographic correctness (key management, signature verification, SAID computation), injection vulnerabilities (SQL, command, header), trust boundary violations, secret leakage (API keys, tokens in logs or responses), insecure defaults, and OWASP Top 10 applicability. Ignore code style, performance, documentation quality, and UX concerns — those are handled by other reviewers."
+      },
+      {
+        "role": "performance",
+        "label": "Performance Expert",
+        "phases": ["plan", "code"],
+        "platform": "google",
+        "model": "gemini-2.5-flash",
+        "api_key_env": "GOOGLE_API_KEY",
+        "fallback": {
+          "platform": "codex",
+          "model": "codex",
+          "api_key_env": null
+        },
+        "max_tokens": 2048,
+        "temperature": 0.2,
+        "lens": "You are a performance-focused code reviewer. Focus EXCLUSIVELY on: scalability bottlenecks, N+1 query patterns, missing caches or cache invalidation issues, unnecessary memory allocations, blocking I/O on async event loops, resource leaks (connections, file handles), database connection pool management, and concurrency concerns (race conditions, deadlocks). Ignore security, documentation, code style, and UX — those are handled by other reviewers."
+      },
+      {
+        "role": "cost",
+        "label": "Cost Modeller",
+        "phases": ["plan"],
+        "platform": "anthropic",
+        "model": "claude-sonnet-4-6",
+        "api_key_env": "ANTHROPIC_API_KEY",
+        "fallback": {
+          "platform": "google",
+          "model": "gemini-2.5-pro",
+          "api_key_env": "GOOGLE_API_KEY"
+        },
+        "max_tokens": 2048,
+        "temperature": 0.2,
+        "lens": "You are a cost modelling expert. Focus EXCLUSIVELY on: software and service costs implied by the proposed design — including one-time costs (licence fees, setup), recurring costs (API calls, compute, storage, bandwidth, managed services), and how costs scale with growth (per-user, per-request, per-tenant scaling curves). Flag hidden cost drivers such as: vendor lock-in, metered API pricing tiers, database storage growth, egress charges, certificate/credential renewal costs, and operational overhead (monitoring, on-call, maintenance). Quantify where possible (e.g., 'at 1000 req/s this would cost approximately $X/month on Azure Container Apps'). Ignore security, code quality, documentation, and UX — those are handled by other reviewers."
+      },
+      {
+        "role": "documentation",
+        "label": "Documentation Expert",
+        "phases": ["plan", "code"],
+        "platform": "codex",
+        "model": "codex",
+        "api_key_env": null,
+        "fallback": {
+          "platform": "google",
+          "model": "gemini-2.5-flash",
+          "api_key_env": "GOOGLE_API_KEY"
+        },
+        "max_tokens": 2048,
+        "temperature": 0.2,
+        "lens": "You are a documentation-focused code reviewer. Focus EXCLUSIVELY on: missing or incomplete docstrings, unclear variable/function/class naming, missing API documentation, absent inline comments on non-obvious logic, incomplete type annotations on public interfaces, missing README or changelog updates, and inconsistent terminology. Ignore security, performance, code architecture, and UX — those are handled by other reviewers."
+      },
+      {
+        "role": "ux",
+        "label": "User Experience Expert",
+        "phases": ["plan", "code"],
+        "platform": "google",
+        "model": "gemini-2.5-flash",
+        "api_key_env": "GOOGLE_API_KEY",
+        "fallback": {
+          "platform": "codex",
+          "model": "codex",
+          "api_key_env": null
+        },
+        "max_tokens": 2048,
+        "temperature": 0.2,
+        "lens": "You are a UX/DX-focused code reviewer. Focus EXCLUSIVELY on: API ergonomics (intuitive endpoint names, consistent response shapes, helpful error messages), UI/UX issues (confusing workflows, missing user feedback, accessibility), developer experience (clear error messages, sensible defaults, predictable behavior), and configuration complexity (too many knobs, unclear env vars). Ignore security, performance, internal code structure, and documentation completeness — those are handled by other reviewers."
+      },
+      {
+        "role": "simplicity",
+        "label": "Code Simplicity Expert",
+        "phases": ["plan", "code"],
+        "platform": "codex",
+        "model": "codex",
+        "api_key_env": null,
+        "fallback": {
+          "platform": "google",
+          "model": "gemini-2.5-pro",
+          "api_key_env": "GOOGLE_API_KEY"
+        },
+        "max_tokens": 2048,
+        "temperature": 0.2,
+        "lens": "You are a code simplicity and maintainability reviewer. Focus EXCLUSIVELY on: unnecessary complexity, violation of SOLID principles, code duplication that could be extracted, overly clever abstractions, god classes or functions (doing too much), tight coupling between modules, poor separation of concerns, inconsistent patterns across the codebase, and opportunities to simplify without changing behavior. Ignore security, performance, documentation quality, and UX — those are handled by other reviewers."
+      },
+      {
+        "role": "testing",
+        "label": "Test Quality Expert",
+        "phases": ["code"],
+        "platform": "anthropic",
+        "model": "claude-sonnet-4-6",
+        "api_key_env": "ANTHROPIC_API_KEY",
+        "fallback": {
+          "platform": "codex",
+          "model": "codex",
+          "api_key_env": null
+        },
+        "max_tokens": 2048,
+        "temperature": 0.2,
+        "lens": "You are a test quality and coverage expert. Focus EXCLUSIVELY on: test adequacy (are the right things being tested?), missing edge case coverage, assertion quality (are assertions specific and meaningful, or vague like '>= 0'?), test isolation (do tests depend on external state or ordering?), missing integration tests for critical paths, mock fidelity (do mocks accurately represent real behavior?), flaky test risk (timing dependencies, race conditions), and whether tests would catch regressions if the implementation changed. Ignore security, performance, documentation, and UX — those are handled by other reviewers."
+      }
+    ],
+    "consolidator": {
+      "platform": "anthropic",
+      "model": "claude-sonnet-4-6",
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "fallback": {
+        "platform": "google",
+        "model": "gemini-2.5-pro",
+        "api_key_env": "GOOGLE_API_KEY"
+      },
+      "max_tokens": 4096,
+      "temperature": 0.1
+    }
+  }
+}

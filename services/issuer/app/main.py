@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.authentication import AuthenticationMiddleware
 
 from common.vvp.core.logging import configure_logging
+from app.middleware.pbx_cors import PbxCorsMiddleware
 from app.api import admin, auth, credential, dashboard, dossier, health, identity, organization, org_api_key, pbx, registry, schema, session, tn, user, vetter_certification, vvp
 from app.auth.api_key import APIKeyBackend, get_api_key_store
 from app.auth.session import get_session_store
@@ -181,6 +182,13 @@ def on_auth_error(conn, exc):
     )
 
 
+# Sprint 77: PBX portal CORS — outermost, so it runs before auth middleware.
+# Allowlist: /pbx/config, /pbx/deploy, /pbx/dialplan-preview,
+# /pbx/organizations/names, /pbx/organizations/{id}/api-keys.
+# Generic /organizations/* paths are NOT in scope; org data is accessed
+# via the PBX facade endpoints above.
+app.add_middleware(PbxCorsMiddleware)
+
 if AUTH_ENABLED:
     app.add_middleware(
         AuthenticationMiddleware,
@@ -304,12 +312,6 @@ def ui_tn_mappings():
     return FileResponse(WEB_DIR / "tn-mappings.html", media_type="text/html")
 
 
-@app.get("/ui/pbx", response_class=FileResponse)
-def ui_pbx():
-    """Serve the PBX management web UI (Sprint 71)."""
-    return FileResponse(WEB_DIR / "pbx.html", media_type="text/html")
-
-
 @app.get("/ui/walkthrough", response_class=FileResponse)
 def ui_walkthrough():
     """Serve the interactive guided walkthrough (Sprint 66)."""
@@ -320,22 +322,6 @@ def ui_walkthrough():
 def ui_organization_detail():
     """Serve the organization detail page (Sprint 67)."""
     return FileResponse(WEB_DIR / "organization-detail.html", media_type="text/html")
-
-
-@app.get("/phone", response_class=FileResponse)
-def ui_phone():
-    """Serve the VVP Phone PWA."""
-    return FileResponse(WEB_DIR / "phone" / "index.html", media_type="text/html")
-
-
-@app.get("/phone/sw.js")
-def phone_service_worker():
-    """Serve the VVP Phone service worker with correct scope."""
-    return FileResponse(
-        WEB_DIR / "phone" / "sw.js",
-        media_type="application/javascript",
-        headers={"Service-Worker-Allowed": "/phone"},
-    )
 
 
 # -----------------------------------------------------------------------------

@@ -3,221 +3,46 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PBX Management - VVP Issuer</title>
-  <link rel="stylesheet" href="/static/styles.css">
-  <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
-  <style>
-    .page-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 1.5rem;
-    }
-    .page-header h1 { margin: 0; }
-    .card {
-      background: white;
-      border-radius: 8px;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-      padding: 1.5rem;
-      margin-bottom: 1.5rem;
-    }
-    .card h2 {
-      margin-top: 0;
-      margin-bottom: 1rem;
-      font-size: 1.125rem;
-      border-bottom: 1px solid var(--vvp-border);
-      padding-bottom: 0.5rem;
-    }
-    .form-row {
-      display: flex;
-      gap: 1rem;
-      align-items: flex-end;
-      margin-bottom: 1rem;
-      flex-wrap: wrap;
-    }
-    .form-group {
-      display: flex;
-      flex-direction: column;
-      min-width: 200px;
-      flex: 1;
-    }
-    .form-group label {
-      font-weight: 500;
-      margin-bottom: 0.25rem;
-      font-size: 0.875rem;
-    }
-    .form-group input,
-    .form-group select {
-      padding: 0.5rem;
-      border: 1px solid var(--vvp-border);
-      border-radius: 4px;
-      font-size: 0.875rem;
-    }
-    .form-group .hint {
-      font-size: 0.75rem;
-      color: var(--vvp-text-muted);
-      margin-top: 0.25rem;
-    }
-    .ext-table {
-      width: 100%;
-      border-collapse: collapse;
-    }
-    .ext-table th,
-    .ext-table td {
-      padding: 0.5rem 0.75rem;
-      text-align: left;
-      border-bottom: 1px solid var(--vvp-border);
-    }
-    .ext-table th {
-      background: var(--vvp-bg);
-      font-weight: 600;
-      font-size: 0.8rem;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: var(--vvp-text-muted);
-    }
-    .ext-table input[type="text"] {
-      width: 100%;
-      padding: 0.375rem;
-      border: 1px solid var(--vvp-border);
-      border-radius: 4px;
-      font-family: monospace;
-      font-size: 0.875rem;
-    }
-    .ext-table input[type="text"].description {
-      font-family: inherit;
-    }
-    .ext-num {
-      font-family: monospace;
-      font-weight: 600;
-      font-size: 0.9rem;
-    }
-    .toggle-switch {
-      position: relative;
-      width: 40px;
-      height: 22px;
-    }
-    .toggle-switch input {
-      opacity: 0;
-      width: 0;
-      height: 0;
-    }
-    .toggle-slider {
-      position: absolute;
-      cursor: pointer;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background-color: #ccc;
-      border-radius: 22px;
-      transition: 0.2s;
-    }
-    .toggle-slider:before {
-      content: "";
-      position: absolute;
-      height: 16px;
-      width: 16px;
-      left: 3px;
-      bottom: 3px;
-      background-color: white;
-      border-radius: 50%;
-      transition: 0.2s;
-    }
-    .toggle-switch input:checked + .toggle-slider {
-      background-color: var(--vvp-primary, #3b82f6);
-    }
-    .toggle-switch input:checked + .toggle-slider:before {
-      transform: translateX(18px);
-    }
-    .deploy-section {
-      display: flex;
-      gap: 1rem;
-      align-items: center;
-      flex-wrap: wrap;
-    }
-    .deploy-info {
-      font-size: 0.875rem;
-      color: var(--vvp-text-muted);
-    }
-    .key-preview {
-      font-family: monospace;
-      background: var(--vvp-bg);
-      padding: 0.125rem 0.375rem;
-      border-radius: 3px;
-      font-size: 0.875rem;
-    }
-    .xml-preview {
-      background: #1e1e2e;
-      color: #cdd6f4;
-      padding: 1rem;
-      border-radius: 8px;
-      overflow: auto;
-      max-height: 60vh;
-      font-family: monospace;
-      font-size: 0.8rem;
-      white-space: pre;
-      line-height: 1.4;
-    }
-    .modal {
-      display: none;
-      position: fixed;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(0,0,0,0.5);
-      z-index: 1000;
-      justify-content: center;
-      align-items: center;
-    }
-    .modal.active { display: flex; }
-    .modal-content {
-      background: white;
-      border-radius: 12px;
-      width: 90%;
-      max-width: 900px;
-      max-height: 85vh;
-      overflow: auto;
-      padding: 1.5rem;
-    }
-    .modal-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 1rem;
-    }
-    .modal-header h3 { margin: 0; }
-    .modal-close {
-      background: none;
-      border: none;
-      font-size: 1.5rem;
-      cursor: pointer;
-      color: var(--vvp-text-muted);
-    }
-    .button-row {
-      display: flex;
-      gap: 0.5rem;
-      margin-top: 1rem;
-    }
-  </style>
+  <title>PBX Management - VVP Portal</title>
+  <link rel="stylesheet" href="../portal.css">
 </head>
 <body>
-  <header class="site-header">
-    <div class="header-brand">
-      <img src="/static/ovc-logo.png" alt="OVC" class="ovc-logo">
-      <a href="/ui/" class="logo">
-        <span class="service-label">VVP</span>
-        Issuer
-      </a>
+  <header class="portal-header">
+    <div class="brand">
+      <span class="brand-label">VVP</span>
+      PBX Portal
     </div>
-    <nav class="nav-links"></nav>
-    <div class="header-user" id="header-user"></div>
+    <span class="breadcrumb">/ <a href="/">Home</a> / PBX Management</span>
   </header>
 
-  <main>
-    <div class="page-header">
+  <!-- Auth prompt (shown when no API key in session) -->
+  <div id="auth-section" class="hidden">
+    <div class="auth-prompt">
+      <h2>Admin Authentication</h2>
+      <p>Enter an issuer API key with admin role to manage the PBX configuration.
+         The key is stored in <code>sessionStorage</code> for this tab session — it persists
+         across page navigations within this tab and is cleared automatically when you close the tab.</p>
+      <div class="form-group">
+        <label for="api-key-input">Issuer API Key</label>
+        <input type="password" id="api-key-input" placeholder="sk-..." autocomplete="off">
+        <div class="hint">Requires issuer:admin role</div>
+      </div>
+      <button class="btn btn-primary btn-full-width" onclick="submitApiKey()">Connect</button>
+      <div id="auth-error" class="auth-error hidden"></div>
+    </div>
+  </div>
+
+  <!-- Main management UI (shown after auth) -->
+  <main class="portal-main hidden" id="main-section">
+    <div class="page-header-row">
       <h1>PBX Management</h1>
+      <button class="btn btn-secondary btn-sm-text" onclick="clearSession()">Sign out</button>
     </div>
 
     <!-- API Key Configuration -->
-    <div class="card">
+    <div class="admin-card">
       <h2>Signing API Key</h2>
-      <p style="font-size: 0.875rem; color: var(--vvp-text-muted); margin-top: 0;">
+      <p class="hint hint-mb">
         Select the organization and API key used in SIP INVITEs sent by the PBX to the signing service.
       </p>
       <div class="form-row">
@@ -235,56 +60,54 @@
         </div>
       </div>
       <div class="form-row">
-        <div class="form-group" style="flex: 2;">
+        <div class="form-group form-group-wide">
           <label for="key-value">Raw API Key Value</label>
-          <input type="text" id="key-value" placeholder="Paste the raw API key here">
+          <input type="text" id="key-value" placeholder="Paste the raw API key here" autocomplete="off">
           <div class="hint">Required because stored keys are hashed. This value goes into the X-VVP-API-Key SIP header.</div>
         </div>
-        <div class="form-group" style="flex: 1;">
+        <div class="form-group form-group-narrow">
           <label for="caller-id">Default Caller ID</label>
           <input type="text" id="caller-id" value="+441923311000" placeholder="+441923311000">
           <div class="hint">E.164 caller ID for VVP loopback calls.</div>
         </div>
       </div>
-      <div class="button-row">
-        <button class="primary" onclick="saveApiKeyConfig()">Save API Key Config</button>
-        <span id="key-preview-badge" style="display:none;">
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="saveApiKeyConfig()">Save API Key Config</button>
+        <span id="key-preview-badge" class="key-preview-badge hidden">
           Current key: <span class="key-preview" id="current-key-preview"></span>
         </span>
       </div>
     </div>
 
     <!-- Extension Configuration -->
-    <div class="card">
+    <div class="admin-card">
       <h2>Extension CLI Configuration</h2>
-      <p style="font-size: 0.875rem; color: var(--vvp-text-muted); margin-top: 0;">
-        Configure the E.164 Calling Line Identity for each PBX extension (1000-1009).
+      <p class="hint hint-mb">
+        Configure the E.164 Calling Line Identity for each PBX extension (1000&#8209;1009).
       </p>
       <table class="ext-table">
         <thead>
           <tr>
-            <th style="width: 80px;">Ext</th>
-            <th style="width: 200px;">CLI (E.164)</th>
-            <th style="width: 80px;">Enabled</th>
+            <th class="col-ext">Ext</th>
+            <th class="col-cli">CLI (E.164)</th>
+            <th class="col-enabled">Enabled</th>
             <th>Description</th>
           </tr>
         </thead>
-        <tbody id="ext-tbody">
-          <!-- Populated by JavaScript -->
-        </tbody>
+        <tbody id="ext-tbody"></tbody>
       </table>
-      <div class="button-row">
-        <button class="primary" onclick="saveExtensions()">Save Extensions</button>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="saveExtensions()">Save Extensions</button>
       </div>
     </div>
 
     <!-- Deploy -->
-    <div class="card">
+    <div class="admin-card">
       <h2>Deploy to PBX</h2>
       <div class="deploy-section">
-        <button class="secondary" onclick="previewDialplan()">Preview Dialplan XML</button>
-        <button class="primary" onclick="confirmDeploy()">Deploy to PBX</button>
-        <span class="deploy-info" id="deploy-info">
+        <button class="btn btn-secondary" onclick="previewDialplan()">Preview Dialplan XML</button>
+        <button class="btn btn-primary" onclick="confirmDeploy()">Deploy to PBX</button>
+        <span class="deploy-info">
           Last deployed: <span id="last-deploy">never</span>
         </span>
       </div>
@@ -296,7 +119,7 @@
     <div class="modal-content">
       <div class="modal-header">
         <h3>Dialplan Preview</h3>
-        <button class="modal-close" onclick="closePreview()">&times;</button>
+        <button class="modal-close" onclick="closeModal('preview-modal')">&times;</button>
       </div>
       <div class="xml-preview" id="xml-content">Loading...</div>
     </div>
@@ -304,44 +127,126 @@
 
   <!-- Deploy Confirmation Modal -->
   <div class="modal" id="deploy-modal">
-    <div class="modal-content" style="max-width: 500px;">
+    <div class="modal-content modal-content-sm">
       <div class="modal-header">
         <h3>Confirm Deployment</h3>
-        <button class="modal-close" onclick="closeDeployModal()">&times;</button>
+        <button class="modal-close" onclick="closeModal('deploy-modal')">&times;</button>
       </div>
       <p>This will deploy the current configuration to the PBX VM and reload FreeSWITCH. The current dialplan will be backed up.</p>
-      <div class="button-row" style="justify-content: flex-end;">
-        <button class="secondary" onclick="closeDeployModal()">Cancel</button>
-        <button class="primary" onclick="executeDeploy()">Deploy Now</button>
+      <div class="btn-row btn-row-right">
+        <button class="btn btn-secondary" onclick="closeModal('deploy-modal')">Cancel</button>
+        <button class="btn btn-primary" onclick="executeDeploy()">Deploy Now</button>
       </div>
     </div>
   </div>
 
-  <script src="/static/shared.js"></script>
+  <!-- Toast container -->
+  <div class="toast-container" id="toast-container"></div>
+
   <script>
-    // Extension numbers 1000-1009
+    // Issuer base URL — build-time constant, never user-configurable.
+    // Prevents open-redirect / SSRF: the PBX portal only ever talks to this origin.
+    const ISSUER_BASE_URL = 'https://vvp-issuer.rcnx.io';
+
+    // API key storage: sessionStorage.
+    // - Persists within the current browser tab session (survives page navigations within /pbx-admin/).
+    // - Automatically cleared when the tab is closed.
+    // - Never written to localStorage (no cross-session persistence).
+    // - Not shared across tabs (each tab has its own sessionStorage scope).
+    // This is the approved storage tier: tab-scoped, not indefinitely persistent.
+    const SESSION_KEY = 'pbx_admin_key';
+
     const ALL_EXTENSIONS = Array.from({length: 10}, (_, i) => 1000 + i);
     let currentConfig = null;
 
-    async function init() {
-      const session = await checkAuthStatus();
-      if (!session.authenticated) {
-        window.location.href = '/login?redirect=' + encodeURIComponent(window.location.pathname);
-        return;
+    // ========= Session / Auth =========
+
+    function getSessionKey() {
+      return sessionStorage.getItem(SESSION_KEY);
+    }
+
+    function setSessionKey(key) {
+      sessionStorage.setItem(SESSION_KEY, key);
+    }
+
+    function clearSession() {
+      sessionStorage.removeItem(SESSION_KEY);
+      currentConfig = null;
+      showAuthSection();
+    }
+
+    function showAuthSection() {
+      document.getElementById('auth-section').classList.remove('hidden');
+      document.getElementById('main-section').classList.add('hidden');
+    }
+
+    function showMainSection() {
+      document.getElementById('auth-section').classList.add('hidden');
+      document.getElementById('main-section').classList.remove('hidden');
+    }
+
+    async function submitApiKey() {
+      const input = document.getElementById('api-key-input');
+      const key = input.value.trim();
+      if (!key) return;
+
+      const errEl = document.getElementById('auth-error');
+      errEl.classList.add('hidden');
+
+      // Validate key by attempting to load config.
+      try {
+        const resp = await pbxFetch('/pbx/config', {}, key);
+        if (resp.status === 401 || resp.status === 403) {
+          errEl.textContent = 'Invalid or insufficient permissions. Requires issuer:admin role.';
+          errEl.classList.remove('hidden');
+          return;
+        }
+        if (!resp.ok) {
+          errEl.textContent = `Error ${resp.status} — could not connect to issuer.`;
+          errEl.classList.remove('hidden');
+          return;
+        }
+        currentConfig = await resp.json();
+        setSessionKey(key);
+        input.value = '';
+        showMainSection();
+        populateConfigUI();
+        await loadOrganizations();
+        renderExtensionTable();
+      } catch (err) {
+        errEl.textContent = 'Connection failed: ' + err.message;
+        errEl.classList.remove('hidden');
       }
-      await loadConfig();
-      await loadOrganizations();
-      renderExtensionTable();
+    }
+
+    // Allow Enter key to submit auth form.
+    document.getElementById('api-key-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') submitApiKey();
+    });
+
+    // ========= Fetch wrapper =========
+
+    async function pbxFetch(path, options = {}, keyOverride = null) {
+      const key = keyOverride || getSessionKey();
+      return fetch(ISSUER_BASE_URL + path, {
+        ...options,
+        credentials: 'omit',
+        headers: {
+          ...(options.headers || {}),
+          'X-API-Key': key,
+        },
+      });
     }
 
     // ========= Config Loading =========
 
     async function loadConfig() {
       try {
-        const resp = await authFetch('/pbx/config');
+        const resp = await pbxFetch('/pbx/config');
         if (!resp.ok) {
-          if (resp.status === 403) {
-            showToast('Admin access required for PBX management', 'warning');
+          if (resp.status === 401 || resp.status === 403) {
+            showToast('Session expired — please sign in again', 'warning');
+            clearSession();
             return;
           }
           throw new Error('Failed to load PBX config');
@@ -356,19 +261,20 @@
     function populateConfigUI() {
       if (!currentConfig) return;
 
-      // API Key section
       if (currentConfig.api_key_org_id) {
         document.getElementById('org-select').value = currentConfig.api_key_org_id;
         loadApiKeys(currentConfig.api_key_org_id);
       }
       document.getElementById('caller-id').value = currentConfig.default_caller_id || '+441923311000';
 
+      const badge = document.getElementById('key-preview-badge');
       if (currentConfig.api_key_preview) {
-        document.getElementById('key-preview-badge').style.display = 'inline';
-        document.getElementById('current-key-preview').textContent = currentConfig.api_key_preview + '...';
+        badge.classList.remove('hidden');
+        document.getElementById('current-key-preview').textContent = currentConfig.api_key_preview;
+      } else {
+        badge.classList.add('hidden');
       }
 
-      // Deploy info
       if (currentConfig.last_deployed_at) {
         const dt = new Date(currentConfig.last_deployed_at);
         document.getElementById('last-deploy').textContent =
@@ -380,11 +286,12 @@
 
     async function loadOrganizations() {
       try {
-        const resp = await authFetch('/organizations/names');
+        // Uses /pbx/organizations/names facade endpoint — no CORS exception needed
+        // for /organizations/names because the facade is under /pbx/*.
+        const resp = await pbxFetch('/pbx/organizations/names');
         if (!resp.ok) return;
         const data = await resp.json();
         const select = document.getElementById('org-select');
-        // Keep the placeholder option
         select.innerHTML = '<option value="">-- Select organization --</option>';
         for (const org of data.organizations) {
           const opt = document.createElement('option');
@@ -392,7 +299,6 @@
           opt.textContent = escapeHtml(org.name);
           select.appendChild(opt);
         }
-        // Re-select if we had one
         if (currentConfig && currentConfig.api_key_org_id) {
           select.value = currentConfig.api_key_org_id;
         }
@@ -417,19 +323,18 @@
       keySelect.disabled = true;
       keySelect.innerHTML = '<option value="">Loading...</option>';
       try {
-        const resp = await authFetch(`/organizations/${orgId}/api-keys`);
+        // Uses /pbx/organizations/{id}/api-keys facade endpoint.
+        const resp = await pbxFetch(`/pbx/organizations/${encodeURIComponent(orgId)}/api-keys`);
         if (!resp.ok) throw new Error('Failed to load API keys');
         const data = await resp.json();
         keySelect.innerHTML = '<option value="">-- Select API key --</option>';
         for (const key of data.api_keys) {
-          if (key.revoked) continue;
           const opt = document.createElement('option');
           opt.value = key.id;
           opt.textContent = escapeHtml(key.name);
           keySelect.appendChild(opt);
         }
         keySelect.disabled = false;
-        // Re-select if we had one
         if (currentConfig && currentConfig.api_key_id) {
           keySelect.value = currentConfig.api_key_id;
         }
@@ -459,7 +364,7 @@
       }
 
       try {
-        const resp = await authFetch('/pbx/config', {
+        const resp = await pbxFetch('/pbx/config', {
           method: 'PUT',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify(body),
@@ -481,15 +386,12 @@
     function renderExtensionTable() {
       const tbody = document.getElementById('ext-tbody');
       tbody.innerHTML = '';
-
-      // Build a map of existing extensions from config
       const extMap = {};
       if (currentConfig && currentConfig.extensions) {
         for (const ext of currentConfig.extensions) {
           extMap[ext.ext] = ext;
         }
       }
-
       for (const extNum of ALL_EXTENSIONS) {
         const existing = extMap[extNum] || null;
         const tr = document.createElement('tr');
@@ -506,7 +408,7 @@
             </label>
           </td>
           <td>
-            <input type="text" class="description" id="desc-${extNum}"
+            <input type="text" class="description-field" id="desc-${extNum}"
                    value="${existing ? escapeHtml(existing.description) : ''}" placeholder="Description">
           </td>
         `;
@@ -520,8 +422,6 @@
         const cli = document.getElementById(`cli-${extNum}`).value.trim();
         const enabled = document.getElementById(`enabled-${extNum}`).checked;
         const description = document.getElementById(`desc-${extNum}`).value.trim();
-
-        // Only include extensions that have a CLI configured
         if (cli) {
           if (!/^\+[1-9]\d{1,14}$/.test(cli)) {
             showToast(`Extension ${extNum}: Invalid E.164 format (must start with +)`, 'error');
@@ -532,7 +432,7 @@
       }
 
       try {
-        const resp = await authFetch('/pbx/config', {
+        const resp = await pbxFetch('/pbx/config', {
           method: 'PUT',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({extensions}),
@@ -556,35 +456,28 @@
       const content = document.getElementById('xml-content');
       modal.classList.add('active');
       content.textContent = 'Loading...';
-
       try {
-        const resp = await authFetch('/pbx/dialplan-preview');
+        const resp = await pbxFetch('/pbx/dialplan-preview');
         if (!resp.ok) throw new Error('Failed to load preview');
-        const xml = await resp.text();
-        content.textContent = xml;
+        content.textContent = await resp.text();
       } catch (err) {
         content.textContent = 'Error: ' + err.message;
       }
-    }
-
-    function closePreview() {
-      document.getElementById('preview-modal').classList.remove('active');
     }
 
     function confirmDeploy() {
       document.getElementById('deploy-modal').classList.add('active');
     }
 
-    function closeDeployModal() {
-      document.getElementById('deploy-modal').classList.remove('active');
+    function closeModal(id) {
+      document.getElementById(id).classList.remove('active');
     }
 
     async function executeDeploy() {
-      closeDeployModal();
-      showToast('Deploying to PBX...', 'info');
-
+      closeModal('deploy-modal');
+      showToast('Deploying to PBX... (this may take up to 2 minutes)', 'info');
       try {
-        const resp = await authFetch('/pbx/deploy', {
+        const resp = await pbxFetch('/pbx/deploy', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({dry_run: false}),
@@ -594,22 +487,55 @@
           showToast('Dialplan deployed successfully!', 'success');
           await loadConfig();
         } else {
-          const msg = data.message || data.detail || 'Unknown error';
-          showToast('Deployment failed: ' + msg, 'error');
+          showToast('Deployment failed: ' + (data.message || data.detail || 'Unknown error'), 'error');
         }
       } catch (err) {
         showToast('Deployment error: ' + err.message, 'error');
       }
     }
 
-    // Close modals on backdrop click
+    // Close modals on backdrop click.
     document.querySelectorAll('.modal').forEach(modal => {
       modal.addEventListener('click', e => {
-        if (e.target === modal) {
-          modal.classList.remove('active');
-        }
+        if (e.target === modal) modal.classList.remove('active');
       });
     });
+
+    // ========= Toast =========
+
+    function showToast(message, type = 'info') {
+      const container = document.getElementById('toast-container');
+      const toast = document.createElement('div');
+      toast.className = `toast toast-${type}`;
+      toast.textContent = message;
+      container.appendChild(toast);
+      setTimeout(() => toast.remove(), 4000);
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    // ========= Init =========
+
+    function init() {
+      const key = getSessionKey();
+      if (key) {
+        // Resume session: load config immediately, show main section.
+        showMainSection();
+        loadConfig().then(() => {
+          loadOrganizations();
+          renderExtensionTable();
+        });
+      } else {
+        showAuthSection();
+      }
+    }
 
     init();
   </script>

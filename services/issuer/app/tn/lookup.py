@@ -199,7 +199,7 @@ async def lookup_tn_with_validation(
     Returns:
         TNLookupResult with mapping data or error
     """
-    from app.auth.api_key import get_api_key_store, verify_org_api_key
+    from app.auth.api_key import verify_api_key_with_cache
     from app.db.models import Organization
     from app.tn.store import TNMappingStore
 
@@ -211,16 +211,11 @@ async def lookup_tn_with_validation(
     if not tn.startswith("+"):
         tn = f"+{tn}"
 
-    # Authenticate API key — offload to thread pool (bcrypt is CPU-intensive,
-    # verify_org_api_key also opens its own DB session internally)
+    # Authenticate API key — offload to thread pool (bcrypt is CPU-intensive).
+    # Sprint 77: verify_api_key_with_cache() checks the 5-min cache first;
+    # on a hit this costs <1ms instead of ~7s.
     async with timer.aphase("api_key_verify"):
-        def _verify_key():
-            store = get_api_key_store()
-            p, _ = store.verify(api_key)
-            if not p:
-                p, _ = verify_org_api_key(api_key)
-            return p
-        principal = await asyncio.to_thread(_verify_key)
+        principal, _ = await asyncio.to_thread(verify_api_key_with_cache, api_key)
 
     if not principal:
         return TNLookupResult(found=False, error="Invalid API key")

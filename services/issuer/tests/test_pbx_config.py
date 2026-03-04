@@ -163,9 +163,85 @@ class TestDialplanGeneration:
             extensions_json="not valid json",
         )
 
-        # Should still generate valid XML with no inbound blocks
+        # Should still generate valid XML with no inbound blocks.
+        # "none configured" appears in the XML comment listing enabled extensions
+        # (distinct from "No extensions configured" in test_generate_with_no_extensions,
+        # which checks the inbound block comment — both strings appear in the output).
         assert "<?xml version" in xml
         assert "none configured" in xml
+
+
+# =============================================================================
+# _sanitize_vm_output Tests (Sprint 77)
+# =============================================================================
+
+
+class TestSanitizeVMOutput:
+    """Direct unit tests for _sanitize_vm_output().
+
+    This function is security-relevant: it prevents log injection via ANSI
+    escape sequences and control characters from VM command output.
+    """
+
+    def test_printable_ascii_unchanged(self):
+        """Printable ASCII characters are preserved."""
+        from app.api.pbx import _sanitize_vm_output
+
+        text = "Dialplan deployed: 200 OK, 1234 bytes, success"
+        assert _sanitize_vm_output(text) == text
+
+    def test_newline_and_tab_preserved(self):
+        """Newline, carriage return, and tab are preserved."""
+        from app.api.pbx import _sanitize_vm_output
+
+        text = "line1\nline2\r\nline3\ttabbed"
+        assert _sanitize_vm_output(text) == text
+
+    def test_ansi_escape_control_char_stripped(self):
+        """The ESC control byte (0x1b) in ANSI escape sequences is stripped.
+
+        The printable ASCII portion of an ANSI sequence ([31m etc.) passes
+        through unchanged, which is harmless — the sequence has no effect
+        without the leading ESC byte. The key safety guarantee is that the
+        non-printable ESC byte is removed to prevent terminal injection.
+        """
+        from app.api.pbx import _sanitize_vm_output
+
+        text = "\x1b[31mRed text\x1b[0m"
+        result = _sanitize_vm_output(text)
+        assert "Red text" in result
+        assert "\x1b" not in result
+
+    def test_null_byte_stripped(self):
+        """Null bytes and other control characters are removed."""
+        from app.api.pbx import _sanitize_vm_output
+
+        text = "ok\x00done\x07beep\x08back"
+        assert _sanitize_vm_output(text) == "okdonebeepback"
+
+    def test_non_ascii_bytes_stripped(self):
+        """Non-ASCII byte values are removed."""
+        from app.api.pbx import _sanitize_vm_output
+
+        text = "ascii\x80\xff\xfe"
+        assert _sanitize_vm_output(text) == "ascii"
+
+    def test_empty_string_unchanged(self):
+        """Empty string is unchanged."""
+        from app.api.pbx import _sanitize_vm_output
+
+        assert _sanitize_vm_output("") == ""
+
+    def test_mixed_input(self):
+        """Mixed printable + non-printable input: ESC and non-ASCII stripped."""
+        from app.api.pbx import _sanitize_vm_output
+
+        # ✓ is multi-byte UTF-8 (\xe2\x9c\x93) — non-ASCII bytes are stripped
+        text = "Deploy OK\x1b[32m 500 bytes"
+        result = _sanitize_vm_output(text)
+        assert "Deploy OK" in result
+        assert "500 bytes" in result
+        assert "\x1b" not in result
 
 
 # =============================================================================
@@ -234,7 +310,8 @@ class TestPBXConfigAPI:
         })
         assert resp.status_code == 200
         data = resp.json()
-        assert data["api_key_preview"] == "abcdefgh"
+        # Preview is last-4 chars with "..." prefix (Sprint 77: reduced entropy exposure)
+        assert data["api_key_preview"] == "...5678"
 
     async def test_update_config_rejects_invalid_caller_id(self, client):
         """PUT /pbx/config rejects invalid E.164 caller ID."""
@@ -289,7 +366,10 @@ class TestPBXConfigAPI:
             ],
         })
 
-        resp = await client.post("/pbx/deploy", json={"dry_run": True})
+        with patch("app.pbx.deploy.deploy_dialplan_to_pbx") as mock_deploy:
+            resp = await client.post("/pbx/deploy", json={"dry_run": True})
+            mock_deploy.assert_not_called()
+
         assert resp.status_code == 200
         data = resp.json()
         assert data["success"] is True
@@ -321,7 +401,8 @@ class TestPBXConfigAPI:
 
         resp = await client.get("/pbx/config")
         data = resp.json()
-        assert data["api_key_preview"] == "persiste"
+        # Preview is last-4 chars with "..." prefix (Sprint 77: reduced entropy exposure)
+        assert data["api_key_preview"] == "...-key"
         assert data["default_caller_id"] == "+441923311009"
 
 

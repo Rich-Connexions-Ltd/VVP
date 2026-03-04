@@ -40,6 +40,7 @@ class VVPCreateResult:
     vvp_identity: Optional[str] = None
     vvp_passport: Optional[str] = None
     error: Optional[str] = None
+    http_status: Optional[int] = None  # Sprint 77: HTTP status for error routing
 
 
 @dataclass
@@ -288,6 +289,85 @@ class IssuerClient:
         except Exception as e:
             elapsed = (time.monotonic() - t0) * 1000
             log.error(f"VVP create ERROR: elapsed={elapsed:.0f}ms, error={type(e).__name__}: {e}")
+            return VVPCreateResult(success=False, error=str(e))
+
+    async def create_vvp_from_tn(
+        self,
+        api_key: str,
+        orig_tn: str,
+        dest_tn: str,
+        call_id: Optional[str] = None,
+        cseq: Optional[int] = None,
+    ) -> VVPCreateResult:
+        """Create VVP headers via the combined /vvp/create-for-tn endpoint.
+
+        Sprint 77: Single request that performs TN lookup + VVP creation on
+        the issuer, avoiding a second bcrypt verification for /tn/lookup.
+
+        Args:
+            api_key: Org API key (dossier_manager role)
+            orig_tn: Originating TN (used for TN lookup server-side)
+            dest_tn: Destination TN
+            call_id: SIP Call-ID for dialog binding
+            cseq: SIP CSeq number for dialog binding
+
+        Returns:
+            VVPCreateResult with VVP headers or error
+        """
+        if not self._client:
+            log.error("VVP create-for-tn: client not initialized")
+            return VVPCreateResult(success=False, error="Client not initialized")
+
+        t0 = time.monotonic()
+        log.info(f"VVP create-for-tn START: orig={orig_tn}, dest={dest_tn}")
+
+        try:
+            request_body: dict = {"orig_tn": orig_tn, "dest_tn": [dest_tn]}
+            if call_id is not None:
+                request_body["call_id"] = call_id
+            if cseq is not None:
+                request_body["cseq"] = cseq
+
+            response = await self._client.post(
+                "/vvp/create-for-tn",
+                json=request_body,
+                headers={"X-API-Key": api_key},
+            )
+            elapsed = (time.monotonic() - t0) * 1000
+
+            if response.status_code == 200:
+                data = response.json()
+                timing = data.get("timing_ms")
+                timing_str = ""
+                if timing:
+                    timing_str = ", timing={" + ", ".join(f"{k}={v:.0f}ms" for k, v in timing.items()) + "}"
+                log.info(f"VVP create-for-tn OK: orig={orig_tn}, elapsed={elapsed:.0f}ms{timing_str}")
+                return VVPCreateResult(
+                    success=True,
+                    identity_header=data.get("identity_header"),
+                    vvp_identity=data.get("vvp_identity_header"),
+                    vvp_passport=data.get("passport_jwt"),
+                )
+            else:
+                try:
+                    data = response.json()
+                    error = data.get("error") or data.get("detail") or f"HTTP {response.status_code}"
+                except Exception:
+                    error = f"HTTP {response.status_code}"
+                log.warning(f"VVP create-for-tn FAILED: status={response.status_code}, error={error}, elapsed={elapsed:.0f}ms")
+                return VVPCreateResult(success=False, error=error, http_status=response.status_code)
+
+        except httpx.TimeoutException:
+            elapsed = (time.monotonic() - t0) * 1000
+            log.error(f"VVP create-for-tn TIMEOUT: elapsed={elapsed:.0f}ms")
+            return VVPCreateResult(success=False, error="Timeout")
+        except httpx.ConnectError as e:
+            elapsed = (time.monotonic() - t0) * 1000
+            log.error(f"VVP create-for-tn CONNECT_ERROR: elapsed={elapsed:.0f}ms, error={e}")
+            return VVPCreateResult(success=False, error=f"Connect error: {e}")
+        except Exception as e:
+            elapsed = (time.monotonic() - t0) * 1000
+            log.error(f"VVP create-for-tn ERROR: elapsed={elapsed:.0f}ms, error={type(e).__name__}: {e}")
             return VVPCreateResult(success=False, error=str(e))
 
 

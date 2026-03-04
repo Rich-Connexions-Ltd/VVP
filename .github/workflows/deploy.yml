@@ -40,6 +40,7 @@ jobs:
       sip-redirect: ${{ inputs.force_all == true && 'true' || steps.filter.outputs.sip-redirect }}
       sip-verify: ${{ inputs.force_all == true && 'true' || steps.filter.outputs.sip-verify }}
       pbx-config: ${{ inputs.force_all == true && 'true' || steps.filter.outputs.pbx-config }}
+      pbx-portal: ${{ inputs.force_all == true && 'true' || steps.filter.outputs.pbx-portal }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -66,6 +67,8 @@ jobs:
               - 'common/**'
             pbx-config:
               - 'services/pbx/config/**'
+            pbx-portal:
+              - 'services/pbx/web/**'
 
   # =========================================================================
   # TEST JOBS - Run tests for all services
@@ -1752,3 +1755,79 @@ jobs:
               print('WARNING: Could not determine E2E call result')
               sys.exit(1)
           "
+
+  # =========================================================================
+  # DEPLOY: PBX Portal static files
+  # Sprint 77: Deploys landing page, PBX management UI, and Phone PWA to
+  # /var/www/pbx-portal/ on the vvp-pbx VM.
+  # =========================================================================
+  deploy-pbx-portal:
+    needs: [changes]
+    if: needs.changes.outputs.pbx-portal == 'true' && !failure() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Package portal files
+        run: |
+          cd services/pbx/web
+          tar czf /tmp/pbx-portal.tar.gz .
+          echo "Portal archive: $(du -sh /tmp/pbx-portal.tar.gz | cut -f1)"
+
+      - name: Upload to Azure Blob Storage
+        run: |
+          az storage blob upload \
+            --account-name vvpissuerdata \
+            --container-name deployments \
+            --name "pbx-portal-${{ github.sha }}.tar.gz" \
+            --file /tmp/pbx-portal.tar.gz \
+            --auth-mode login \
+            --overwrite
+          echo "Uploaded pbx-portal-${{ github.sha }}.tar.gz"
+
+      - name: Deploy portal to PBX VM
+        run: |
+          SHA="${{ github.sha }}"
+          az vm run-command invoke \
+            --resource-group VVP --name vvp-pbx \
+            --command-id RunShellScript \
+            --scripts "
+              set -e
+              echo 'Downloading portal archive...'
+              az storage blob download \
+                --account-name vvpissuerdata \
+                --container-name deployments \
+                --name 'pbx-portal-${SHA}.tar.gz' \
+                --file /tmp/pbx-portal.tar.gz \
+                --auth-mode login \
+                --output none
+
+              echo 'Extracting portal files...'
+              mkdir -p /var/www/pbx-portal
+              tar xzf /tmp/pbx-portal.tar.gz -C /var/www/pbx-portal
+              chown -R www-data:www-data /var/www/pbx-portal
+              rm -f /tmp/pbx-portal.tar.gz
+              echo 'Portal deployed: $(find /var/www/pbx-portal -type f | wc -l) files'
+            "
+
+      - name: Smoke test portal endpoints
+        run: |
+          echo "Testing portal endpoints..."
+          for path in "/" "/pbx-admin/" "/phone/"; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pbx.rcnx.io${path}" --max-time 10)
+            if [ "$STATUS" = "200" ]; then
+              echo "PASS: https://pbx.rcnx.io${path} -> $STATUS"
+            else
+              echo "FAIL: https://pbx.rcnx.io${path} -> $STATUS"
+              exit 1
+            fi
+          done
