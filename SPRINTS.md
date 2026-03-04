@@ -63,6 +63,11 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 71 | PBX Management UI | COMPLETE | Sprint 42 |
 | 72 | Issuer UI Simplification | COMPLETE | Sprint 71, 65, 67 |
 | 73 | Credential & Identity Cleanup | COMPLETE | Sprint 69 |
+| 74 | KERI Identity Stability | COMPLETE | Sprint 69 |
+| 75 | Witness Receipt Fix + E2E Call Restoration | COMPLETE | Sprint 74 |
+| 76 | Issuer Call-Path Performance | COMPLETE | Sprint 75 |
+| 77 | PBX Portal Migration | IN PROGRESS | Sprint 71 |
+| 78 | Verifier SIP Call Performance | PENDING | Sprint 51, 76 |
 
 ---
 
@@ -5756,7 +5761,7 @@ The current DELETE endpoints only remove items from KERI Agent LMDB. Because Pos
 
 ## Sprint 77: PBX Portal — Migrate PBX Management & Phone to pbx.rcnx.io
 
-**Status:** IN PROGRESS
+**Status:** COMPLETE
 **Goal:** Consolidate all PBX-related UIs on `pbx.rcnx.io`: landing page at `/`, PBX management console, Phone PWA, FusionPBX link, and SIP Monitor. Remove PBX-specific routes and files from the issuer service where they don't belong.
 
 ### Context
@@ -5765,23 +5770,93 @@ Currently PBX management UI (`/ui/pbx`) and Phone PWA (`/phone`) are hosted on `
 
 ### Deliverables
 
-- [ ] **PBX Portal landing page** — New static page at `pbx.rcnx.io/` with navigation to all PBX tools
-- [ ] **Phone PWA migration** — Move Phone PWA to `pbx.rcnx.io/phone/` (self-contained, no issuer API dependency)
-- [ ] **PBX Management UI migration** — Move PBX config UI to `pbx.rcnx.io/pbx-admin/`, using API key auth against issuer CORS-enabled endpoints
-- [ ] **FusionPBX access** — Move FusionPBX console from `/` to `/fusion/` via nginx location block
-- [ ] **Issuer CORS** — Add `pbx.rcnx.io` to issuer CORS allowed origins for PBX API endpoints
-- [ ] **nginx reconfiguration** — Serve portal static files, proxy FusionPBX, preserve existing routes
-- [ ] **CI/CD deployment** — Deploy portal static files to PBX VM via existing pipeline
-- [ ] **Issuer cleanup** — Remove `/ui/pbx`, `/phone` routes and PBX-related web files from issuer
-- [ ] **Tests** — Update/remove issuer PBX tests, add portal smoke tests
+- [x] **PBX Portal landing page** — New static page at `pbx.rcnx.io/` with navigation to all PBX tools
+- [x] **Phone PWA migration** — Move Phone PWA to `pbx.rcnx.io/phone/` (self-contained, no issuer API dependency)
+- [x] **PBX Management UI migration** — Move PBX config UI to `pbx.rcnx.io/pbx-admin/`, using API key auth against issuer CORS-enabled endpoints
+- [x] **FusionPBX access** — Move FusionPBX console from `/` to `/fusion/` via nginx location block
+- [x] **Issuer CORS** — `PbxCorsMiddleware` added with path-scoped explicit allowlist for 5 `/pbx/*` endpoints; CORS from `https://pbx.rcnx.io` only
+- [x] **nginx reconfiguration** — Serve portal static files, proxy FusionPBX, preserve existing routes
+- [x] **CI/CD deployment** — Deploy portal static files to PBX VM via existing pipeline
+- [x] **Issuer cleanup** — Removed `/ui/pbx`, `/phone` routes; added facade endpoints under `/pbx/organizations/*`; `sip-redirect` refactored to use `/vvp/create-for-tn`
+- [x] **Tests** — `test_pbx_cors.py` (CORS middleware), `test_pbx_facade.py` (facade endpoints), `test_handler.py` (sip-redirect handler)
 
 ### Exit Criteria
 
-- [ ] `pbx.rcnx.io/` serves landing page with navigation links
-- [ ] `pbx.rcnx.io/phone/` serves working Phone PWA (SIP calls functional)
-- [ ] `pbx.rcnx.io/pbx-admin/` serves PBX management UI (config CRUD + deploy working via issuer API)
-- [ ] `pbx.rcnx.io/fusion/` proxies FusionPBX admin console
-- [ ] `pbx.rcnx.io/sip-monitor/` continues working (unchanged)
-- [ ] `vvp-issuer.rcnx.io/ui/pbx` and `/phone` routes removed
-- [ ] All remaining issuer tests pass
+- [x] `pbx.rcnx.io/` serves landing page with navigation links
+- [x] `pbx.rcnx.io/phone/` serves working Phone PWA (SIP calls functional)
+- [x] `pbx.rcnx.io/pbx-admin/` serves PBX management UI (config CRUD + deploy working via issuer API)
+- [x] `pbx.rcnx.io/fusion/` proxies FusionPBX admin console
+- [x] `pbx.rcnx.io/sip-monitor/` continues working (unchanged)
+- [x] `vvp-issuer.rcnx.io/ui/pbx` and `/phone` routes removed
+- [x] All remaining issuer tests pass
+- [x] E2E VVP call flow unaffected
+
+---
+
+## Sprint 78: Verifier SIP Call Performance — 50% Second-Call Latency Reduction
+
+**Status:** PENDING
+**Goal:** Reduce VVP verifier second-call latency by 50% through range-based key state caching, HTTP connection pooling, and verification result cache deep-copy optimization.
+
+### Context
+
+The VVP verifier processes SIP INVITE verification through an 11-phase pipeline. Sprint 51 added a verification result cache that skips Phases 5/5.5/9 on repeat calls. Sprint 76 optimized the issuer call path. However, **Phase 4 (KERI signature verification) remains the dominant bottleneck** on second calls because:
+
+1. **KeyStateCache uses exact timestamp matching**: Keyed by `(AID, reference_time)` where `reference_time` is the PASSporT `iat`. Each call has a unique `iat`, so the cache almost never hits — even though the same key state is valid across a time range.
+2. **No HTTP connection pooling for OOBI/dossier fetches**: `oobi.py` and `dossier/fetch.py` create a NEW `httpx.AsyncClient` per request (TCP+TLS handshake ~100ms each), while `tel_client.py` already uses `get_shared_client()`.
+3. **Deep copies on every cache hit**: `VerificationResultCache.get()` deep-copies `chain_claim`, `chain_errors`, `dossier_acdcs`, `credential_revocation_status`, and `dossier_claim_evidence` on every hit.
+
+### Performance Analysis
+
+**Current second-call timing (different PASSporT, same signer+dossier):**
+| Phase | Time | Notes |
+|-------|------|-------|
+| Phase 2 (Identity) | ~1ms | Parse VVP-Identity header |
+| Phase 3 (PASSporT) | ~1ms | Parse JWT + binding validation |
+| Phase 4 (Signature) | ~300-500ms | KeyStateCache MISS → full OOBI fetch + new AsyncClient |
+| Phase 5/5.5/9 (Cached) | ~5ms | VerificationResultCache hit |
+| Authorization | ~5ms | Party + TN rights validation |
+| SIP Context | ~5ms | Contextual alignment |
+| Brand + Vetter | ~20ms | Brand extraction + vetter constraints |
+| Claim tree + overhead | ~25ms | Status propagation, response building |
+| **Total** | **~360-560ms** | |
+
+**Target: ~180-280ms (50% reduction)**
+
+### Deliverables
+
+- [ ] **Range-based KeyStateCache** — Replace exact `(AID, timestamp)` lookup with range-based `[valid_from, valid_until)` matching. Cache hit on ANY `iat` within the key state's validity window.
+- [ ] **OOBI connection pooling** — Migrate `oobi.py` to use `get_shared_client()` (like `tel_client.py` already does)
+- [ ] **Dossier fetch connection pooling** — Migrate `common/vvp/dossier/fetch.py` to use shared HTTP client
+- [ ] **VerificationResultCache deep-copy optimization** — Use structural sharing / copy-on-write for immutable fields; only deep-copy truly mutable fields
+- [ ] **Phase timing in verify response** — Include per-phase timing in `VerifyResponse` for benchmarking (opt-in via config)
+- [ ] **Benchmark test** — Automated test measuring first-call vs second-call latency with assertion on 50% improvement
+- [ ] **Tests** — Unit tests for range-based cache, connection pooling, deep-copy optimization
+
+### Key Files
+
+```
+services/verifier/app/vvp/keri/cache.py          # KeyStateCache — range-based lookup
+services/verifier/app/vvp/keri/oobi.py            # OOBI fetch — connection pooling
+services/verifier/app/vvp/keri/kel_resolver.py    # Key state resolution — cache integration
+services/verifier/app/vvp/verification_cache.py   # Deep-copy optimization
+services/verifier/app/vvp/verify.py               # Phase timer response integration
+services/verifier/app/vvp/http_client.py           # Shared HTTP client (already exists)
+common/common/vvp/dossier/fetch.py                # Dossier fetch — connection pooling
+```
+
+### Technical Notes
+
+- KeyStateCache range-based lookup: Key states are valid from their establishment event until the next rotation. For non-rotated keys, `valid_until` is `None` (always valid). The cache should find ANY entry where `valid_from <= reference_time < valid_until`.
+- Connection pooling: `get_shared_client()` in `http_client.py` already provides max 100 connections, 20 per host, 30s keepalive. Just need to use it in OOBI and dossier fetches.
+- Deep-copy optimization: `dag`, `raw_dossier`, `contained_saids` are already returned by reference (immutable). `chain_claim` and `chain_errors` can be frozen (made immutable after creation) to avoid deep-copy. `dossier_acdcs` is the main field needing deep-copy.
+- Phase timing: Add optional `timing` dict to `VerifyResponse` model, populated when `VVP_PHASE_TIMING_ENABLED=true`.
+
+### Exit Criteria
+
+- [ ] Second-call latency ≤ 50% of first-call latency (measured by benchmark test)
+- [ ] KeyStateCache hits on second calls with different `iat` timestamps for same signer
+- [ ] OOBI and dossier fetches reuse pooled connections (no per-request AsyncClient creation)
+- [ ] All existing verifier tests pass (1844+)
+- [ ] New tests for range-based cache, connection pooling, and deep-copy optimization
 - [ ] E2E VVP call flow unaffected

@@ -2,9 +2,9 @@
 
 ## Sprint 77: PBX Portal Migration
 
-**Date:** 2026-03-04
-**Status:** In Progress
-**Commits:** TBD
+**Date:** 2026-03-05
+**Status:** Complete
+**Commits:** `4a70ca6`, `f670660`, `5dcc5b6`, `96a0fa4`, `2b2f36e`, `b6cd812`, `4c57c18`, `056fc09`, `ac205c5`, `8fe462b`, `9074dd5`, `6b49b33`
 
 ### Summary
 
@@ -38,7 +38,18 @@ Migrated the PBX Management UI and Phone PWA from `vvp-issuer.rcnx.io` to a new 
 | `services/pbx/config/nginx-pbx-portal.conf` | New: nginx config for pbx.rcnx.io |
 | `.github/workflows/deploy.yml` | Added `deploy-pbx-portal` job |
 | `knowledge/api-reference.md` | Marked removed routes; documented facade endpoints |
-| `knowledge/deployment.md` | Added PBX Portal section |
+| `knowledge/deployment.md` | Added PBX Portal section; clarified CORS is explicit allowlist not `/pbx/*` prefix |
+| `services/issuer/app/api/models.py` | `api_key_value` validation: printable ASCII, max 512 chars; `api_key_preview` comment fix |
+| `services/issuer/app/api/org_api_key.py` | `_check_org_admin_access()` extracted (canonical RBAC: 404-first then 403) |
+| `services/issuer/app/api/pbx.py` | Import `_check_org_admin_access`; `require_admin` → `require_auth` on facade endpoint |
+| `services/issuer/tests/test_pbx_cors.py` | `TestCorsOn4xxResponses` (403/401 get CORS headers); `TEST_OPERATOR_KEY` import |
+| `services/issuer/tests/test_pbx_facade.py` | Cross-org tests create orgs in DB; same-org admin 200 test; correct `require_auth` override |
+| `services/sip-redirect/app/redirect/handler.py` | Filter auth headers (`X-VVP-API-Key` etc.) from `_capture_event` monitoring buffer (H1 R15) |
+| `services/sip-redirect/tests/test_handler.py` | Precondition tests assert `get_issuer_client` not called; cseq/attestation header assertions |
+| `scripts/council-review.py` | `--allow-external-code-review` mandatory flag; `redact_secrets()` for materials; `output_dir` path validation before `rmtree`; sanitized error messages (opaque in artifacts, debug to stderr) |
+| `scripts/gemini-review.py` | Fixed `get_changed_files` docstring |
+| `scripts/archive-plan.sh` | Header docs updated |
+| `CLAUDE.md` | PBX Portal in Service URLs table; `--allow-external-code-review` in all council-review.py examples |
 
 ## Sprint 76: Issuer Call-Path Performance — Timing Instrumentation & Concurrency Fix
 

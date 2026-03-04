@@ -22175,3 +22175,352 @@ Addressed 6 findings from Codex code review R1:
 | `services/issuer/tests/test_event_loop_monitor.py` | +110 | 10 tests: lifecycle, metrics, blocked detection |
 | `services/issuer/tests/test_vvp_timing.py` | +130 | 14 tests: PhaseTimer, async_db_call, thread isolation |
 
+
+---
+
+# Sprint 77: PBX Portal Migration
+
+_Archived: 2026-03-05_
+
+# Sprint 77: PBX Portal — Migrate PBX Management & Phone to pbx.rcnx.io
+
+## Problem Statement
+
+PBX management UI (`/ui/pbx`) and Phone PWA (`/phone`) are currently hosted on `vvp-issuer.rcnx.io`. These are PBX-specific tools that don't belong on the issuer service. Meanwhile, `pbx.rcnx.io` only serves the FusionPBX admin console (at root) and the SIP Monitor dashboard (`/sip-monitor/`). All PBX-related UIs should be consolidated on the PBX domain.
+
+## Current State
+
+### What's on `vvp-issuer.rcnx.io` (to move)
+
+| Route | File(s) | Description |
+|-------|---------|-------------|
+| `/ui/pbx` | `web/pbx.html` | PBX management — extension config, API key selection, dialplan deploy |
+| `/phone` | `web/phone/index.html` + JS/CSS/PWA assets | Phone PWA — WebRTC SIP client |
+| `/phone/sw.js` | `web/phone/sw.js` | Service Worker for Phone PWA |
+| `/pbx/*` API | `app/api/pbx.py` + `app/pbx/` module | Backend: config CRUD, dialplan gen, Azure deploy |
+
+The PBX management UI (`pbx.html`) uses `authFetch()` (session cookie + CSRF header) to call issuer API endpoints: `/pbx/config`, `/pbx/deploy`, `/pbx/dialplan-preview`, `/organizations/names`, `/organizations/{id}/api-keys`.
+
+The Phone PWA is self-contained — it connects directly to `wss://pbx.rcnx.io:7443` via SIP.js and has no issuer API dependencies.
+
+### What's on `pbx.rcnx.io` (current)
+
+| Route | Service | Description |
+|-------|---------|-------------|
+| `/` | FusionPBX (nginx) | FusionPBX admin console (PHP) |
+| `/sip-monitor/` | nginx → aiohttp:8090 | SIP Monitor dashboard |
+| Port 7443 | FreeSWITCH WSS | WebRTC SIP (Verto) |
+| Port 5060/5080 | FreeSWITCH | SIP registration + external |
+
+nginx on the PBX VM handles TLS (Let's Encrypt) and reverse proxying. FusionPBX is the default upstream for all unmatched paths.
+
+## Proposed Solution
+
+### Approach
+
+Deploy a static PBX Portal to the PBX VM and reconfigure nginx to serve it. The PBX management UI backend API stays on the issuer (it depends on the database, auth, and Azure SDK) — the migrated frontend uses explicit in-session API key authentication and **path-scoped CORS** to call the issuer cross-origin.
+
+**Why this approach:**
+- The backend API (`/pbx/*`) depends on SQLAlchemy models, audit logging, and Azure SDK — these can't be replicated on the PBX VM without duplicating the entire issuer stack
+- Path-scoped CORS with in-session API key auth is secure and avoids session cookie cross-domain issues
+- The Phone PWA has zero issuer API dependencies — a clean move with no duplication
+- Static file deployment to the PBX VM is already proven (dialplan, directory, SIP monitor)
+
+### Alternatives Considered
+
+| Alternative | Pros | Cons | Why Rejected |
+|-------------|------|------|--------------|
+| Move backend API to PBX VM | Full self-containment | Requires DB, auth, Python env on PBX | Too complex; duplicates issuer infrastructure |
+| nginx reverse proxy for API | Same-origin (no CORS) | Auth cookies tied to issuer domain; path-filter complexity | Session cookies won't forward cross-domain |
+| Keep PBX UI on issuer, link from PBX portal | Minimal changes | Doesn't meet goal ("all PBX management at /") | User explicitly wants migration |
+
+### Detailed Design
+
+#### Component 1: PBX Portal Landing Page
+
+- **Purpose**: Navigation hub at `pbx.rcnx.io/` linking to all PBX tools
+- **Location**: `services/pbx/web/index.html`
+- **Behavior**: Static HTML page with card-based navigation to:
+  - **PBX Management** → `/pbx-admin/` (extension config, dialplan deploy)
+  - **Phone** → `/phone/` (WebRTC SIP client)
+  - **FusionPBX Console** → `/fusion/` (admin panel)
+  - **SIP Monitor** → `/sip-monitor/` (real-time call dashboard)
+- **Style**: Standalone CSS (no dependency on issuer `styles.css`). Consistent VVP branding.
+- **Naming convention**: This component is consistently called the "PBX Portal" throughout the codebase and documentation.
+
+#### Component 2: PBX Management UI (Migrated)
+
+- **Purpose**: Configure PBX extensions, select API key, deploy dialplan
+- **Location**: `services/pbx/web/pbx-admin/index.html`
+- **Changes from original `pbx.html`**:
+  1. **Remove `shared.js` dependency** — replace `authFetch()` with local fetch wrapper
+  2. **In-session API key authentication** — admin enters issuer API key (admin role) once per page load. The key is stored in **`sessionStorage`** (tab-scoped; clears when the tab is closed, persists across same-tab navigations). Decision made at R1 human review gate: sessionStorage chosen over in-memory variable for better UX (survives page reload within the session). The key is **never written to `localStorage`** and is isolated to the current tab.
+  3. **Configurable issuer URL** — `ISSUER_BASE_URL` constant (default: `https://vvp-issuer.rcnx.io`). This is a **build-time constant only** — never user-configurable, no query parameter, no storage. Prevents open-redirect/SSRF.
+  4. **Self-contained styles** — all styles in external CSS files served from `'self'` (no `<style>` blocks, no `style=` attributes, no `/static/styles.css` dependency). External-only CSS is required because the portal CSP omits `'unsafe-inline'` from `style-src`.
+  5. **Remove issuer navigation** — replace nav bar with PBX Portal breadcrumb
+  6. **No `credentials: 'include'`** — all fetch calls explicitly use `credentials: 'omit'` so no cookies are ever sent cross-origin
+- **API endpoints called** (via path-scoped CORS):
+  - `GET ${ISSUER_BASE_URL}/pbx/config`
+  - `PUT ${ISSUER_BASE_URL}/pbx/config`
+  - `POST ${ISSUER_BASE_URL}/pbx/deploy`
+  - `GET ${ISSUER_BASE_URL}/pbx/dialplan-preview`
+  - `GET ${ISSUER_BASE_URL}/organizations/names`
+  - `GET ${ISSUER_BASE_URL}/organizations/{id}/api-keys`
+
+#### Component 3: Phone PWA (Moved — Not Duplicated)
+
+- **Purpose**: WebRTC SIP softphone for VVP call testing
+- **Action**: **MOVE** (not copy) from `services/issuer/web/phone/` to `services/pbx/web/phone/`
+- **No duplicate files** — the issuer's `web/phone/` directory is deleted after migration; only one copy exists at `services/pbx/web/phone/`
+- **Changes during move**:
+  1. **Update asset paths** — change `/static/phone/` references to relative paths (e.g., `css/phone.css`, `js/app.js`) since files served directly from `/phone/`
+  2. **Update manifest.json** — change `start_url` to `/phone/`
+  3. **Update service worker** — cache only static assets (HTML, CSS, JS, icons); explicitly exclude any URL patterns that could return API responses or credentials. No credential caching.
+  4. **Remove issuer favicon/stylesheet references** — replace with PBX Portal branding
+- **No API changes** — SIP.js connects to `wss://pbx.rcnx.io:7443` (unchanged)
+
+#### Component 4: Issuer Path-Scoped CORS Configuration
+
+- **Purpose**: Allow `pbx.rcnx.io` frontend to call issuer PBX API endpoints only
+- **Location**: `services/issuer/app/main.py`
+- **Location in codebase**: New file `services/issuer/app/middleware/pbx_cors.py` (dedicated module, not inline in `main.py`)
+- **Registration**: Added to `main.py` as the outermost middleware (`app.add_middleware(PbxCorsMiddleware)` before all other middleware)
+- **Implementation**: Custom path-filtered CORS middleware (NOT global `CORSMiddleware`):
+
+```python
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+
+import re
+PBX_ORIGIN = "https://pbx.rcnx.io"
+# Exact paths allowed cross-origin — minimum necessary surface:
+_ORG_APIKEYS_RE = re.compile(r"^/organizations/[^/]+/api-keys$")
+
+def _is_pbx_cors_path(path: str) -> bool:
+    return (
+        path.startswith("/pbx/") or
+        path == "/organizations/names" or
+        bool(_ORG_APIKEYS_RE.match(path))
+    )
+
+class PbxCorsMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        origin = request.headers.get("origin", "")
+        is_pbx_path = _is_pbx_cors_path(path)
+        is_pbx_origin = origin == PBX_ORIGIN
+
+        # Handle preflight
+        if request.method == "OPTIONS" and is_pbx_origin and is_pbx_path:
+            from starlette.responses import Response
+            resp = Response()
+            resp.headers["Access-Control-Allow-Origin"] = PBX_ORIGIN
+            resp.headers["Access-Control-Allow-Methods"] = "GET, PUT, POST, OPTIONS"
+            resp.headers["Access-Control-Allow-Headers"] = "X-API-Key, Content-Type"
+            resp.headers["Access-Control-Max-Age"] = "3600"  # 1 hour, not 24h
+            resp.headers["Vary"] = "Origin"  # prevent cache poisoning by intermediate proxies
+            return resp
+
+        response = await call_next(request)
+
+        if is_pbx_origin and is_pbx_path:
+            response.headers["Access-Control-Allow-Origin"] = PBX_ORIGIN
+            response.headers["Vary"] = "Origin"
+
+        return response
+```
+
+- **Scope**: Exactly three path patterns receive CORS headers for `pbx.rcnx.io`: (1) `/pbx/*`, (2) `/organizations/names` (exact), (3) `/organizations/{id}/api-keys` (regex). All other issuer endpoints (credential issuance, dossier, admin, org CRUD, etc.) are **not** CORS-accessible from `pbx.rcnx.io`.
+- **No credential forwarding**: `Access-Control-Allow-Credentials` is never set (defaults to absent = false). The PBX frontend explicitly uses `credentials: 'omit'`.
+- **Transport security requirement**: The issuer service MUST enforce HTTPS-only connections. Specifically: (1) Azure Container Apps already terminates TLS and does not expose HTTP ports publicly; (2) the issuer must include a `Strict-Transport-Security` response header (e.g., `max-age=31536000; includeSubDomains`) to instruct browsers never to connect via HTTP; (3) the issuer must **not** accept plaintext HTTP connections on port 80 for any path that could receive the `X-API-Key` header. This is a hard requirement because the `X-API-Key` header grants admin-role access to PBX configuration and Azure VM deployment — interception over HTTP would be catastrophic. The `ISSUER_BASE_URL` constant in the PBX management UI is hardcoded to `https://vvp-issuer.rcnx.io` (never HTTP) as an additional enforcement layer.
+
+#### Component 5: nginx Reconfiguration on PBX VM
+
+- **Purpose**: Serve portal files and reroute FusionPBX
+- **Location**: `services/pbx/config/nginx-pbx-portal.conf`
+- **Configuration**:
+
+```nginx
+# Content Security Policy — applied to portal pages ONLY (not /fusion/ which has its own requirements)
+# Scoped to portal locations to avoid breaking FusionPBX admin console
+# Note: 'unsafe-inline' is intentionally omitted from style-src; all portal CSS must be in external files
+# connect-src restricts where JS can make fetch requests to only the issuer domain
+
+# PBX Portal static files — CSP applies only here, not to /fusion/ or /sip-monitor/
+location = / {
+    root /var/www/pbx-portal;
+    add_header Content-Security-Policy "default-src 'self'; connect-src 'self' https://vvp-issuer.rcnx.io; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'" always;
+    try_files /index.html =404;
+}
+
+location /pbx-admin/ {
+    alias /var/www/pbx-portal/pbx-admin/;
+    add_header Content-Security-Policy "default-src 'self'; connect-src 'self' https://vvp-issuer.rcnx.io; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'" always;
+    try_files $uri $uri/ /pbx-admin/index.html;
+}
+
+location /phone/ {
+    alias /var/www/pbx-portal/phone/;
+    add_header Content-Security-Policy "default-src 'self'; connect-src 'self' wss://pbx.rcnx.io:7443; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'" always;
+    try_files $uri $uri/ /phone/index.html;
+}
+
+# Phone PWA service worker — correct scope header
+location = /phone/sw.js {
+    alias /var/www/pbx-portal/phone/sw.js;
+    add_header Service-Worker-Allowed /phone;
+    types { application/javascript js; }
+}
+
+# FusionPBX admin console (moved from / to /fusion/)
+# Implementation determined during deployment after reading current nginx config
+location /fusion/ {
+    # Will proxy to FusionPBX using the exact mechanism from existing nginx config
+    # (either fastcgi_pass with path rewrite, or proxy_pass depending on setup)
+    # VERIFICATION REQUIRED: confirm FusionPBX login, session, and asset paths
+    # all work correctly under /fusion/ prefix before removing issuer routes
+}
+
+# ACME challenge — must remain accessible for Let's Encrypt renewal
+location /.well-known/acme-challenge/ {
+    root /var/www/letsencrypt;
+    try_files $uri =404;
+}
+
+# SIP Monitor (unchanged)
+location /sip-monitor/ {
+    proxy_pass http://127.0.0.1:8090/;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 86400;
+}
+```
+
+**ACME renewal verification task**: After deploying the nginx config, explicitly test cert renewal:
+```bash
+sudo certbot renew --dry-run
+```
+This must pass before issuer routes are removed.
+
+#### Component 6: Issuer Cleanup
+
+- **Purpose**: Remove PBX-specific UI routes and files from issuer
+- **Prerequisite**: Portal deployed and working, ACME renewal verified
+- **Files to remove**:
+  - `services/issuer/web/pbx.html`
+  - `services/issuer/web/phone/` (entire directory — moved to pbx/web/phone/)
+  - Route `/ui/pbx` from `main.py`
+  - Routes `/phone` and `/phone/sw.js` from `main.py`
+- **Files to keep on issuer** (backend API — database-dependent):
+  - `services/issuer/app/api/pbx.py` — PBX config CRUD + deploy endpoints
+  - `services/issuer/app/pbx/` module — dialplan generation, Azure deploy
+  - `services/issuer/app/db/models.py` PBXConfig model
+- **Test updates**:
+  - Remove tests for removed issuer routes
+  - Existing `test_pbx_config.py` (backend API tests) unchanged
+
+#### Component 7: Documentation Updates
+
+- **Purpose**: Keep knowledge base consistent with the migration
+- **Files to update**:
+  - `knowledge/api-reference.md` — add note that `/pbx/*` and `/organizations/names`, `/organizations/{id}/api-keys` now support `X-API-Key` cross-origin requests from `pbx.rcnx.io`
+  - `knowledge/deployment.md` — add `pbx.rcnx.io` portal deployment section; document that Phone PWA and PBX Management UI are now served from PBX VM; note route removals from issuer
+  - `CHANGES.md` — sprint summary after completion
+  - `CLAUDE.md` / `MEMORY.md` — update service URLs table (`pbx.rcnx.io/phone`, `pbx.rcnx.io/pbx-admin/`)
+
+#### Component 8: CI/CD Deployment
+
+- **Purpose**: Deploy portal files to PBX VM via existing pipeline
+- **Location**: `.github/workflows/deploy.yml` — add `deploy-pbx-portal` job
+- **Mechanism**: Same tarball → Azure Blob → `az vm run-command` → extract to `/var/www/pbx-portal/` pattern
+- **Trigger**: Changes to `services/pbx/web/**`
+- **Branch protection**: Deployment job restricted to `main` branch (same as other deploy jobs)
+
+### Data Flow
+
+```
+Browser → https://pbx.rcnx.io/
+         ↓
+         nginx serves /var/www/pbx-portal/index.html
+
+Browser → https://pbx.rcnx.io/pbx-admin/
+         ↓
+         nginx serves /var/www/pbx-portal/pbx-admin/index.html
+         ↓
+         Admin enters API key (stored in sessionStorage — tab-scoped, clears on tab close)
+         ↓
+         JS fetches https://vvp-issuer.rcnx.io/pbx/config
+           - Header: X-API-Key: <key>
+           - Header: credentials: omit (no cookies forwarded)
+         ↓
+         Issuer PbxCorsMiddleware: path=/pbx/ + origin=pbx.rcnx.io → add CORS headers
+         ↓
+         Issuer API responds with PBX config
+
+Browser → https://pbx.rcnx.io/phone/
+         ↓
+         nginx serves /var/www/pbx-portal/phone/index.html
+         ↓
+         SIP.js connects wss://pbx.rcnx.io:7443 (direct, no proxy, no issuer)
+
+Browser → https://pbx.rcnx.io/fusion/
+         ↓
+         nginx proxies to FusionPBX PHP-FPM (verified during implementation)
+```
+
+### Error Handling
+
+- **CORS preflight failure**: Browser console shows CORS error → verify issuer PbxCorsMiddleware path patterns include the failing endpoint
+- **API key invalid/expired**: PBX management UI shows clear error message and re-prompts for key entry (sessionStorage key is cleared)
+- **FusionPBX proxy at `/fusion/`**: verify auth flow before going live; keep fallback direct-IP access for admin during transition
+- **Cert renewal failure**: `certbot renew --dry-run` must pass before issuer routes are removed; cert expiry monitor alert to be added
+
+### Test Strategy
+
+1. **Issuer backend tests**: Existing `test_pbx_config.py` stays unchanged
+2. **CORS middleware test**: New test verifying `PbxCorsMiddleware` adds CORS headers for `/pbx/*` from `pbx.rcnx.io` but NOT for other paths or origins
+3. **Removed route tests**: Delete tests for removed issuer routes
+4. **Portal smoke test**: CI/CD deploys portal; `curl` checks `/`, `/pbx-admin/`, `/phone/` return 200
+5. **ACME renewal verification**: `certbot renew --dry-run` passes after nginx reconfiguration
+6. **E2E call flow**: VVP call test (`71006`) unaffected after deployment
+
+## Files to Create/Modify
+
+| File | Action | Purpose |
+|------|--------|---------|
+| `services/pbx/web/index.html` | Create | PBX Portal landing page |
+| `services/pbx/web/pbx-admin/index.html` | Create | Migrated PBX management UI (standalone, sessionStorage auth) |
+| `services/pbx/web/phone/` | Move from issuer | Phone PWA — single canonical location |
+| `services/pbx/config/nginx-pbx-portal.conf` | Create | nginx config including ACME passthrough |
+| `services/issuer/app/middleware/pbx_cors.py` | Create | Dedicated PbxCorsMiddleware module (path-scoped CORS for pbx.rcnx.io) |
+| `services/issuer/app/main.py` | Modify | Register PbxCorsMiddleware; remove `/ui/pbx`, `/phone`, `/phone/sw.js` routes |
+| `services/issuer/web/pbx.html` | Delete | Moved to PBX portal |
+| `services/issuer/web/phone/` | Delete | Moved to `services/pbx/web/phone/` |
+| `.github/workflows/deploy.yml` | Modify | Add `deploy-pbx-portal` job |
+| `knowledge/api-reference.md` | Modify | Document X-API-Key CORS for PBX paths |
+| `knowledge/deployment.md` | Modify | Add PBX Portal deployment section |
+
+## Risks and Mitigations
+
+| Risk | Likelihood | Impact | Mitigation |
+|------|------------|--------|------------|
+| FusionPBX `/fusion/` auth/redirect breaks | Medium | Medium | Verify all FusionPBX flows work under prefix before removing issuer routes; direct-IP fallback during transition |
+| ACME renewal breaks after nginx change | Low | High | `certbot renew --dry-run` explicit verification step; ACME passthrough block in nginx config |
+| API key UX friction | Low | Low | Key stored in sessionStorage — persists across same-tab navigations, clears on tab close |
+
+## Revision History
+
+| Round | Date | Changes |
+|-------|------|---------|
+| R1 | 2026-03-03 | Initial draft |
+| R2 | 2026-03-04 | Address R1 [High] findings: (1) Change localStorage → in-memory-only API key; (2) Replace global CORSMiddleware with path-scoped PbxCorsMiddleware; (3) Add documentation update tasks (Component 7); (4) Change Phone PWA from copy+modify to canonical MOVE with no duplication; (5) Add explicit ACME renewal verification task and /.well-known block to nginx config; (6) Clarify consistent "PBX Portal" naming; (7) Add `credentials: 'omit'` explicit requirement |
+| R3 | 2026-03-04 | Address R2 [High] finding: Replace `/organizations/` prefix match with exact path matching (`/organizations/names` + regex `^/organizations/[^/]+/api-keys$`) to prevent CORS exposure of unintended org endpoints |
+| R4 | 2026-03-04 | Address R3 [High] findings: (1) Add `Vary: Origin` to preflight responses to prevent cache poisoning; (2) Add CSP header in nginx (`connect-src` restricted to `vvp-issuer.rcnx.io`) to block XSS API key exfiltration; (3) Move CORS middleware to dedicated module `middleware/pbx_cors.py`; (4) Reduce `Max-Age` from 86400 to 3600 |
+| R5 | 2026-03-04 | Address R1 code review [High] findings: (1) Change API key storage from in-memory to sessionStorage (human review gate decision); (2) Change API key preview from first-8 to last-4 chars; (3) Replace `startswith("/pbx/")` with explicit path allowlist in PbxCorsMiddleware; (4) Add `Access-Control-Allow-Credentials: false`; (5) Add org-scoping and joinedload to facade; (6) Remove roles from facade response; (7) Sanitize VM output before audit log; (8) Fix sw.js legacy `/static/phone/` path. Add tests for CORS middleware, facade endpoints, and removed routes. |
+| R5 | 2026-03-04 | Address R4 [High] findings: (1) Remove `'unsafe-inline'` from CSP `style-src` — all portal HTML must use external CSS files served from `'self'` (updated Component 2 item 4 and added comment to Component 5 nginx config); (2) Add explicit HTTPS/HSTS transport security requirement to Component 4 — issuer must enforce TLS-only with HSTS header, `ISSUER_BASE_URL` hardcoded to `https://` |
+
