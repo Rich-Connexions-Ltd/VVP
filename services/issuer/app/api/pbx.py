@@ -25,6 +25,7 @@ from app.api.models import (
     PBXAPIKeysResponse,
     PBXAPIKeyItem,
 )
+from app.api.org_api_key import _check_org_admin_access
 from app.auth.api_key import Principal
 from app.auth.roles import require_admin, require_auth
 from app.audit import get_audit_logger
@@ -282,29 +283,16 @@ async def pbx_organization_api_keys(
 
     Applies the same org-scoping as the canonical /organizations/{id}/api-keys
     endpoint: issuer:admin can access any org; org:administrator can only
-    access their own org.
+    access their own org. Delegates to _check_org_admin_access to avoid
+    duplicating RBAC logic and ensure policy consistency.
 
     Returns only id and name — role assignments are not needed for the PBX
     config selection use case and are excluded to limit RBAC structure exposure.
 
-    Uses eager-loading to avoid an N+1 query on the roles relationship.
-
     Sprint 77: Required for PBX portal cross-origin access.
     """
-    # Apply same access control as the canonical org API keys endpoint.
-    if "issuer:admin" not in principal.roles:
-        if (
-            principal.organization_id != org_id
-            or "org:administrator" not in principal.roles
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail="Insufficient permissions. Requires issuer:admin or org:administrator role.",
-            )
-
-    org = db.query(Organization).filter(Organization.id == org_id).first()
-    if not org:
-        raise HTTPException(status_code=404, detail="Organization not found")
+    # Reuse canonical RBAC check — also validates org exists (raises 404/403).
+    _check_org_admin_access(principal, org_id, db)
 
     # Select id and name only — roles are not needed for PBX key selection
     # and are excluded from the response to limit RBAC structure exposure.

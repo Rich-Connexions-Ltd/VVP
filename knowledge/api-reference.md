@@ -552,7 +552,7 @@ All endpoints require `issuer:admin` role. Router: `app/api/pbx.py`.
 | `POST` | `/pbx/deploy` | Generate dialplan XML and deploy to PBX via Azure VM run-command (async) |
 | `GET` | `/pbx/dialplan-preview` | Preview generated dialplan as `application/xml` |
 | `GET` | `/pbx/organizations/names` | **PBX facade** — list org names for API key selection (Sprint 77) |
-| `GET` | `/pbx/organizations/{org_id}/api-keys` | **PBX facade** — list non-revoked API keys for an org (Sprint 77) |
+| `GET` | `/pbx/organizations/{org_id}/api-keys` | **PBX facade** — list non-revoked API keys for an org. Roles: `issuer:admin` (any org) or `org:administrator` (own org only). Returns 403 if neither role matches. (Sprint 77) |
 
 **`PUT /pbx/config`** — Body: `UpdatePBXConfigRequest` with optional fields: `api_key_org_id`, `api_key_id`, `api_key_value` (plaintext), `extensions` (list of `PBXExtension`), `default_caller_id` (E.164). Validates: extension range 1000-1009, no duplicate ext numbers, E.164 format.
 

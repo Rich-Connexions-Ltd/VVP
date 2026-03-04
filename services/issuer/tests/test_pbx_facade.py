@@ -110,10 +110,25 @@ class TestPBXOrganizationAPIKeys:
         assert "not found" in resp.json()["detail"].lower()
 
     async def test_operator_cross_org_returns_403(self, client_with_auth: AsyncClient):
-        """Key without issuer:admin or org:administrator gets 403 on any org."""
+        """Key without issuer:admin or org:administrator gets 403 on existing org."""
         _init_db()
+        from app.db.session import SessionLocal
+        from app.db.models import Organization
+        db = SessionLocal()
+        try:
+            db.query(Organization).filter(Organization.id == "test-operator-target-org").delete()
+            db.commit()
+            db.add(Organization(
+                id="test-operator-target-org",
+                name="Operator Target Org",
+                pseudo_lei="XOPRTGT001",
+                enabled=True,
+            ))
+            db.commit()
+        finally:
+            db.close()
         resp = await client_with_auth.get(
-            "/pbx/organizations/some-other-org-id/api-keys",
+            "/pbx/organizations/test-operator-target-org/api-keys",
             headers={"X-API-Key": TEST_OPERATOR_KEY},
         )
         assert resp.status_code == 403
@@ -124,11 +139,27 @@ class TestPBXOrganizationAPIKeys:
         Tests the `principal.organization_id != org_id` check specifically:
         a principal with org:administrator and organization_id="test-cross-org-a"
         must not access "/pbx/organizations/test-cross-org-b/api-keys".
+
+        Both orgs are created in the DB so _check_org_admin_access reaches
+        the authorization check (not the 404 branch).
         """
         _init_db()
+        from app.db.session import SessionLocal
+        from app.db.models import Organization
         import app.main as main_module
         from app.auth.api_key import Principal
         from app.auth.roles import require_auth
+
+        db = SessionLocal()
+        try:
+            for org_id in ("test-cross-org-a", "test-cross-org-b"):
+                db.query(Organization).filter(Organization.id == org_id).delete()
+            db.commit()
+            db.add(Organization(id="test-cross-org-a", name="Org A", pseudo_lei="XCORGA001", enabled=True))
+            db.add(Organization(id="test-cross-org-b", name="Org B", pseudo_lei="XCORGB001", enabled=True))
+            db.commit()
+        finally:
+            db.close()
 
         async def org_admin_for_org_a():
             return Principal(
@@ -138,12 +169,54 @@ class TestPBXOrganizationAPIKeys:
                 organization_id="test-cross-org-a",
             )
 
-        # Override require_auth (the endpoint's dependency after the High-2 fix)
-        # to inject an org:administrator principal for org-A attempting to access org-B.
+        # Override require_auth to inject an org:administrator principal for
+        # org-A attempting to access org-B.
         main_module.app.dependency_overrides[require_auth.dependency] = org_admin_for_org_a
         try:
             resp = await client.get("/pbx/organizations/test-cross-org-b/api-keys")
             assert resp.status_code == 403
+        finally:
+            main_module.app.dependency_overrides.pop(require_auth.dependency, None)
+
+    async def test_org_admin_same_org_returns_200(self, client: AsyncClient):
+        """org:administrator for org-A can access org-A's own API keys.
+
+        Tests the same-org success path through _check_org_admin_access:
+        a principal with org:administrator and organization_id="test-same-org-access"
+        must be permitted to access "/pbx/organizations/test-same-org-access/api-keys".
+        """
+        _init_db()
+        from app.db.session import SessionLocal
+        from app.db.models import Organization
+        import app.main as main_module
+        from app.auth.api_key import Principal
+        from app.auth.roles import require_auth
+
+        org_id = "test-same-org-access"
+        db = SessionLocal()
+        try:
+            db.query(Organization).filter(Organization.id == org_id).delete()
+            db.commit()
+            db.add(Organization(id=org_id, name="Same Org Access", pseudo_lei="XSAMEORG1", enabled=True))
+            db.commit()
+        finally:
+            db.close()
+
+        async def org_admin_for_own_org():
+            return Principal(
+                key_id="test-same-org-admin",
+                name="Same Org Admin",
+                roles=["org:administrator"],
+                organization_id=org_id,
+            )
+
+        main_module.app.dependency_overrides[require_auth.dependency] = org_admin_for_own_org
+        try:
+            resp = await client.get(f"/pbx/organizations/{org_id}/api-keys")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert "api_keys" in data
+            assert data["count"] == 0  # Org exists but has no keys
         finally:
             main_module.app.dependency_overrides.pop(require_auth.dependency, None)
 
