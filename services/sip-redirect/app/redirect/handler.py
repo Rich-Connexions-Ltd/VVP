@@ -86,6 +86,15 @@ async def _capture_event(
             if response.vvp_status:
                 response_vvp_headers["X-VVP-Status"] = response.vvp_status
 
+        # Strip authentication headers before storing — never log full API keys.
+        _AUTH_HEADER_NAMES = frozenset({
+            "x-vvp-api-key", "authorization", "proxy-authorization", "x-api-key",
+        })
+        safe_headers = {
+            k: v for k, v in request.headers.items()
+            if k.lower() not in _AUTH_HEADER_NAMES
+        }
+
         buffer = get_event_buffer()
         await buffer.add({
             "service": "SIGNING",
@@ -96,7 +105,7 @@ async def _capture_event(
             "from_tn": request.from_tn,
             "to_tn": request.to_tn,
             "api_key_prefix": api_key_prefix,
-            "headers": dict(request.headers),
+            "headers": safe_headers,
             "vvp_headers": vvp_headers,
             "response_code": response_code,
             "vvp_status": vvp_status,
