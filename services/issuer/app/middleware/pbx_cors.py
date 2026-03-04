@@ -27,7 +27,9 @@ _PBX_CORS_PATHS = [
     re.compile(r"^/pbx/deploy$"),
     re.compile(r"^/pbx/dialplan-preview$"),
     re.compile(r"^/pbx/organizations/names$"),
-    re.compile(r"^/pbx/organizations/[^/]+/api-keys$"),
+    # org_id restricted to alphanumeric + hyphen + underscore — prevents any
+    # dot-segment or traversal-like patterns in the org_id path segment.
+    re.compile(r"^/pbx/organizations/[a-zA-Z0-9][a-zA-Z0-9_-]*/api-keys$"),
 ]
 
 
