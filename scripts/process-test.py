@@ -163,6 +163,7 @@ def run_review(review_type: str, repo_root: Path) -> dict:
     start = time.monotonic()
     result = subprocess.run(
         [sys.executable, str(repo_root / "scripts" / "council-review.py"),
+         "--allow-external-code-review",
          review_type, TEST_SPRINT, TEST_TITLE],
         capture_output=True, text=True, timeout=300,
     )
