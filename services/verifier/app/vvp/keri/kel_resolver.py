@@ -243,13 +243,22 @@ async def resolve_key_state_with_kel(
         strict_validation=not _allow_test_mode
     )
 
-    # Find key state at reference time T
-    key_state, _valid_until = _find_key_state_at_time(
+    # Find key state at reference time T (with valid_until for caching)
+    key_state, valid_until = _find_key_state_at_time(
         aid=aid,
         events=events,
         reference_time=reference_time,
         min_witnesses=min_witnesses,
         strict_validation=not _allow_test_mode
+    )
+
+    # Cache the result for future lookups (Sprint 78: R5 finding #78)
+    cache = get_cache()
+    await cache.put(
+        key_state,
+        reference_time=reference_time,
+        valid_until=valid_until,
+        sequence=key_state.sequence,
     )
 
     return key_state, events
