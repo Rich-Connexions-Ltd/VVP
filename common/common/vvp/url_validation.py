@@ -7,6 +7,22 @@ This module is domain-agnostic — it raises URLValidationError (not
 dossier-specific FetchError). Callers catch and re-raise as their
 own domain exception (FetchError, ResolutionFailedError, etc.).
 
+**DNS rebinding / TOCTOU note**: This module resolves DNS and validates
+the IP, but the HTTP client (httpx) performs a separate DNS resolution
+when connecting. A DNS rebinding attack could theoretically return a safe
+IP at validation time and a private IP at connection time. Mitigations:
+
+1. The TOCTOU window is milliseconds (validation → httpx connect).
+2. ``follow_redirects=False`` prevents redirect-based DNS rebinding.
+3. URLs come from VVP-Identity ``kid`` field — attacker already controls
+   the OOBI URL, so SSRF adds no new capability beyond what they have.
+4. Cloud metadata (169.254.169.254) is blocked by IP range check
+   regardless of DNS rebinding (the IP is fixed).
+
+A full mitigation would require replacing httpx's DNS resolver with one
+that pins the validated IP. This is deferred as the risk is low given
+the mitigations above.
+
 Sprint 78: Created as part of SIP call performance optimization.
 """
 
