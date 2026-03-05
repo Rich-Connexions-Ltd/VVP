@@ -4,6 +4,8 @@
 
 **Date:** 2026-03-05
 **Status:** Complete
+**Commits:** `655351d`, `f81a0da`, `2093817`
+**Review:** 6 code review rounds (R1-R6), 91 findings total. 78 ADDRESSED, 8 WONTFIX (Known Debt), 5 excluded as duplicates.
 
 ### Summary
 
@@ -23,7 +25,7 @@ Optimized verifier SIP call performance to reduce second-call latency by 50%+. T
 |------|--------|
 | `common/common/vvp/url_validation.py` | New: SSRF validation (URLValidationError, validate_url_target) |
 | `common/common/vvp/http_client.py` | New: Shared httpx.AsyncClient lifecycle (get/close/reset/reset_sync) |
-| `services/verifier/app/vvp/http_client.py` | Re-export from common |
+| `services/verifier/app/vvp/http_client.py` | Removed (shim deleted; consumers import directly from common) |
 | `services/verifier/app/vvp/keri/cache.py` | Range-based cache with freshness guard, time-index cap |
 | `services/verifier/app/vvp/keri/kel_resolver.py` | Returns (KeyState, valid_until) tuple; config from app.core.config |
 | `services/verifier/app/vvp/keri/oobi.py` | Shared client + SSRF validation |

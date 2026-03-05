@@ -5795,7 +5795,7 @@ Currently PBX management UI (`/ui/pbx`) and Phone PWA (`/phone`) are hosted on `
 
 ## Sprint 78: Verifier SIP Call Performance — 50% Second-Call Latency Reduction
 
-**Status:** PENDING
+**Status:** COMPLETE
 **Goal:** Reduce VVP verifier second-call latency by 50% through range-based key state caching, HTTP connection pooling, and verification result cache deep-copy optimization.
 
 ### Context
