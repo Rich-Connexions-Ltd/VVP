@@ -163,11 +163,11 @@ class TestParseResponse:
 
 
 class TestVerifyCallee:
-    """Tests for verify_callee method."""
+    """Tests for verify method."""
 
     @pytest.mark.asyncio
-    async def test_verify_callee_includes_iat_in_header(self):
-        """verify_callee sends VVP-Identity with iat."""
+    async def test_verify_includes_iat_in_header(self):
+        """verify sends VVP-Identity with iat."""
         client = VerifierClient(
             base_url="http://test.local",
             timeout=5.0,
@@ -195,13 +195,12 @@ class TestVerifyCallee:
             mock_session.post.return_value.__aexit__ = AsyncMock(return_value=None)
             mock_session_class.return_value = mock_session
 
-            result = await client.verify_callee(
+            result = await client.verify(
                 passport_jwt="eyJ...",
                 call_id="call-123",
                 from_uri="sip:+15551234567@carrier.com",
                 to_uri="sip:+14155551234@pbx.example.com",
                 invite_time="2024-01-01T00:00:00Z",
-                cseq=1,
                 kid="https://witness.example.com/oobi/EAbc",
                 evd="https://dossier.example.com/dossiers/SAbc",
                 iat=1704067200,

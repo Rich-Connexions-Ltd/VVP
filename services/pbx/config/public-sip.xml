@@ -31,6 +31,46 @@
       </condition>
     </extension>
 
+    <!-- VVP Demo: Brand Assure (authorized for UK) — from ext 1002, dial 7xxxx -->
+    <extension name="vvp-loopback-brand-assure">
+      <condition field="${sofia_profile_name}" expression="^(internal)?$"/>
+      <condition field="caller_id_number" expression="^1002$"/>
+      <condition field="destination_number" expression="^7(10\d{2})$">
+        <action application="log" data="INFO [VVP] Brand Assure loopback — ext 1002 calling $1 via UK-authorized vetter"/>
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="continue_on_fail=true"/>
+        <action application="set" data="bridge_timeout=60"/>
+        <action application="set" data="progress_timeout=60"/>
+        <action application="set" data="sip_invite_timeout=65"/>
+        <action application="set" data="loopback_dest_tn=+44192331$1"/>
+        <action application="set" data="effective_caller_id_number=+441923311002"/>
+        <action application="set" data="effective_caller_id_name=VVP Brand Assure"/>
+        <action application="set" data="sip_redirect_context=redirected"/>
+        <action application="log" data="INFO [VVP] Routing to signing: +441923311002 → +44192331$1 via Brand Assure"/>
+        <action application="bridge" data="[sip_h_X-VVP-API-Key=Vill5kNit_D2TOYFDfPLnGd5kFENISkJDrZx9Ue9juA,origination_caller_id_number=+441923311002]sofia/external/${loopback_dest_tn}@127.0.0.1:5070"/>
+      </condition>
+    </extension>
+
+    <!-- VVP Demo: Deutsche Vetters (NOT authorized for UK) — from ext 1003, dial 7xxxx -->
+    <extension name="vvp-loopback-deutsche-vetters">
+      <condition field="${sofia_profile_name}" expression="^(internal)?$"/>
+      <condition field="caller_id_number" expression="^1003$"/>
+      <condition field="destination_number" expression="^7(10\d{2})$">
+        <action application="log" data="INFO [VVP] Deutsche Vetters loopback — ext 1003 calling $1 via unauthorized vetter"/>
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="continue_on_fail=true"/>
+        <action application="set" data="bridge_timeout=60"/>
+        <action application="set" data="progress_timeout=60"/>
+        <action application="set" data="sip_invite_timeout=65"/>
+        <action application="set" data="loopback_dest_tn=+44192331$1"/>
+        <action application="set" data="effective_caller_id_number=+441923311003"/>
+        <action application="set" data="effective_caller_id_name=VVP Deutsche Vetters"/>
+        <action application="set" data="sip_redirect_context=redirected"/>
+        <action application="log" data="INFO [VVP] Routing to signing: +441923311003 → +44192331$1 via Deutsche Vetters"/>
+        <action application="bridge" data="[sip_h_X-VVP-API-Key=0eqzu-ozxhLNsZbcYR0sBdFnjP3RPQiVPp-UcQjoKr0,origination_caller_id_number=+441923311003]sofia/external/${loopback_dest_tn}@127.0.0.1:5070"/>
+      </condition>
+    </extension>
+
     <!-- VVP Loopback Test: 7 + extension -> signing -> verification -> extension -->
     <!-- Dial 71006 to call 1006 through full VVP signing/verification flow -->
     <extension name="vvp-loopback-outbound">

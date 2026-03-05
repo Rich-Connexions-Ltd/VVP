@@ -1,6 +1,6 @@
 """Verifier API client for VVP SIP Verify Service.
 
-Sprint 44: HTTP client for calling the VVP Verifier /verify-callee endpoint.
+Sprint 44: HTTP client for calling the VVP Verifier /verify endpoint.
 Sprint 50: Persistent session for connection reuse (avoids TCP/TLS per call).
 """
 
@@ -150,39 +150,38 @@ class VerifierClient:
         # Remove padding
         return encoded.rstrip("=")
 
-    async def verify_callee(
+    async def verify(
         self,
         passport_jwt: str,
         call_id: str,
         from_uri: str,
         to_uri: str,
         invite_time: str,
-        cseq: int,
         kid: str,
         evd: str,
         iat: int,
         exp: Optional[int] = None,
-        caller_passport_jwt: Optional[str] = None,
     ) -> VerifyResult:
-        """Call the /verify-callee endpoint.
+        """Call the /verify endpoint.
+
+        Uses /verify (not /verify-callee) — we verify the caller's identity
+        and brand only.  Callee TN rights checking is out of scope.
 
         Args:
-            passport_jwt: Callee's PASSporT JWT.
+            passport_jwt: Caller's PASSporT JWT.
             call_id: SIP Call-ID.
             from_uri: SIP From URI.
             to_uri: SIP To URI.
             invite_time: RFC3339 timestamp of SIP INVITE.
-            cseq: SIP CSeq number.
             kid: OOBI URL for key resolution.
             evd: Dossier evidence URL.
             iat: Issued-at timestamp from P-VVP-Identity (required by verifier).
             exp: Optional expiration timestamp from P-VVP-Identity.
-            caller_passport_jwt: Optional caller's PASSporT for goal overlap.
 
         Returns:
             VerifyResult with verification outcome.
         """
-        url = f"{self.base_url}/verify-callee"
+        url = f"{self.base_url}/verify"
 
         # Build request body
         request_body = {
@@ -194,13 +193,9 @@ class VerifierClient:
                     "from_uri": from_uri,
                     "to_uri": to_uri,
                     "invite_time": invite_time,
-                    "cseq": cseq,
                 },
             },
         }
-
-        if caller_passport_jwt:
-            request_body["caller_passport_jwt"] = caller_passport_jwt
 
         # Build headers
         headers = {

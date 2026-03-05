@@ -529,4 +529,91 @@ class KeriStateBuilder:
             f"Witness publishing complete: {count}/{len(habs_with_witnesses)} "
             f"identities in {report.witness_publish_seconds:.1f}s"
         )
+
+        # Schedule background retry for any identities that failed to publish
+        failed_habs = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception) or not result:
+                failed_habs.append(habs_with_witnesses[i])
+        if failed_habs:
+            log.info(
+                f"Scheduling background retry for {len(failed_habs)} "
+                f"failed witness publishes"
+            )
+            asyncio.create_task(
+                self._retry_failed_publishes(failed_habs)
+            )
+
         return count
+
+    async def _retry_failed_publishes(
+        self,
+        failed_habs: list,
+        max_attempts: int = 8,
+        initial_delay: float = 15.0,
+    ) -> None:
+        """Background retry for identities that failed to publish on startup.
+
+        Uses exponential backoff (15s, 30s, 60s, 120s, ...) to retry
+        publishing to witnesses. This handles the common case where
+        witnesses are still starting up when the KERI Agent first publishes.
+
+        Args:
+            failed_habs: List of hab objects that failed initial publish.
+            max_attempts: Maximum retry attempts per identity.
+            initial_delay: Initial delay in seconds before first retry.
+        """
+        from app.keri.identity import get_identity_manager
+        from app.keri.witness import get_witness_publisher
+
+        identity_mgr = await get_identity_manager()
+        publisher = get_witness_publisher()
+        remaining = list(failed_habs)
+
+        for attempt in range(max_attempts):
+            delay = initial_delay * (2 ** attempt)
+            # Cap at 5 minutes
+            delay = min(delay, 300.0)
+            log.info(
+                f"Witness publish retry {attempt + 1}/{max_attempts}: "
+                f"waiting {delay:.0f}s for {len(remaining)} identities"
+            )
+            await asyncio.sleep(delay)
+
+            still_failing = []
+            for hab in remaining:
+                aid = hab.pre
+                try:
+                    inception_msg = self._inception_cache.get(aid)
+                    if inception_msg is None:
+                        inception_msg = await identity_mgr.get_inception_msg(aid)
+                    result = await publisher.publish_oobi(
+                        aid, inception_msg, hby=identity_mgr.hby
+                    )
+                    if result.threshold_met:
+                        log.info(
+                            f"Retry publish succeeded for {hab.name} "
+                            f"({aid[:16]}...): "
+                            f"{result.success_count}/{result.total_count}"
+                        )
+                    else:
+                        still_failing.append(hab)
+                except Exception as e:
+                    log.warning(
+                        f"Retry publish failed for {hab.name} "
+                        f"({aid[:16]}...): {e}"
+                    )
+                    still_failing.append(hab)
+
+            remaining = still_failing
+            if not remaining:
+                log.info("All witness publish retries succeeded")
+                return
+
+        if remaining:
+            names = [h.name for h in remaining]
+            log.error(
+                f"Witness publish retries exhausted after {max_attempts} "
+                f"attempts. Still failing: {names}. "
+                f"Manual republish required via POST /admin/publish-identity"
+            )

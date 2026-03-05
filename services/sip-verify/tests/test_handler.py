@@ -66,7 +66,7 @@ class TestHandleVerifyInvite:
         """Successful verification returns 302 with VVP headers."""
         with patch("app.verify.handler.get_verifier_client") as mock_get_client:
             mock_client = MagicMock()
-            mock_client.verify_callee = AsyncMock(return_value=mock_verify_result)
+            mock_client.verify = AsyncMock(return_value=mock_verify_result)
             mock_get_client.return_value = mock_client
 
             response = await handle_verify_invite(sample_request)
@@ -125,7 +125,7 @@ class TestHandleVerifyInvite:
 
         with patch("app.verify.handler.get_verifier_client") as mock_get_client:
             mock_client = MagicMock()
-            mock_client.verify_callee = AsyncMock(return_value=error_result)
+            mock_client.verify = AsyncMock(return_value=error_result)
             mock_get_client.return_value = mock_client
 
             response = await handle_verify_invite(sample_request)
@@ -145,7 +145,7 @@ class TestHandleVerifyInvite:
 
         with patch("app.verify.handler.get_verifier_client") as mock_get_client:
             mock_client = MagicMock()
-            mock_client.verify_callee = AsyncMock(return_value=timeout_result)
+            mock_client.verify = AsyncMock(return_value=timeout_result)
             mock_get_client.return_value = mock_client
 
             response = await handle_verify_invite(sample_request)
@@ -160,7 +160,7 @@ class TestHandleVerifyInvite:
         """302 response copies transaction headers from request."""
         with patch("app.verify.handler.get_verifier_client") as mock_get_client:
             mock_client = MagicMock()
-            mock_client.verify_callee = AsyncMock(return_value=mock_verify_result)
+            mock_client.verify = AsyncMock(return_value=mock_verify_result)
             mock_get_client.return_value = mock_client
 
             response = await handle_verify_invite(sample_request)

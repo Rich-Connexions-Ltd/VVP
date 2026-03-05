@@ -117,6 +117,12 @@ class ACDC:
                 return "LE"  # vCard-based Legal Entity credential
             if "phone" in self.attributes or "tn" in self.attributes or "numbers" in self.attributes:
                 return "TNAlloc"  # TN Allocation credential
+            # VetterCert: has ecc_targets or jurisdiction_targets
+            if "ecc_targets" in self.attributes or "jurisdiction_targets" in self.attributes:
+                return "VetterCert"
+            # VetterGov: has role attribute (governance authority)
+            if "role" in self.attributes and "name" in self.attributes:
+                return "VetterGov"
 
         # Check edges for credential type hints (fallback)
         if self.edges:

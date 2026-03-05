@@ -57,6 +57,21 @@
               <variable name="outbound_caller_id_number" value="+441923311002"/>
             </variables>
           </user>
+          <user id="1003">
+            <params>
+              <param name="password" value="vvptest1003"/>
+              <param name="vm-password" value="1003"/>
+            </params>
+            <variables>
+              <variable name="toll_allow" value="domestic,international,local"/>
+              <variable name="accountcode" value="1003"/>
+              <variable name="user_context" value="public"/>
+              <variable name="effective_caller_id_name" value="Extension 1003"/>
+              <variable name="effective_caller_id_number" value="1003"/>
+              <variable name="outbound_caller_id_name" value="VVP PBX"/>
+              <variable name="outbound_caller_id_number" value="+441923311003"/>
+            </variables>
+          </user>
           <user id="1006">
             <params>
               <param name="password" value="vvptest1006"/>

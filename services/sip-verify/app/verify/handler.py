@@ -3,8 +3,8 @@
 Sprint 44: Handles incoming SIP INVITEs with VVP headers:
 1. Parse Identity header (RFC 8224) to get PASSporT + OOBI
 2. Decode P-VVP-Identity header (base64url JSON)
-3. Build VerifyCalleeRequest from SIP headers
-4. Call VVP Verifier POST /verify-callee with VVP-Identity header
+3. Build VerifyRequest from SIP headers
+4. Call VVP Verifier POST /verify with VVP-Identity header
 5. Map VerifyResponse to X-VVP-* headers
 6. Return SIP 302 redirect
 
@@ -150,7 +150,7 @@ async def handle_verify_invite(request: SIPRequest) -> Optional[SIPResponse]:
     1. Validate request has required VVP headers
     2. Parse RFC 8224 Identity header to extract PASSporT
     3. Decode P-VVP-Identity to get OOBI and dossier URLs
-    4. Call Verifier /verify-callee endpoint
+    4. Call Verifier /verify endpoint
     5. Build SIP 302 response with X-VVP-* headers
 
     Args:
@@ -288,15 +288,14 @@ async def handle_verify_invite(request: SIPRequest) -> Optional[SIPResponse]:
     from_uri = f"sip:{request.from_tn}@pbx" if request.from_tn else request.from_header
     to_uri = f"sip:{request.to_tn}@pbx" if request.to_tn else request.to_header
 
-    # Call Verifier API
+    # Call Verifier API (/verify — caller identity only, no callee TN check)
     client = get_verifier_client()
-    result = await client.verify_callee(
+    result = await client.verify(
         passport_jwt=passport_jwt,
         call_id=passport_call_id,
         from_uri=from_uri,
         to_uri=to_uri,
         invite_time=invite_time,
-        cseq=passport_cseq,
         kid=kid,
         evd=evd,
         iat=iat,

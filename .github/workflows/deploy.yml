@@ -69,6 +69,7 @@ jobs:
               - 'services/pbx/config/**'
             pbx-portal:
               - 'services/pbx/web/**'
+              - 'services/pbx/config/nginx-pbx-portal-snippet.conf'
 
   # =========================================================================
   # TEST JOBS - Run tests for all services
@@ -1829,6 +1830,31 @@ jobs:
               chown -R www-data:www-data /var/www/pbx-portal
               rm -f /tmp/pbx-portal.tar.gz
               echo 'Portal deployed: $(find /var/www/pbx-portal -type f | wc -l) files'
+            "
+
+      - name: Deploy nginx portal snippet
+        run: |
+          SNIPPET=$(base64 -w0 services/pbx/config/nginx-pbx-portal-snippet.conf)
+          az vm run-command invoke \
+            --resource-group VVP --name vvp-pbx \
+            --command-id RunShellScript \
+            --scripts "
+              set -e
+              mkdir -p /etc/nginx/snippets
+              echo '${SNIPPET}' | base64 -d > /etc/nginx/snippets/pbx-portal.conf
+              chown root:root /etc/nginx/snippets/pbx-portal.conf
+
+              # Verify the include directive exists in FusionPBX config
+              if ! grep -q 'include /etc/nginx/snippets/pbx-portal.conf' /etc/nginx/sites-enabled/fusionpbx; then
+                echo 'ERROR: include directive missing from FusionPBX nginx config'
+                echo 'Add: include /etc/nginx/snippets/pbx-portal.conf;'
+                echo 'to the SSL server block in /etc/nginx/sites-enabled/fusionpbx'
+                exit 1
+              fi
+
+              nginx -t 2>&1
+              nginx -s reload
+              echo 'Nginx snippet deployed and reloaded'
             "
 
       - name: Smoke test portal endpoints

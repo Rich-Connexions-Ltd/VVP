@@ -29,7 +29,7 @@ Edge Structure:
 from typing import Dict, FrozenSet
 
 # Registry version for tracking updates
-SCHEMA_REGISTRY_VERSION = "1.3.0"
+SCHEMA_REGISTRY_VERSION = "1.4.0"
 
 # Known vLEI governance schema SAIDs
 # These are the official schema SAIDs from the vLEI ecosystem
@@ -94,6 +94,20 @@ KNOWN_SCHEMA_SAIDS: Dict[str, FrozenSet[str]] = {
     "TNAlloc": frozenset({
         "EFvnoHDY7I-kaBBeKlbDbkjG4BaI0nKLGadxBdjMGgSQ",  # Base TN Allocation
     }),
+
+    # Vetter Certification credential
+    # Source: VVP Draft - issued by Vetter Governance Authority to orgs
+    # Has e.issuer edge to VetterGov credential and ecc/jurisdiction targets
+    "VetterCert": frozenset({
+        "EOefmhWU2qTpMiEQhXohE6z3xRXkpLloZdhTYIenlD4H",  # VVP VetterCert schema
+    }),
+
+    # Vetter Governance Authority credential
+    # Source: VVP Draft - issued by governance root to vetter authorities (e.g., GSMA)
+    # Has name/role attributes, no edges
+    "VetterGov": frozenset({
+        "EIBowJmxx5hNWQlfXqGcbN0aP_RBuucMW6mle4tAN6TL",  # VVP VetterGov schema
+    }),
 }
 
 # Schema source documentation for audit/compliance
@@ -107,6 +121,8 @@ SCHEMA_SOURCE: Dict[str, str] = {
     "APE": "Pending - accept any until governance publishes",
     "DE": "Provenant demo DE schema (EL7irIKYJ...)",
     "TNAlloc": "Pending - accept any until governance publishes",
+    "VetterCert": "VVP Draft - vetter certification credential (EOefmhWU2...)",
+    "VetterGov": "VVP Draft - vetter governance authority credential (EIBowJmxx...)",
 }
 
 
