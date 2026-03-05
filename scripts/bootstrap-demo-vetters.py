@@ -69,9 +69,9 @@ def wait_for_health(base_url, timeout=60):
 # Schema SAIDs
 # ---------------------------------------------------------------------------
 
-TN_ALLOC_SCHEMA = "EFvnoHDY7I-kaBBeKlbDbkjG4BaI0nKLGadxBdjMGgSQ"
+TN_ALLOC_SCHEMA = "EGUh_fVLbjfkYFb5zAsY2Rqq0NqwnD3r5jsdKWLTpU8_"  # Extended (auto-injects certification edge)
 BRAND_SCHEMA = "EK7kPhs5YkPsq9mZgUfPYfU-zq5iSlU8XVYJWqrVPk6g"
-LE_SCHEMA = "ENPXp1vQzRF6JwIuS-mp2U8Uf1MKAIuPchgRiMCe48Mb"
+LE_SCHEMA = "ENPXp1vQzRF6JwIuS-mp2U8Uf1MoADoP_GqQ62VsDZWY"
 VETTER_CERT_SCHEMA = "EOefmhWU2qTpMiEQhXohE6z3xRXkpLloZdhTYIenlD4H"
 
 
@@ -113,24 +113,49 @@ def bootstrap_scenario(base_url, admin_key, scenario, brand_name, brand_logo):
     print(f"  {scenario['vetter_name']}: {scenario['description']}")
     print(f"{'=' * 60}")
 
-    # 1. Create organization
+    # 1. Create organization (handle existing org gracefully)
     print(f"\n  [1/7] Creating organization '{org_name}'...")
     status, body = api_call(
         "POST", f"{base_url}/organizations",
         data={"name": org_name},
         api_key=admin_key, timeout=120,
     )
-    if status != 200:
+    if status == 409:
+        # Org already exists — look it up by listing all orgs
+        print(f"    Org already exists, looking up...")
+        list_status, list_body = api_call("GET", f"{base_url}/organizations?limit=50", api_key=admin_key)
+        if list_status == 200:
+            orgs = list_body.get("organizations", list_body if isinstance(list_body, list) else [])
+            existing = next((o for o in orgs if o.get("name") == org_name), None)
+            if existing:
+                body = existing
+                status = 200
+                print(f"    Found existing org")
+            else:
+                print(f"    FAILED: Could not find existing org by name")
+                return None
+        else:
+            print(f"    FAILED: Could not list orgs ({list_status})")
+            return None
+    elif status != 200:
         print(f"    FAILED ({status}): {body.get('detail', body)}")
         return None
     org_id = body["id"]
-    org_aid = body.get("aid", "")
-    le_said = body.get("le_credential_said", "")
+    org_aid = body.get("aid", body.get("identity_aid", ""))
+    le_said = body.get("le_credential_said", body.get("le_said", ""))
     identity_name = f"org-{org_id[:8]}"
     registry_name = f"{identity_name}-registry"
     print(f"    Org ID:       {org_id[:16]}...")
     print(f"    Org AID:      {org_aid[:24]}..." if org_aid else "    Org AID:      N/A")
     print(f"    LE SAID:      {le_said[:24]}..." if le_said else "    LE SAID:      N/A")
+
+    # If no AID yet, attempt to resolve it from the KERI agent
+    if not org_aid:
+        keri_status, keri_body = api_call("GET", f"{base_url}/admin/identities/{identity_name}", api_key=admin_key)
+        if keri_status == 200:
+            org_aid = keri_body.get("aid", "")
+            if org_aid:
+                print(f"    Org AID:      {org_aid[:24]}... (from KERI agent)")
 
     # 2. Create API key
     print(f"\n  [2/7] Creating API key...")
@@ -160,10 +185,32 @@ def bootstrap_scenario(base_url, admin_key, scenario, brand_name, brand_logo):
         },
         api_key=admin_key, timeout=120,
     )
-    if status not in (200, 201):
+    if status == 409:
+        # Already has an active VetterCert — fetch it
+        print(f"    VetterCert already exists, fetching...")
+        list_status, list_body = api_call(
+            "GET", f"{base_url}/vetter-certifications?organization_id={org_id}&limit=10",
+            api_key=admin_key,
+        )
+        if list_status == 200:
+            certs = list_body.get("certifications", list_body if isinstance(list_body, list) else [])
+            active = next((c for c in certs if c.get("status", "active") == "active"), None)
+            if not active:
+                active = certs[0] if certs else None
+            if active:
+                body = active
+                status = 200
+                print(f"    Found existing VetterCert")
+            else:
+                print(f"    FAILED: No active VetterCert found")
+                return None
+        else:
+            print(f"    FAILED: Cannot list VetterCerts ({list_status})")
+            return None
+    elif status not in (200, 201):
         print(f"    FAILED ({status}): {body.get('detail', body)}")
         return None
-    vetter_cert_said = body["said"]
+    vetter_cert_said = body.get("said", body.get("credential_said", ""))
     print(f"    VetterCert SAID:   {vetter_cert_said[:24]}...")
 
     # 4. Issue TN Allocation

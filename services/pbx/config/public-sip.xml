@@ -47,7 +47,7 @@
         <action application="set" data="effective_caller_id_name=VVP Brand Assure"/>
         <action application="set" data="sip_redirect_context=redirected"/>
         <action application="log" data="INFO [VVP] Routing to signing: +441923311002 → +44192331$1 via Brand Assure"/>
-        <action application="bridge" data="[sip_h_X-VVP-API-Key=Vill5kNit_D2TOYFDfPLnGd5kFENISkJDrZx9Ue9juA,origination_caller_id_number=+441923311002]sofia/external/${loopback_dest_tn}@127.0.0.1:5070"/>
+        <action application="bridge" data="[sip_h_X-VVP-API-Key=OelTqXiTCV1-nT59fjTKJNWEmlVzo_PJCvAzMXTNBfE,origination_caller_id_number=+441923311002]sofia/external/${loopback_dest_tn}@127.0.0.1:5070"/>
       </condition>
     </extension>
 
@@ -67,7 +67,7 @@
         <action application="set" data="effective_caller_id_name=VVP Deutsche Vetters"/>
         <action application="set" data="sip_redirect_context=redirected"/>
         <action application="log" data="INFO [VVP] Routing to signing: +441923311003 → +44192331$1 via Deutsche Vetters"/>
-        <action application="bridge" data="[sip_h_X-VVP-API-Key=0eqzu-ozxhLNsZbcYR0sBdFnjP3RPQiVPp-UcQjoKr0,origination_caller_id_number=+441923311003]sofia/external/${loopback_dest_tn}@127.0.0.1:5070"/>
+        <action application="bridge" data="[sip_h_X-VVP-API-Key=UT1zYdkt5JpuKbUs8Uo1iyZ0WUsp8-RH3nPKI4jqQSQ,origination_caller_id_number=+441923311003]sofia/external/${loopback_dest_tn}@127.0.0.1:5070"/>
       </condition>
     </extension>
 
