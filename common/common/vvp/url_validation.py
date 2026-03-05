@@ -22,8 +22,6 @@ IP at validation time and a private IP at connection time. Mitigations:
 A full mitigation would require replacing httpx's DNS resolver with one
 that pins the validated IP. This is deferred as the risk is low given
 the mitigations above.
-
-Sprint 78: Created as part of SIP call performance optimization.
 """
 
 import asyncio

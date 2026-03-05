@@ -27,7 +27,7 @@ import logging
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 if TYPE_CHECKING:
     from .kel_resolver import KeyState
@@ -62,7 +62,7 @@ class CacheMetrics:
         total = self.hits + self.misses
         return self.hits / total if total > 0 else 0.0
 
-    def to_dict(self) -> Dict[str, any]:
+    def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
             "hits": self.hits,

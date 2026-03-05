@@ -1,21 +1,19 @@
 #!/usr/bin/env python3
 """Council of Experts review system for VVP pair programming workflow.
 
-Submits plans/code to 5 focused expert reviewers in parallel (Security,
-Performance, Documentation, UX, Code Simplicity) across 4 platforms
-(Anthropic, Google, OpenAI, Codex CLI), then consolidates their findings into a
-single unified REVIEW file.
+Submits plans/code to up to 8 focused expert reviewers in parallel across
+3 platforms (Anthropic, Google, OpenAI/Codex), then consolidates their
+findings into a single unified REVIEW file. Council composition, models,
+and phase assignments are configured in council-config.json.
 
 Usage:
     ./scripts/council-review.py plan <sprint> "<title>"
     ./scripts/council-review.py code <sprint> "<title>"
 
 Requires environment variables:
-    ANTHROPIC_API_KEY  — Claude models (Security, Consolidator)
-    GOOGLE_API_KEY     — Gemini models (Performance, UX)
-    OPENAI_API_KEY     — OpenAI models (if used by any member)
-    (Codex platform members authenticate via 'codex' CLI automatically) (optional, if used by any member)
-    (Codex CLI members authenticate via 'codex' CLI — no env var required)
+    ANTHROPIC_API_KEY  — Claude models (Security, Test Quality, Domain Expert, Consolidator)
+    GOOGLE_API_KEY     — Gemini models (Performance, UX, Cost Modeller)
+    OPENAI_API_KEY     — OpenAI/Codex models (Documentation, Simplicity)
 """
 
 import json

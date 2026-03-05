@@ -90,7 +90,6 @@ class TestSharedClient:
         n_tasks = 20
 
         async def get_after_gate():
-            gate.wait()  # Prepare the awaitable but don't await yet
             await gate.wait()
             return await get_shared_client()
 
@@ -449,3 +448,51 @@ class TestCachedSecondCallRegression:
         assert cache.metrics().hits >= 1, "Cache should record at least one hit"
 
         reset_cache()
+
+
+# =============================================================================
+# Redirect handling regression test (R6 finding #86)
+# =============================================================================
+
+
+class TestRedirectHandling:
+    """Assert that the shared HTTP client does NOT follow redirects.
+
+    Sprint 78 hardened redirect handling: follow_redirects=False on the shared
+    client means 3xx responses are returned as-is (not followed). Callers treat
+    these as errors. This prevents redirect-based SSRF bypass.
+    """
+
+    @pytest.mark.asyncio
+    async def test_shared_client_returns_redirect_as_is(self):
+        """Shared client returns 3xx response without following the redirect."""
+        client = await get_shared_client()
+        assert client.follow_redirects is False, \
+            "Shared client must have follow_redirects=False"
+
+    @pytest.mark.asyncio
+    async def test_dossier_fetch_rejects_redirect(self):
+        """fetch_dossier treats a 3xx response as an HTTP error, not a redirect to follow."""
+        from common.vvp.dossier.exceptions import FetchError
+        from common.vvp.dossier.fetch import fetch_dossier
+
+        mock_response = AsyncMock()
+        mock_response.status_code = 302
+        mock_response.headers = {"location": "http://evil.internal/steal"}
+        mock_response.raise_for_status = MagicMock(
+            side_effect=httpx.HTTPStatusError(
+                "302 redirect", request=MagicMock(), response=mock_response
+            )
+        )
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        async def _noop_validate(*a, **kw):
+            pass
+
+        with patch("common.vvp.url_validation.validate_url_target", new=_noop_validate), \
+             patch("common.vvp.http_client.get_shared_client",
+                   new=AsyncMock(return_value=mock_client)):
+            with pytest.raises(FetchError):
+                await fetch_dossier("https://example.com/dossier")
