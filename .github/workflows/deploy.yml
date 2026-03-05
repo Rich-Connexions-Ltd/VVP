@@ -1051,7 +1051,10 @@ jobs:
             -m "$SMOKE_MARKERS" \
             --ignore=tests/integration/benchmarks/ \
             2>&1 | tee smoke_output.txt
-          echo "exit_code=$?" >> $GITHUB_OUTPUT
+          SMOKE_EXIT=$?
+          # Exit code 5 = no tests collected (no smoke markers yet) — treat as pass
+          if [ $SMOKE_EXIT -eq 5 ]; then SMOKE_EXIT=0; fi
+          echo "exit_code=$SMOKE_EXIT" >> $GITHUB_OUTPUT
 
       - name: Full integration tests
         id: integration_tests
