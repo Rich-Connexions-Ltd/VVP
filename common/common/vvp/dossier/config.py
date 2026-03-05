@@ -35,11 +35,6 @@ DOSSIER_MAX_SIZE_BYTES: int = int(
     os.getenv("VVP_DOSSIER_MAX_SIZE", "1048576")
 )
 
-# Maximum redirects to follow
-DOSSIER_MAX_REDIRECTS: int = int(
-    os.getenv("VVP_DOSSIER_MAX_REDIRECTS", "3")
-)
-
 # =============================================================================
 # TEL CLIENT CONFIGURATION
 # =============================================================================

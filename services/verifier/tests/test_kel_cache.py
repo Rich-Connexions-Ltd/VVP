@@ -8,7 +8,7 @@ Tests cache behavior per PLAN.md:
 """
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.vvp.keri.cache import CacheConfig, KeyStateCache, _CacheEntry
@@ -123,7 +123,7 @@ class TestCacheTimeIndex:
     @pytest.mark.asyncio
     async def test_get_for_time_with_valid_from(self, cache):
         """Get by time uses secondary index."""
-        ts = datetime(2024, 1, 1, 12, 0, 0)
+        ts = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
         ks = make_key_state(valid_from=ts)
 
         await cache.put(ks)
@@ -138,7 +138,7 @@ class TestCacheTimeIndex:
         ks = make_key_state(valid_from=None)
 
         await cache.put(ks)
-        result = await cache.get_for_time(ks.aid, datetime.now())
+        result = await cache.get_for_time(ks.aid, datetime.now(timezone.utc))
 
         # Should return None because no time index was created
         assert result is None
@@ -150,8 +150,8 @@ class TestCacheTimeIndex:
         Verifies that the range scan path (_range_match_locked) is exercised,
         not just the exact match path — ts2 is NOT in the time index.
         """
-        ts1 = datetime(2024, 1, 1, 12, 0, 0)
-        ts2 = datetime(2024, 1, 2, 12, 0, 0)  # Different from valid_from → range scan
+        ts1 = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        ts2 = datetime(2024, 1, 2, 12, 0, 0, tzinfo=timezone.utc)
         ks = make_key_state(valid_from=ts1)
 
         await cache.put(ks)
@@ -172,8 +172,8 @@ class TestCacheTimeIndex:
     @pytest.mark.asyncio
     async def test_get_for_time_before_valid_from_misses(self, cache):
         """Query BEFORE valid_from misses — key wasn't established yet."""
-        ts1 = datetime(2024, 1, 2, 12, 0, 0)
-        ts_before = datetime(2024, 1, 1, 12, 0, 0)
+        ts1 = datetime(2024, 1, 2, 12, 0, 0, tzinfo=timezone.utc)
+        ts_before = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
         ks = make_key_state(valid_from=ts1)
 
         await cache.put(ks)

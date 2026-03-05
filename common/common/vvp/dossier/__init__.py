@@ -20,7 +20,6 @@ from .config import (
     DOSSIER_CACHE_MAX_ENTRIES,
     DOSSIER_CACHE_TTL_SECONDS,
     DOSSIER_FETCH_TIMEOUT_SECONDS,
-    DOSSIER_MAX_REDIRECTS,
     DOSSIER_MAX_SIZE_BYTES,
 )
 from .exceptions import DossierError, FetchError, GraphError, ParseError
@@ -47,5 +46,4 @@ __all__ = [
     "DOSSIER_CACHE_MAX_ENTRIES",
     "DOSSIER_FETCH_TIMEOUT_SECONDS",
     "DOSSIER_MAX_SIZE_BYTES",
-    "DOSSIER_MAX_REDIRECTS",
 ]

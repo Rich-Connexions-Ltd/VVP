@@ -64,15 +64,8 @@ async def dereference_oobi(
         ResolutionFailedError: If network/fetch fails (recoverable).
         OOBIContentInvalidError: If content type/format invalid (non-recoverable).
     """
-    # Validate URL
-    try:
-        parsed = urlparse(oobi_url)
-        if not parsed.scheme or not parsed.netloc:
-            raise ValueError("Invalid URL structure")
-    except Exception as e:
-        raise ResolutionFailedError(f"Invalid OOBI URL: {e}")
-
     # SSRF validation (allow http for local witnesses)
+    # validate_url_target checks scheme, host, and DNS/IP ranges
     try:
         from common.vvp.url_validation import URLValidationError, validate_url_target
         await validate_url_target(oobi_url, allow_http=True)

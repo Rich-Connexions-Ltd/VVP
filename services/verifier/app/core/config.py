@@ -62,7 +62,6 @@ ALLOW_PASSPORT_EXP_OMISSION: bool = False
 # §6.1B: "timeouts... size limits" - spec requires enforcement but doesn't specify values
 DOSSIER_FETCH_TIMEOUT_SECONDS: int = 5
 DOSSIER_MAX_SIZE_BYTES: int = 1_048_576  # 1 MB
-DOSSIER_MAX_REDIRECTS: int = 3
 
 # Schema SAID validation strictness (§6.3.3-6)
 # Per spec, schema rules are MUSTs and should reject unknown schema SAIDs.

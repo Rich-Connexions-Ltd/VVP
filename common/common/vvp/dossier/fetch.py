@@ -64,7 +64,7 @@ async def fetch_dossier(url: str) -> bytes:
         # Check for errors (including 3xx since follow_redirects=False)
         if response.status_code >= 300:
             raise FetchError(
-                f"HTTP {response.status_code} fetching {url}"
+                f"HTTP {response.status_code} fetching dossier from {url}"
             )
 
         # Validate content-type
@@ -96,7 +96,7 @@ async def fetch_dossier(url: str) -> bytes:
         )
     except httpx.HTTPStatusError as e:
         raise FetchError(
-            f"HTTP {e.response.status_code}: {e.response.reason_phrase}"
+            f"HTTP {e.response.status_code} fetching dossier: {e.response.reason_phrase}"
         )
     except httpx.RequestError as e:
         raise FetchError(f"Request failed: {e}")

@@ -52,7 +52,12 @@ async def get_shared_client() -> httpx.AsyncClient:
 
 
 async def close_shared_client() -> None:
-    """Close the shared client. Call on application shutdown."""
+    """Close the shared client and release connection pool resources.
+
+    Call on application shutdown (e.g., FastAPI lifespan shutdown event).
+    Safe to call multiple times or when no client exists.
+    After closing, the next ``get_shared_client()`` call creates a new client.
+    """
     global _shared_client
     if _shared_client is not None and not _shared_client.is_closed:
         await _shared_client.aclose()
@@ -61,9 +66,13 @@ async def close_shared_client() -> None:
 
 
 async def reset_shared_client() -> None:
-    """Reset shared client for testing. Properly closes any open client.
+    """Async test reset: close the client and clear the singleton.
 
-    Guarded: only callable within a pytest session.
+    Properly calls ``aclose()`` on the existing client before clearing.
+    Use this in async test fixtures where ``await`` is available.
+
+    Raises:
+        AssertionError: If called outside a pytest session.
     """
     import sys
     assert "pytest" in sys.modules, "reset_shared_client() is for test use only"
@@ -74,11 +83,15 @@ async def reset_shared_client() -> None:
 
 
 def reset_shared_client_sync() -> None:
-    """Synchronous reset for test fixtures that cannot await.
+    """Sync test reset: clear the singleton without closing the client.
 
-    Sets the singleton to None without closing the client (the event loop
-    may differ between tests, making aclose() unsafe from a sync fixture).
-    Guarded: only callable within a pytest session.
+    For use in synchronous pytest fixtures (e.g., ``autouse=True`` fixtures
+    in ``conftest.py``) where ``await`` is not available. Does NOT call
+    ``aclose()`` because the event loop may differ between tests, making
+    async cleanup unsafe from a sync context.
+
+    Raises:
+        AssertionError: If called outside a pytest session.
     """
     import sys
     assert "pytest" in sys.modules, "reset_shared_client_sync() is for test use only"

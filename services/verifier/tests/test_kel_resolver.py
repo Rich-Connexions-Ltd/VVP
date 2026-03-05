@@ -543,3 +543,43 @@ class TestKeyStateDataclass:
         assert ks.valid_from == ts
         assert len(ks.witnesses) == 2
         assert ks.toad == 1
+
+
+class TestFreshnessWindowClamping:
+    """Test freshness window value clamping in get_cache()."""
+
+    def test_normal_value_not_clamped(self):
+        """Value within bounds (10-3600) is used as-is."""
+        reset_cache()
+        with patch("app.core.config.VVP_KEY_STATE_FRESHNESS_WINDOW_SECONDS", 120.0):
+            from app.vvp.keri.kel_resolver import get_cache
+            cache = get_cache()
+            assert cache._config.freshness_window_seconds == 120.0
+        reset_cache()
+
+    def test_below_minimum_clamped_to_10(self):
+        """Value below 10 is clamped to 10."""
+        reset_cache()
+        with patch("app.core.config.VVP_KEY_STATE_FRESHNESS_WINDOW_SECONDS", 2.0):
+            from app.vvp.keri.kel_resolver import get_cache
+            cache = get_cache()
+            assert cache._config.freshness_window_seconds == 10.0
+        reset_cache()
+
+    def test_above_maximum_clamped_to_3600(self):
+        """Value above 3600 is clamped to 3600."""
+        reset_cache()
+        with patch("app.core.config.VVP_KEY_STATE_FRESHNESS_WINDOW_SECONDS", 9999.0):
+            from app.vvp.keri.kel_resolver import get_cache
+            cache = get_cache()
+            assert cache._config.freshness_window_seconds == 3600.0
+        reset_cache()
+
+    def test_clamping_logs_warning(self):
+        """Clamped values produce a warning log."""
+        reset_cache()
+        with patch("app.core.config.VVP_KEY_STATE_FRESHNESS_WINDOW_SECONDS", 1.0):
+            from app.vvp.keri.kel_resolver import get_cache
+            cache = get_cache()
+            assert cache._config.freshness_window_seconds == 10.0
+        reset_cache()

@@ -366,30 +366,91 @@ class TestCacheKeyRotation:
 # =============================================================================
 
 class TestTimeIndexEviction:
-    """Test time-index cap enforcement."""
+    """Test time-index cap enforcement.
+
+    The time-index cap is a critical defense against memory exhaustion
+    via attacker-controlled timestamps. These tests verify:
+    - Cap is enforced (size never exceeds max_time_index_entries)
+    - Bulk eviction removes oldest half when cap is reached
+    - Cache still functions correctly after eviction
+    """
 
     @pytest.mark.asyncio
-    async def test_time_index_eviction_at_cap(self):
-        """Time index bulk evicts when reaching cap."""
+    async def test_time_index_enforced_at_cap(self):
+        """Time index size never exceeds max_time_index_entries."""
+        cap = 10
         cache = KeyStateCache(CacheConfig(
             ttl_seconds=300,
             max_entries=100,
-            freshness_window_seconds=3600.0,  # Long window so everything passes freshness
-            max_time_index_entries=10,  # Small cap for testing
+            freshness_window_seconds=3600.0,
+            max_time_index_entries=cap,
         ))
 
-        vf = datetime(2024, 1, 1)
+        vf = datetime(2024, 1, 1, tzinfo=timezone.utc)
         ks = make_ks(valid_from=vf)
         await cache.put(ks)
 
-        # Fill time index with range matches
-        for i in range(15):
-            rt = datetime(2024, 1, 1 + i, 12, 0, 0)
+        # Fill time index well beyond the cap
+        for i in range(25):
+            rt = datetime(2024, 2, 1 + i, tzinfo=timezone.utc)
             await cache.get_for_time(ks.aid, rt)
 
-        # Cache should still work (entries evicted but new ones added)
-        result = await cache.get_for_time(ks.aid, datetime(2024, 1, 20))
+        # Time index must never exceed the cap
+        assert len(cache._time_index) <= cap
+
+    @pytest.mark.asyncio
+    async def test_eviction_removes_oldest_half(self):
+        """Bulk eviction removes the oldest half of entries."""
+        cap = 10
+        cache = KeyStateCache(CacheConfig(
+            ttl_seconds=300,
+            max_entries=100,
+            freshness_window_seconds=3600.0,
+            max_time_index_entries=cap,
+        ))
+
+        vf = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        ks = make_ks(valid_from=vf)
+        await cache.put(ks)  # indexes (aid, vf)
+
+        # Add entries up to cap - 1 (put already added one)
+        for i in range(cap - 1):
+            rt = datetime(2024, 2, 1 + i, tzinfo=timezone.utc)
+            await cache.get_for_time(ks.aid, rt)
+
+        assert len(cache._time_index) == cap
+
+        # Next range query triggers eviction (cap reached → evict oldest half)
+        trigger_rt = datetime(2024, 6, 1, tzinfo=timezone.utc)
+        result = await cache.get_for_time(ks.aid, trigger_rt)
         assert result is not None
+
+        # After eviction: ~half removed + new entry added
+        assert len(cache._time_index) <= (cap // 2) + 2
+
+    @pytest.mark.asyncio
+    async def test_cache_functional_after_eviction(self):
+        """Cache still returns correct results after time-index eviction."""
+        cache = KeyStateCache(CacheConfig(
+            ttl_seconds=300,
+            max_entries=100,
+            freshness_window_seconds=3600.0,
+            max_time_index_entries=10,
+        ))
+
+        vf = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        ks = make_ks(valid_from=vf)
+        await cache.put(ks)
+
+        # Trigger multiple eviction cycles
+        for i in range(30):
+            rt = datetime(2024, 1, 1 + i, 12, 0, 0, tzinfo=timezone.utc)
+            await cache.get_for_time(ks.aid, rt)
+
+        # New queries still work
+        result = await cache.get_for_time(ks.aid, datetime(2024, 7, 1, tzinfo=timezone.utc))
+        assert result is not None
+        assert result.aid == ks.aid
 
 
 # =============================================================================

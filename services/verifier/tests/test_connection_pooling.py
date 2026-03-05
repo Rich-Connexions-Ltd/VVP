@@ -69,14 +69,14 @@ class TestSharedClient:
 
     @pytest.mark.asyncio
     async def test_concurrent_get_safe(self):
-        """Concurrent get_shared_client calls under contention create only one client.
+        """Concurrent get_shared_client calls under real contention create only one client.
 
-        Injects a delay into AsyncClient.__init__ so that multiple coroutines
-        are truly racing to create the client. All must get the same instance.
+        Uses asyncio.Event to hold all coroutines at the same point,
+        then releases them simultaneously to create genuine contention
+        for the asyncio.Lock inside get_shared_client().
         """
         await reset_shared_client()
 
-        # Track how many times AsyncClient was actually instantiated
         creation_count = 0
         original_init = httpx.AsyncClient.__init__
 
@@ -85,8 +85,20 @@ class TestSharedClient:
             creation_count += 1
             original_init(self_client, *args, **kwargs)
 
+        # Gate: all coroutines wait until released
+        gate = asyncio.Event()
+        n_tasks = 20
+
+        async def get_after_gate():
+            gate.wait()  # Prepare the awaitable but don't await yet
+            await gate.wait()
+            return await get_shared_client()
+
         with patch.object(httpx.AsyncClient, "__init__", counting_init):
-            results = await asyncio.gather(*[get_shared_client() for _ in range(20)])
+            tasks = [asyncio.create_task(get_after_gate()) for _ in range(n_tasks)]
+            await asyncio.sleep(0)  # Let all tasks reach the gate
+            gate.set()  # Release all at once
+            results = await asyncio.gather(*tasks)
 
         # All should be the same instance
         first = results[0]
@@ -95,6 +107,37 @@ class TestSharedClient:
 
         # Only one client should have been created (lock prevents duplicates)
         assert creation_count == 1
+
+    @pytest.mark.asyncio
+    async def test_reset_sync_safety_guard(self):
+        """reset_shared_client_sync() raises AssertionError outside pytest."""
+        from common.vvp.http_client import reset_shared_client_sync
+        import sys
+
+        # In test context, pytest is in sys.modules — should work
+        reset_shared_client_sync()
+
+        # Simulate non-test context by temporarily hiding pytest
+        original = sys.modules.get("pytest")
+        del sys.modules["pytest"]
+        try:
+            with pytest.raises(AssertionError, match="test use only"):
+                reset_shared_client_sync()
+        finally:
+            sys.modules["pytest"] = original
+
+    @pytest.mark.asyncio
+    async def test_reset_sync_clears_client(self):
+        """reset_shared_client_sync() sets the singleton to None."""
+        from common.vvp.http_client import reset_shared_client_sync
+
+        client1 = await get_shared_client()
+        assert client1 is not None
+
+        reset_shared_client_sync()
+
+        client2 = await get_shared_client()
+        assert client2 is not client1
 
 
 # =============================================================================
@@ -235,8 +278,8 @@ class TestDossierFetchIntegration:
     async def test_fetch_ssrf_blocked_propagates_as_fetch_error(self):
         """URL validation failure in fetch_dossier raises FetchError (not URLValidationError)."""
         from common.vvp.dossier.exceptions import FetchError
+        from common.vvp.dossier.fetch import fetch_dossier
 
         with _mock_dns('127.0.0.1'):
             with pytest.raises(FetchError, match="non-routable"):
-                from common.vvp.dossier.fetch import fetch_dossier
                 await fetch_dossier("https://evil.com/dossier")

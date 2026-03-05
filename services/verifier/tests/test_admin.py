@@ -71,7 +71,8 @@ class TestAdminEndpoint:
         policy = data["policy"]
         assert "dossier_fetch_timeout_seconds" in policy
         assert "dossier_max_size_bytes" in policy
-        assert "dossier_max_redirects" in policy
+        assert "follow_redirects" in policy
+        assert policy["follow_redirects"] is False
 
     def test_admin_features_config(self):
         """Admin endpoint returns feature flags."""

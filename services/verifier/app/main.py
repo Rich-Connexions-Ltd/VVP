@@ -258,7 +258,6 @@ def admin():
         ALLOW_PASSPORT_EXP_OMISSION,
         DOSSIER_FETCH_TIMEOUT_SECONDS,
         DOSSIER_MAX_SIZE_BYTES,
-        DOSSIER_MAX_REDIRECTS,
         TIER2_KEL_RESOLUTION_ENABLED,
         ADMIN_ENDPOINT_ENABLED,
         DOSSIER_CACHE_TTL_SECONDS,
@@ -289,7 +288,7 @@ def admin():
         "policy": {
             "dossier_fetch_timeout_seconds": DOSSIER_FETCH_TIMEOUT_SECONDS,
             "dossier_max_size_bytes": DOSSIER_MAX_SIZE_BYTES,
-            "dossier_max_redirects": DOSSIER_MAX_REDIRECTS,
+            "follow_redirects": False,  # Sprint 78: SSRF prevention
         },
         "features": {
             "tier2_kel_resolution_enabled": TIER2_KEL_RESOLUTION_ENABLED,

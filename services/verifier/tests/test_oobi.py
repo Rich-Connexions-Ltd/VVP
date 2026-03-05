@@ -196,13 +196,13 @@ class TestDereferenceOOBI:
     @pytest.mark.asyncio
     async def test_invalid_url_no_scheme(self):
         """Malformed URL (no scheme) raises ResolutionFailedError."""
-        with pytest.raises(ResolutionFailedError, match="Invalid OOBI URL"):
+        with pytest.raises(ResolutionFailedError, match="OOBI URL validation failed"):
             await dereference_oobi("example.com/oobi/EAID")
 
     @pytest.mark.asyncio
     async def test_invalid_url_no_netloc(self):
         """Malformed URL (no netloc) raises ResolutionFailedError."""
-        with pytest.raises(ResolutionFailedError, match="Invalid OOBI URL"):
+        with pytest.raises(ResolutionFailedError, match="OOBI URL validation failed"):
             await dereference_oobi("http:///oobi/EAID")
 
     @pytest.mark.asyncio
