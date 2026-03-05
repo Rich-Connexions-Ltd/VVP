@@ -70,6 +70,9 @@ _cache: Optional[KeyStateCache] = None
 def get_cache(config: Optional[CacheConfig] = None) -> KeyStateCache:
     """Get or create the global key state cache.
 
+    If no config is provided, reads VVP_KEY_STATE_FRESHNESS_WINDOW_SECONDS
+    from the environment (default 120s, clamped to 10-3600s).
+
     Args:
         config: Optional configuration for the cache.
 
@@ -78,6 +81,20 @@ def get_cache(config: Optional[CacheConfig] = None) -> KeyStateCache:
     """
     global _cache
     if _cache is None:
+        if config is None:
+            import logging
+            import os
+            _log = logging.getLogger(__name__)
+            raw_freshness = float(
+                os.getenv("VVP_KEY_STATE_FRESHNESS_WINDOW_SECONDS", "120")
+            )
+            freshness = max(10.0, min(3600.0, raw_freshness))
+            if freshness != raw_freshness:
+                _log.warning(
+                    f"VVP_KEY_STATE_FRESHNESS_WINDOW_SECONDS={raw_freshness} "
+                    f"clamped to {freshness} (bounds: 10-3600)"
+                )
+            config = CacheConfig(freshness_window_seconds=freshness)
         _cache = KeyStateCache(config)
     return _cache
 
@@ -162,8 +179,8 @@ async def resolve_key_state(
         strict_validation=not _allow_test_mode
     )
 
-    # Find key state at reference time T
-    key_state = _find_key_state_at_time(
+    # Find key state at reference time T (with valid_until for range-based caching)
+    key_state, valid_until = _find_key_state_at_time(
         aid=aid,
         events=events,
         reference_time=reference_time,
@@ -171,9 +188,14 @@ async def resolve_key_state(
         strict_validation=not _allow_test_mode  # Strict mode validates witness sigs (§7.3)
     )
 
-    # Cache the result with the query reference_time for future lookups
+    # Cache the result with range metadata for future lookups
     if cache:
-        await cache.put(key_state, reference_time=reference_time)
+        await cache.put(
+            key_state,
+            reference_time=reference_time,
+            valid_until=valid_until,
+            sequence=key_state.sequence,
+        )
 
     return key_state
 
@@ -224,7 +246,7 @@ async def resolve_key_state_with_kel(
     )
 
     # Find key state at reference time T
-    key_state = _find_key_state_at_time(
+    key_state, _valid_until = _find_key_state_at_time(
         aid=aid,
         events=events,
         reference_time=reference_time,
@@ -371,7 +393,7 @@ def _find_key_state_at_time(
     reference_time: datetime,
     min_witnesses: Optional[int],
     strict_validation: bool = False
-) -> KeyState:
+) -> tuple[KeyState, Optional[datetime]]:
     """Find the key state that was valid at reference time T.
 
     Walks the KEL chronologically and finds the last establishment event
@@ -385,7 +407,8 @@ def _find_key_state_at_time(
         strict_validation: If True, validates witness signatures (production).
 
     Returns:
-        KeyState representing keys valid at T.
+        Tuple of (KeyState, valid_until) where valid_until is the timestamp
+        of the next establishment event, or None if this is the most recent.
 
     Raises:
         KeyNotYetValidError: If T is before the first establishment event.
@@ -445,6 +468,13 @@ def _find_key_state_at_time(
     # Validate witness receipts (§7.3)
     _validate_witness_receipts(valid_event, min_witnesses, strict_validation)
 
+    # Determine valid_until from the next establishment event in the KEL
+    valid_until = None
+    valid_event_index = establishment_events.index(valid_event)
+    if valid_event_index + 1 < len(establishment_events):
+        next_event = establishment_events[valid_event_index + 1]
+        valid_until = _get_event_time(next_event)
+
     # Determine if this is a delegated identifier
     # Check the inception event for delegation status
     inception_event = establishment_events[0]
@@ -452,7 +482,7 @@ def _find_key_state_at_time(
     delegator_aid = inception_event.delegator_aid if is_delegated else None
 
     # Build KeyState
-    return KeyState(
+    key_state = KeyState(
         aid=aid,
         signing_keys=valid_event.signing_keys,
         sequence=valid_event.sequence,
@@ -465,6 +495,8 @@ def _find_key_state_at_time(
         inception_event=inception_event,
         delegation_chain=None  # Populated by caller if needed
     )
+
+    return key_state, valid_until
 
 
 def _normalize_datetime(dt: datetime) -> datetime:

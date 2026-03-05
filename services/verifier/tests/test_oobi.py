@@ -1,10 +1,14 @@
 """Tests for OOBI (Out-of-Band Introduction) dereferencing.
 
 Coverage target: app/vvp/keri/oobi.py (21% → 75%)
+
+Sprint 78: Updated to mock shared HTTP client (get_shared_client) and
+SSRF validation (validate_url_target) instead of per-request httpx.AsyncClient.
 """
 
 import json
 import pytest
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -88,19 +92,28 @@ def mock_httpx_response():
     return _create
 
 
-@pytest.fixture
-def mock_httpx_client(mock_httpx_response):
-    """Create a mock httpx.AsyncClient."""
-    def _create(response=None, side_effect=None):
-        mock_client = AsyncMock()
-        if side_effect:
-            mock_client.get = AsyncMock(side_effect=side_effect)
-        else:
-            mock_client.get = AsyncMock(return_value=response or mock_httpx_response())
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
-        return mock_client
-    return _create
+def _mock_oobi_context(mock_client):
+    """Create context managers for mocking OOBI HTTP calls.
+
+    Mocks both validate_url_target (async no-op) and get_shared_client
+    (returns mock_client).
+    """
+    async def _noop_validate(*args, **kwargs):
+        pass
+
+    return (
+        patch("common.vvp.url_validation.validate_url_target", new=_noop_validate),
+        patch("app.vvp.http_client.get_shared_client",
+              new=AsyncMock(return_value=mock_client)),
+    )
+
+
+@contextmanager
+def mock_oobi_http(mock_client):
+    """Context manager that mocks both URL validation and shared HTTP client."""
+    p1, p2 = _mock_oobi_context(mock_client)
+    with p1, p2:
+        yield
 
 
 # =============================================================================
@@ -112,13 +125,14 @@ class TestDereferenceOOBI:
     """Tests for main OOBI dereferencing function."""
 
     @pytest.mark.asyncio
-    async def test_valid_json_response(self, mock_httpx_client, mock_httpx_response, sample_icp_event):
+    async def test_valid_json_response(self, mock_httpx_response, sample_icp_event):
         """200 with application/json returns OOBIResult."""
         content = json.dumps(sample_icp_event).encode()
         response = mock_httpx_response(200, content, "application/json")
-        mock_client = mock_httpx_client(response)
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=response)
 
-        with patch("app.vvp.keri.oobi.httpx.AsyncClient", return_value=mock_client):
+        with mock_oobi_http(mock_client):
             result = await dereference_oobi("http://example.com/oobi/EBfxc4RiVY6saIFmUfEtETs1FcqmktZW88UlsMlymgo0")
 
         assert isinstance(result, OOBIResult)
@@ -127,50 +141,53 @@ class TestDereferenceOOBI:
         assert result.aid == "EBfxc4RiVY6saIFmUfEtETs1FcqmktZW88UlsMlymgo0"
 
     @pytest.mark.asyncio
-    async def test_valid_cesr_response(self, mock_httpx_client, mock_httpx_response):
+    async def test_valid_cesr_response(self, mock_httpx_response):
         """200 with application/json+cesr detected correctly."""
         content = b'{"t":"icp","d":"ESAID"}'
         response = mock_httpx_response(200, content, "application/json+cesr")
-        mock_client = mock_httpx_client(response)
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=response)
 
-        with patch("app.vvp.keri.oobi.httpx.AsyncClient", return_value=mock_client):
+        with mock_oobi_http(mock_client):
             result = await dereference_oobi("http://example.com/oobi/EAID123")
 
         assert result.content_type == CESR_CONTENT_TYPE
 
     @pytest.mark.asyncio
-    async def test_octet_stream_cesr_detection_dash(self, mock_httpx_client, mock_httpx_response):
+    async def test_octet_stream_cesr_detection_dash(self, mock_httpx_response):
         """Detect CESR from octet-stream by '-' first byte marker."""
-        # '-' (0x2D) is a CESR count code marker
         content = b'-VAi-HABEBfxc4RiVY6saIFmUfEtETs1FcqmktZW88UlsMlymgo0'
         response = mock_httpx_response(200, content, "application/octet-stream")
-        mock_client = mock_httpx_client(response)
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=response)
 
-        with patch("app.vvp.keri.oobi.httpx.AsyncClient", return_value=mock_client):
+        with mock_oobi_http(mock_client):
             result = await dereference_oobi("http://example.com/oobi/EAID123")
 
         assert result.content_type == CESR_CONTENT_TYPE
 
     @pytest.mark.asyncio
-    async def test_octet_stream_cesr_detection_zero(self, mock_httpx_client, mock_httpx_response):
+    async def test_octet_stream_cesr_detection_zero(self, mock_httpx_response):
         """Detect CESR from octet-stream by '0' first byte marker."""
         content = b'0AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
         response = mock_httpx_response(200, content, "application/octet-stream")
-        mock_client = mock_httpx_client(response)
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=response)
 
-        with patch("app.vvp.keri.oobi.httpx.AsyncClient", return_value=mock_client):
+        with mock_oobi_http(mock_client):
             result = await dereference_oobi("http://example.com/oobi/EAID123")
 
         assert result.content_type == CESR_CONTENT_TYPE
 
     @pytest.mark.asyncio
-    async def test_octet_stream_non_cesr_defaults_json(self, mock_httpx_client, mock_httpx_response):
+    async def test_octet_stream_non_cesr_defaults_json(self, mock_httpx_response):
         """Non-CESR octet-stream defaults to JSON content type."""
         content = b'{"regular": "json"}'
         response = mock_httpx_response(200, content, "application/octet-stream")
-        mock_client = mock_httpx_client(response)
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=response)
 
-        with patch("app.vvp.keri.oobi.httpx.AsyncClient", return_value=mock_client):
+        with mock_oobi_http(mock_client):
             result = await dereference_oobi("http://example.com/oobi/EAID123")
 
         # First byte is '{' (0x7B), not a CESR marker
@@ -189,112 +206,122 @@ class TestDereferenceOOBI:
             await dereference_oobi("http:///oobi/EAID")
 
     @pytest.mark.asyncio
-    async def test_http_404_raises(self, mock_httpx_client, mock_httpx_response):
+    async def test_http_404_raises(self, mock_httpx_response):
         """HTTP 404 raises ResolutionFailedError."""
         response = mock_httpx_response(404, b"Not Found")
-        mock_client = mock_httpx_client(response)
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=response)
 
-        with patch("app.vvp.keri.oobi.httpx.AsyncClient", return_value=mock_client):
+        with mock_oobi_http(mock_client):
             with pytest.raises(ResolutionFailedError, match="HTTP 404"):
                 await dereference_oobi("http://example.com/oobi/EAID123")
 
     @pytest.mark.asyncio
-    async def test_http_500_raises(self, mock_httpx_client, mock_httpx_response):
+    async def test_http_500_raises(self, mock_httpx_response):
         """HTTP 500 raises ResolutionFailedError."""
         response = mock_httpx_response(500, b"Server Error")
-        mock_client = mock_httpx_client(response)
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=response)
 
-        with patch("app.vvp.keri.oobi.httpx.AsyncClient", return_value=mock_client):
+        with mock_oobi_http(mock_client):
             with pytest.raises(ResolutionFailedError, match="HTTP 500"):
                 await dereference_oobi("http://example.com/oobi/EAID123")
 
     @pytest.mark.asyncio
-    async def test_timeout_raises(self, mock_httpx_client):
+    async def test_timeout_raises(self):
         """httpx.TimeoutException raises ResolutionFailedError."""
-        mock_client = mock_httpx_client(side_effect=httpx.TimeoutException("timeout"))
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=httpx.TimeoutException("timeout"))
 
-        with patch("app.vvp.keri.oobi.httpx.AsyncClient", return_value=mock_client):
+        with mock_oobi_http(mock_client):
             with pytest.raises(ResolutionFailedError, match="timeout"):
                 await dereference_oobi("http://example.com/oobi/EAID123")
 
     @pytest.mark.asyncio
-    async def test_network_error_raises(self, mock_httpx_client):
+    async def test_network_error_raises(self):
         """httpx.RequestError raises ResolutionFailedError."""
-        mock_client = mock_httpx_client(
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(
             side_effect=httpx.RequestError("Connection refused")
         )
 
-        with patch("app.vvp.keri.oobi.httpx.AsyncClient", return_value=mock_client):
+        with mock_oobi_http(mock_client):
             with pytest.raises(ResolutionFailedError, match="network error"):
                 await dereference_oobi("http://example.com/oobi/EAID123")
 
     @pytest.mark.asyncio
-    async def test_empty_response_raises(self, mock_httpx_client, mock_httpx_response):
+    async def test_empty_response_raises(self, mock_httpx_response):
         """Empty response body raises ResolutionFailedError."""
         response = mock_httpx_response(200, b"", "application/json")
-        mock_client = mock_httpx_client(response)
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=response)
 
-        with patch("app.vvp.keri.oobi.httpx.AsyncClient", return_value=mock_client):
+        with mock_oobi_http(mock_client):
             with pytest.raises(ResolutionFailedError, match="empty"):
                 await dereference_oobi("http://example.com/oobi/EAID123")
 
     @pytest.mark.asyncio
-    async def test_invalid_content_type_raises(self, mock_httpx_client, mock_httpx_response):
+    async def test_invalid_content_type_raises(self, mock_httpx_response):
         """Invalid content-type raises OOBIContentInvalidError."""
         response = mock_httpx_response(200, b"data", "application/xml")
-        mock_client = mock_httpx_client(response)
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=response)
 
-        with patch("app.vvp.keri.oobi.httpx.AsyncClient", return_value=mock_client):
+        with mock_oobi_http(mock_client):
             with pytest.raises(OOBIContentInvalidError, match="Invalid OOBI content type"):
                 await dereference_oobi("http://example.com/oobi/EAID123")
 
     @pytest.mark.asyncio
-    async def test_text_content_type_lenient(self, mock_httpx_client, mock_httpx_response):
+    async def test_text_content_type_lenient(self, mock_httpx_response):
         """text/* content-type is accepted (lenient mode)."""
         content = b'{"t":"icp"}'
         response = mock_httpx_response(200, content, "text/plain")
-        mock_client = mock_httpx_client(response)
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=response)
 
-        with patch("app.vvp.keri.oobi.httpx.AsyncClient", return_value=mock_client):
+        with mock_oobi_http(mock_client):
             result = await dereference_oobi("http://example.com/oobi/EAID123")
 
         # text/plain is accepted leniently
         assert result.kel_data == content
 
     @pytest.mark.asyncio
-    async def test_missing_content_type_lenient(self, mock_httpx_client):
+    async def test_missing_content_type_lenient(self):
         """Missing content-type header accepted with fallback to JSON."""
         response = MagicMock()
         response.status_code = 200
         response.content = b'{"t":"icp"}'
         response.headers = {}  # No content-type header
-        mock_client = mock_httpx_client(response)
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=response)
 
-        with patch("app.vvp.keri.oobi.httpx.AsyncClient", return_value=mock_client):
+        with mock_oobi_http(mock_client):
             result = await dereference_oobi("http://example.com/oobi/EAID123")
 
         # Default to JSON when no content-type
         assert result.content_type == JSON_CONTENT_TYPE
 
     @pytest.mark.asyncio
-    async def test_extracts_witnesses_from_json(self, mock_httpx_client, mock_httpx_response, sample_icp_event):
+    async def test_extracts_witnesses_from_json(self, mock_httpx_response, sample_icp_event):
         """Witnesses are extracted from JSON KEL response."""
         content = json.dumps(sample_icp_event).encode()
         response = mock_httpx_response(200, content, "application/json")
-        mock_client = mock_httpx_client(response)
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=response)
 
-        with patch("app.vvp.keri.oobi.httpx.AsyncClient", return_value=mock_client):
+        with mock_oobi_http(mock_client):
             result = await dereference_oobi("http://example.com/oobi/EAID123")
 
         assert "BBfxWitness1" in result.witnesses
         assert "BBfxWitness2" in result.witnesses
 
     @pytest.mark.asyncio
-    async def test_generic_exception_wrapped(self, mock_httpx_client):
+    async def test_generic_exception_wrapped(self):
         """Generic exceptions are wrapped in ResolutionFailedError."""
-        mock_client = mock_httpx_client(side_effect=RuntimeError("Unexpected"))
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=RuntimeError("Unexpected"))
 
-        with patch("app.vvp.keri.oobi.httpx.AsyncClient", return_value=mock_client):
+        with mock_oobi_http(mock_client):
             with pytest.raises(ResolutionFailedError, match="Unexpected"):
                 await dereference_oobi("http://example.com/oobi/EAID123")
 
@@ -469,13 +496,14 @@ class TestFetchKelFromWitnesses:
     """Tests for fetch_kel_from_witnesses function."""
 
     @pytest.mark.asyncio
-    async def test_single_witness_success(self, mock_httpx_client, mock_httpx_response, sample_icp_event):
+    async def test_single_witness_success(self, mock_httpx_response, sample_icp_event):
         """Single witness fetch succeeds."""
         content = json.dumps(sample_icp_event).encode()
         response = mock_httpx_response(200, content, "application/json")
-        mock_client = mock_httpx_client(response)
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=response)
 
-        with patch("app.vvp.keri.oobi.httpx.AsyncClient", return_value=mock_client):
+        with mock_oobi_http(mock_client):
             result = await fetch_kel_from_witnesses(
                 aid="EAID123",
                 witnesses=["http://witness1.example.com/oobi/EAID123"]
@@ -485,13 +513,14 @@ class TestFetchKelFromWitnesses:
         assert result.kel_data == content
 
     @pytest.mark.asyncio
-    async def test_multiple_witnesses_parallel(self, mock_httpx_client, mock_httpx_response, sample_icp_event):
+    async def test_multiple_witnesses_parallel(self, mock_httpx_response, sample_icp_event):
         """Parallel fetch from multiple witnesses."""
         content = json.dumps(sample_icp_event).encode()
         response = mock_httpx_response(200, content, "application/json")
-        mock_client = mock_httpx_client(response)
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=response)
 
-        with patch("app.vvp.keri.oobi.httpx.AsyncClient", return_value=mock_client):
+        with mock_oobi_http(mock_client):
             result = await fetch_kel_from_witnesses(
                 aid="EAID123",
                 witnesses=[
@@ -510,14 +539,15 @@ class TestFetchKelFromWitnesses:
             await fetch_kel_from_witnesses(aid="EAID123", witnesses=[])
 
     @pytest.mark.asyncio
-    async def test_insufficient_responses_raises(self, mock_httpx_client):
+    async def test_insufficient_responses_raises(self):
         """Less than min_responses raises ResolutionFailedError."""
         # All witnesses fail
-        mock_client = mock_httpx_client(
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(
             side_effect=httpx.TimeoutException("timeout")
         )
 
-        with patch("app.vvp.keri.oobi.httpx.AsyncClient", return_value=mock_client):
+        with mock_oobi_http(mock_client):
             with pytest.raises(ResolutionFailedError, match="Insufficient witness responses"):
                 await fetch_kel_from_witnesses(
                     aid="EAID123",
@@ -529,13 +559,14 @@ class TestFetchKelFromWitnesses:
                 )
 
     @pytest.mark.asyncio
-    async def test_error_collection_in_message(self, mock_httpx_client):
+    async def test_error_collection_in_message(self):
         """Failed fetches collected in error message."""
-        mock_client = mock_httpx_client(
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(
             side_effect=httpx.TimeoutException("connection timeout")
         )
 
-        with patch("app.vvp.keri.oobi.httpx.AsyncClient", return_value=mock_client):
+        with mock_oobi_http(mock_client):
             with pytest.raises(ResolutionFailedError) as exc_info:
                 await fetch_kel_from_witnesses(
                     aid="EAID123",
@@ -547,7 +578,7 @@ class TestFetchKelFromWitnesses:
         assert "Errors:" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_partial_success_meets_min_responses(self, mock_httpx_client, mock_httpx_response, sample_icp_event):
+    async def test_partial_success_meets_min_responses(self, mock_httpx_response, sample_icp_event):
         """Some witnesses fail but min_responses met."""
         content = json.dumps(sample_icp_event).encode()
         success_response = mock_httpx_response(200, content, "application/json")
@@ -563,10 +594,8 @@ class TestFetchKelFromWitnesses:
 
         mock_client = AsyncMock()
         mock_client.get = alternating_response
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
 
-        with patch("app.vvp.keri.oobi.httpx.AsyncClient", return_value=mock_client):
+        with mock_oobi_http(mock_client):
             result = await fetch_kel_from_witnesses(
                 aid="EAID123",
                 witnesses=[
@@ -594,12 +623,13 @@ class TestValidateOobiIsKel:
     """
 
     @pytest.mark.asyncio
-    async def test_valid_kel_returns_key_state(self, mock_httpx_client, mock_httpx_response, sample_icp_event):
+    async def test_valid_kel_returns_key_state(self, mock_httpx_response, sample_icp_event):
         """Valid KEL with ICP returns KeyState."""
         test_aid = "EBfxc4RiVY6saIFmUfEtETs1FcqmktZW88UlsMlymgo0"
         content = json.dumps(sample_icp_event).encode()
         response = mock_httpx_response(200, content, "application/json")
-        mock_client = mock_httpx_client(response)
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=response)
 
         # Mock the parser to return valid events
         mock_event = MagicMock()
@@ -617,7 +647,7 @@ class TestValidateOobiIsKel:
         from app.vvp.keri.kel_parser import EventType
         mock_event.event_type = EventType.ICP
 
-        with patch("app.vvp.keri.oobi.httpx.AsyncClient", return_value=mock_client), \
+        with mock_oobi_http(mock_client), \
              patch("app.vvp.keri.kel_parser.parse_kel_stream", return_value=[mock_event]) as mock_parse, \
              patch("app.vvp.keri.kel_parser.validate_kel_chain") as mock_validate:
 
@@ -633,68 +663,73 @@ class TestValidateOobiIsKel:
             assert result.sequence == 0
 
     @pytest.mark.asyncio
-    async def test_empty_kel_data_raises(self, mock_httpx_client, mock_httpx_response):
-        """Empty KEL data raises OOBIContentInvalidError."""
+    async def test_empty_kel_data_raises(self, mock_httpx_response):
+        """Empty KEL data raises ResolutionFailedError (empty body)."""
         response = mock_httpx_response(200, b"", "application/json")
-        mock_client = mock_httpx_client(response)
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=response)
 
-        with patch("app.vvp.keri.oobi.httpx.AsyncClient", return_value=mock_client):
+        with mock_oobi_http(mock_client):
             # This should raise due to empty response
             with pytest.raises(ResolutionFailedError, match="empty"):
                 await validate_oobi_is_kel("http://example.com/oobi/EAID")
 
     @pytest.mark.asyncio
-    async def test_parse_failure_raises(self, mock_httpx_client, mock_httpx_response):
+    async def test_parse_failure_raises(self, mock_httpx_response):
         """Parse failure raises OOBIContentInvalidError."""
         response = mock_httpx_response(200, b"invalid kel data", "application/json")
-        mock_client = mock_httpx_client(response)
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=response)
 
-        with patch("app.vvp.keri.oobi.httpx.AsyncClient", return_value=mock_client), \
+        with mock_oobi_http(mock_client), \
              patch("app.vvp.keri.kel_parser.parse_kel_stream", side_effect=ValueError("parse error")):
 
             with pytest.raises(OOBIContentInvalidError, match="Failed to parse KEL"):
                 await validate_oobi_is_kel("http://example.com/oobi/EAID")
 
     @pytest.mark.asyncio
-    async def test_no_events_raises(self, mock_httpx_client, mock_httpx_response):
+    async def test_no_events_raises(self, mock_httpx_response):
         """Empty events list raises OOBIContentInvalidError."""
         response = mock_httpx_response(200, b"[]", "application/json")
-        mock_client = mock_httpx_client(response)
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=response)
 
-        with patch("app.vvp.keri.oobi.httpx.AsyncClient", return_value=mock_client), \
+        with mock_oobi_http(mock_client), \
              patch("app.vvp.keri.kel_parser.parse_kel_stream", return_value=[]):
 
             with pytest.raises(OOBIContentInvalidError, match="no events"):
                 await validate_oobi_is_kel("http://example.com/oobi/EAID")
 
     @pytest.mark.asyncio
-    async def test_requires_inception_event(self, mock_httpx_client, mock_httpx_response):
+    async def test_requires_inception_event(self, mock_httpx_response):
         """Missing ICP/DIP as first event raises OOBIContentInvalidError."""
         response = mock_httpx_response(200, b'{"t":"ixn"}', "application/json")
-        mock_client = mock_httpx_client(response)
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=response)
 
         # Mock an ixn event as first event
         from app.vvp.keri.kel_parser import EventType
         mock_event = MagicMock()
         mock_event.event_type = EventType.IXN
 
-        with patch("app.vvp.keri.oobi.httpx.AsyncClient", return_value=mock_client), \
+        with mock_oobi_http(mock_client), \
              patch("app.vvp.keri.kel_parser.parse_kel_stream", return_value=[mock_event]):
 
             with pytest.raises(OOBIContentInvalidError, match="must start with inception"):
                 await validate_oobi_is_kel("http://example.com/oobi/EAID")
 
     @pytest.mark.asyncio
-    async def test_chain_validation_failure_raises(self, mock_httpx_client, mock_httpx_response):
+    async def test_chain_validation_failure_raises(self, mock_httpx_response):
         """Chain validation failure raises OOBIContentInvalidError."""
         response = mock_httpx_response(200, b'{"t":"icp"}', "application/json")
-        mock_client = mock_httpx_client(response)
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=response)
 
         from app.vvp.keri.kel_parser import EventType
         mock_event = MagicMock()
         mock_event.event_type = EventType.ICP
 
-        with patch("app.vvp.keri.oobi.httpx.AsyncClient", return_value=mock_client), \
+        with mock_oobi_http(mock_client), \
              patch("app.vvp.keri.kel_parser.parse_kel_stream", return_value=[mock_event]), \
              patch("app.vvp.keri.kel_parser.validate_kel_chain", side_effect=ValueError("chain broken")):
 
@@ -702,10 +737,11 @@ class TestValidateOobiIsKel:
                 await validate_oobi_is_kel("http://example.com/oobi/EAID")
 
     @pytest.mark.asyncio
-    async def test_no_establishment_event_raises(self, mock_httpx_client, mock_httpx_response):
+    async def test_no_establishment_event_raises(self, mock_httpx_response):
         """No establishment event found raises OOBIContentInvalidError."""
         response = mock_httpx_response(200, b'{"t":"icp"}', "application/json")
-        mock_client = mock_httpx_client(response)
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=response)
 
         # Mock event that passes inception check but is_establishment is False
         from app.vvp.keri.kel_parser import EventType
@@ -713,7 +749,7 @@ class TestValidateOobiIsKel:
         mock_event.event_type = EventType.ICP
         mock_event.is_establishment = False
 
-        with patch("app.vvp.keri.oobi.httpx.AsyncClient", return_value=mock_client), \
+        with mock_oobi_http(mock_client), \
              patch("app.vvp.keri.kel_parser.parse_kel_stream", return_value=[mock_event]), \
              patch("app.vvp.keri.kel_parser.validate_kel_chain"):
 
@@ -721,10 +757,11 @@ class TestValidateOobiIsKel:
                 await validate_oobi_is_kel("http://example.com/oobi/EAID")
 
     @pytest.mark.asyncio
-    async def test_multiple_events_finds_terminal(self, mock_httpx_client, mock_httpx_response):
+    async def test_multiple_events_finds_terminal(self, mock_httpx_response):
         """Multi-event KEL finds last establishment event."""
         response = mock_httpx_response(200, b'[{"t":"icp"},{"t":"rot"}]', "application/json")
-        mock_client = mock_httpx_client(response)
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=response)
 
         from app.vvp.keri.kel_parser import EventType
 
@@ -749,7 +786,7 @@ class TestValidateOobiIsKel:
         mock_rot.witnesses = ["BWit2"]
         mock_rot.toad = 1
 
-        with patch("app.vvp.keri.oobi.httpx.AsyncClient", return_value=mock_client), \
+        with mock_oobi_http(mock_client), \
              patch("app.vvp.keri.kel_parser.parse_kel_stream", return_value=[mock_icp, mock_rot]), \
              patch("app.vvp.keri.kel_parser.validate_kel_chain"):
 
@@ -761,10 +798,11 @@ class TestValidateOobiIsKel:
             assert result.witnesses == ["BWit2"]
 
     @pytest.mark.asyncio
-    async def test_delegated_inception_accepted(self, mock_httpx_client, mock_httpx_response):
+    async def test_delegated_inception_accepted(self, mock_httpx_response):
         """Delegated inception (dip) is accepted as valid inception."""
         response = mock_httpx_response(200, b'{"t":"dip"}', "application/json")
-        mock_client = mock_httpx_client(response)
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=response)
 
         from app.vvp.keri.kel_parser import EventType
 
@@ -778,7 +816,7 @@ class TestValidateOobiIsKel:
         mock_event.witnesses = []
         mock_event.toad = 0
 
-        with patch("app.vvp.keri.oobi.httpx.AsyncClient", return_value=mock_client), \
+        with mock_oobi_http(mock_client), \
              patch("app.vvp.keri.kel_parser.parse_kel_stream", return_value=[mock_event]), \
              patch("app.vvp.keri.kel_parser.validate_kel_chain"):
 

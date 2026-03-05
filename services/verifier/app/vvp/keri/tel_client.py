@@ -304,7 +304,7 @@ class TELClient:
             ]
 
             from app.vvp.http_client import get_shared_client
-            client = get_shared_client()
+            client = await get_shared_client()
             for endpoint in endpoints:
                 url = urljoin(base_url, endpoint)
                 log.info(f"    oobi_query: {url}")
@@ -358,7 +358,7 @@ class TELClient:
         """
         try:
             from app.vvp.http_client import get_shared_client
-            client = get_shared_client()
+            client = await get_shared_client()
             # Try Provenant-specific query endpoint first
             # Format: /query?typ=tel&vcid=<credential_said>
             provenant_url = f"{witness_url}/query?typ=tel&vcid={credential_said}"

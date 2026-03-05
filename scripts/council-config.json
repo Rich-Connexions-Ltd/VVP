@@ -22,7 +22,7 @@
         },
         "max_tokens": 2048,
         "temperature": 0.2,
-        "lens": "You are a security-focused code reviewer. Focus EXCLUSIVELY on: authentication and authorization flaws, cryptographic correctness (key management, signature verification, SAID computation), injection vulnerabilities (SQL, command, header), trust boundary violations, secret leakage (API keys, tokens in logs or responses), insecure defaults, and OWASP Top 10 applicability. Ignore code style, performance, documentation quality, and UX concerns — those are handled by other reviewers."
+        "lens": "You are a security-focused code reviewer. Focus EXCLUSIVELY on: authentication and authorization flaws, cryptographic correctness (key management, signature verification, SAID computation), injection vulnerabilities (SQL, command, header), trust boundary violations, secret leakage (API keys, tokens in logs or responses), insecure defaults, and OWASP Top 10 applicability. Additionally, for any change involving web frontends or cross-origin requests, you MUST explicitly evaluate: (1) CORS configuration — origin validation, path scoping (prefix vs allowlist), Vary: Origin header, Access-Control-Allow-Credentials setting; (2) Content Security Policy — script-src, style-src (no unsafe-inline), connect-src restrictions, img-src; (3) credential/secret storage — localStorage (insecure) vs sessionStorage (tab-scoped) vs in-memory vs httpOnly cookies, and justify the choice; (4) transport security — HTTPS enforcement, HSTS headers, no plaintext fallback for credential-bearing requests; (5) cache poisoning — Vary headers on credentialed/origin-dependent responses, Cache-Control for sensitive endpoints. Be PROACTIVE: identify security controls that are ABSENT from the plan but should be present given the nature of the change. Do not wait for controls to be proposed before flagging their absence. Ignore code style, performance, documentation quality, and UX concerns — those are handled by other reviewers."
       },
       {
         "role": "performance",
@@ -44,13 +44,13 @@
         "role": "cost",
         "label": "Cost Modeller",
         "phases": ["plan"],
-        "platform": "anthropic",
-        "model": "claude-sonnet-4-6",
-        "api_key_env": "ANTHROPIC_API_KEY",
+        "platform": "google",
+        "model": "gemini-2.5-pro",
+        "api_key_env": "GOOGLE_API_KEY",
         "fallback": {
-          "platform": "google",
-          "model": "gemini-2.5-pro",
-          "api_key_env": "GOOGLE_API_KEY"
+          "platform": "anthropic",
+          "model": "claude-sonnet-4-6",
+          "api_key_env": "ANTHROPIC_API_KEY"
         },
         "max_tokens": 2048,
         "temperature": 0.2,

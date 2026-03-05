@@ -75,9 +75,14 @@ class CacheConfig:
     Attributes:
         ttl_seconds: Time-to-live for cache entries (default 5 minutes per spec).
         max_entries: Maximum entries before LRU eviction.
+        freshness_window_seconds: Max age (seconds) for entries with valid_until=None
+            before forcing a re-fetch. Uses cached_at (immutable creation time).
+        max_time_index_entries: Max time index entries before bulk eviction.
     """
     ttl_seconds: int = 300  # 5 minutes default per §5C.2
     max_entries: int = 1000
+    freshness_window_seconds: float = 120.0  # Sprint 78: freshness guard
+    max_time_index_entries: int = 10_000  # Sprint 78: time-index cap
 
 
 @dataclass
@@ -88,10 +93,52 @@ class _CacheEntry:
         key_state: The cached KeyState.
         expires_at: Timestamp when this entry expires.
         last_access: Timestamp of last access (for LRU).
+        cached_at: Immutable creation timestamp (freshness guard uses this).
+        valid_until: Timestamp of next establishment event (None = most recent).
+        sequence: KEL sequence number for authoritative ordering.
     """
     key_state: "KeyState"
     expires_at: datetime
     last_access: datetime
+    cached_at: datetime  # Set once at creation — NOT updated on access
+    valid_until: Optional[datetime] = None
+    sequence: int = 0
+
+
+def _normalize_datetime(dt: datetime) -> datetime:
+    """Normalize datetime to UTC for comparison."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _entry_covers_time(
+    entry: _CacheEntry, rt: datetime, now: datetime, freshness_window_seconds: float
+) -> bool:
+    """Check if entry's validity window covers reference_time.
+
+    Module-level pure function — no access to cache state.
+    Takes freshness_window_seconds as explicit parameter.
+    """
+    ks = entry.key_state
+    if ks.valid_from is None:
+        return False
+    vf = _normalize_datetime(ks.valid_from)
+    if vf > rt:
+        return False  # Key state starts AFTER reference_time
+
+    if entry.valid_until is not None:
+        vu = _normalize_datetime(entry.valid_until)
+        if rt >= vu:
+            return False  # Superseded by rotation
+    else:
+        # Freshness guard for unbounded entries (no subsequent rotation known).
+        # Uses cached_at (immutable creation time), NOT last_access.
+        entry_age = (now - entry.cached_at).total_seconds()
+        if entry_age > freshness_window_seconds:
+            return False  # Stale — force re-fetch
+
+    return True
 
 
 class KeyStateCache:
@@ -165,8 +212,9 @@ class KeyStateCache:
     ) -> Optional["KeyState"]:
         """Get cached key state valid at a specific reference time.
 
-        This uses the secondary time index to find the establishment digest,
-        then looks up the full key state.
+        Strategy:
+        1. Exact match via time index — O(1)
+        2. Range scan via _range_match_locked() — O(N) where N ≈ 1-2
 
         Args:
             aid: The AID (Autonomic Identifier).
@@ -176,23 +224,85 @@ class KeyStateCache:
             KeyState if a cached entry covers this time, None otherwise.
         """
         async with self._lock:
-            time_key = (aid, reference_time)
-            digest = self._time_index.get(time_key)
+            now = datetime.now(timezone.utc)
 
-            if digest is None:
-                return None
+            # 1. Exact match (existing O(1) path)
+            result = self._exact_match_locked(aid, reference_time, now)
+            if result is not None:
+                return result
 
-            # Delegate to primary lookup (will check expiration)
-            # Release lock to avoid deadlock
-            pass
+            # 2. Range scan
+            result = self._range_match_locked(aid, reference_time, now)
+            if result is not None:
+                return result
 
-        # Call get() outside of lock (it acquires its own lock)
-        return await self.get(aid, digest)
+            self._metrics.misses += 1
+            return None
+
+    def _exact_match_locked(
+        self, aid: str, reference_time: datetime, now: datetime
+    ) -> Optional["KeyState"]:
+        """O(1) lookup in time index. Caller holds lock."""
+        digest = self._time_index.get((aid, reference_time))
+        if not digest:
+            return None
+        entry = self._entries.get((aid, digest))
+        if entry and entry.expires_at >= now:
+            self._touch_access_order((aid, digest))
+            entry.last_access = now
+            self._metrics.hits += 1
+            return entry.key_state
+        return None
+
+    def _range_match_locked(
+        self, aid: str, reference_time: datetime, now: datetime
+    ) -> Optional["KeyState"]:
+        """Scan entries for AID, find best match by validity window + sequence.
+
+        Caller holds lock.
+        """
+        rt = _normalize_datetime(reference_time)
+        best_entry = None
+        best_key = None
+        best_seq = -1
+
+        for key, entry in self._entries.items():
+            if key[0] != aid or entry.expires_at < now:
+                continue
+            if not _entry_covers_time(
+                entry, rt, now, self._config.freshness_window_seconds
+            ):
+                continue
+            if entry.sequence > best_seq:
+                best_entry = entry
+                best_key = key
+                best_seq = entry.sequence
+
+        if best_entry is None:
+            return None
+
+        self._touch_access_order(best_key)
+        best_entry.last_access = now
+        self._metrics.hits += 1
+
+        # Enforce time-index cap BEFORE inserting
+        if len(self._time_index) >= self._config.max_time_index_entries:
+            to_remove = list(self._time_index.keys())[
+                : len(self._time_index) // 2
+            ]
+            for k in to_remove:
+                del self._time_index[k]
+
+        # Index for future O(1) lookups
+        self._time_index[(aid, reference_time)] = best_key[1]
+        return best_entry.key_state
 
     async def put(
         self,
         key_state: "KeyState",
-        reference_time: Optional[datetime] = None
+        reference_time: Optional[datetime] = None,
+        valid_until: Optional[datetime] = None,
+        sequence: Optional[int] = None,
     ) -> None:
         """Store a resolved key state in the cache.
 
@@ -204,16 +314,21 @@ class KeyStateCache:
         Args:
             key_state: The resolved KeyState to cache.
             reference_time: Optional reference time to also index by.
+            valid_until: Timestamp of next establishment event (None = most recent).
+            sequence: KEL sequence number for authoritative ordering.
         """
         async with self._lock:
             now = datetime.now(timezone.utc)
             key = (key_state.aid, key_state.establishment_digest)
 
-            # Create entry
+            # Create entry with immutable cached_at
             entry = _CacheEntry(
                 key_state=key_state,
                 expires_at=now + timedelta(seconds=self._config.ttl_seconds),
-                last_access=now
+                last_access=now,
+                cached_at=now,
+                valid_until=valid_until,
+                sequence=sequence if sequence is not None else key_state.sequence,
             )
 
             # Check if we need to evict

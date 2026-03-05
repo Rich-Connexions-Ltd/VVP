@@ -529,7 +529,8 @@ IMPORTANT:
 - Be specific: cite file paths, line numbers (for code), or section names (for plans)
 - For each finding, explain WHAT is wrong AND HOW to fix it
 - Distinguish between genuine issues and stylistic preferences
-- If uncertain, note the uncertainty rather than asserting"""
+- If uncertain, note the uncertainty rather than asserting
+- Be EXHAUSTIVE in Round 1: list ALL concerns you can identify in a single pass, including missing controls and absent-but-expected safeguards. The goal is zero new findings from your area in R2+. Do not hold back findings — each additional review round costs time and money."""
 
     return system_prompt, user_prompt
 

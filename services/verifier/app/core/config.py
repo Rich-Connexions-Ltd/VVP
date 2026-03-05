@@ -95,6 +95,23 @@ TIER2_KEL_RESOLUTION_ENABLED: bool = os.getenv(
 ).lower() == "true"
 
 # =============================================================================
+# SPRINT 78: KEY STATE CACHE PERFORMANCE
+# =============================================================================
+# Freshness guard for range-based KeyStateCache.
+# Controls how long a cached key state with no known subsequent rotation
+# (valid_until=None) can be served before forcing an OOBI re-fetch.
+# Uses the entry's immutable creation timestamp (cached_at), NOT last_access.
+#
+# Bounds: min 10s (below this, cache provides negligible benefit),
+#         max 3600s (above this, rotated keys could be served too long).
+# Values outside bounds are clamped with a startup warning.
+
+VVP_KEY_STATE_FRESHNESS_WINDOW_SECONDS: float = float(
+    os.getenv("VVP_KEY_STATE_FRESHNESS_WINDOW_SECONDS", "120")
+)
+
+
+# =============================================================================
 # OPERATIONAL SETTINGS (deployment-specific, via environment variables)
 # =============================================================================
 

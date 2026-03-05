@@ -48,16 +48,20 @@ def reset_caches():
     """Reset all caches before each test to ensure isolation.
 
     This prevents cache hits from previous tests affecting subsequent tests.
-    Resets dossier cache, verification result cache, and revocation checker singletons.
+    Resets dossier cache, verification result cache, revocation checker singletons,
+    and the shared HTTP client (Sprint 78: prevents stale event-loop references).
     """
     from app.vvp.dossier.cache import reset_dossier_cache
     from app.vvp.verification_cache import reset_verification_cache
     from app.vvp.revocation_checker import reset_revocation_checker
+    import common.vvp.http_client as _http_client_mod
 
     reset_dossier_cache()
     reset_verification_cache()
     reset_revocation_checker()
+    _http_client_mod._shared_client = None
     yield
     reset_dossier_cache()
     reset_verification_cache()
     reset_revocation_checker()
+    _http_client_mod._shared_client = None

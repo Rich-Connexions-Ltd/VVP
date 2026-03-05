@@ -144,14 +144,29 @@ class TestCacheTimeIndex:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_get_for_time_different_time(self, cache):
-        """Get by time with different timestamp misses."""
+    async def test_get_for_time_range_match(self, cache):
+        """Range match: query at ts2 hits entry with valid_from=ts1 (no rotation)."""
         ts1 = datetime(2024, 1, 1, 12, 0, 0)
-        ts2 = datetime(2024, 1, 2, 12, 0, 0)  # Different time
+        ts2 = datetime(2024, 1, 2, 12, 0, 0)  # Within freshness window
         ks = make_key_state(valid_from=ts1)
 
         await cache.put(ks)
         result = await cache.get_for_time(ks.aid, ts2)
+
+        # Sprint 78: range-based cache — entry covers ts2 since no valid_until
+        # and entry was just cached (within freshness_window)
+        assert result is not None
+        assert result.establishment_digest == ks.establishment_digest
+
+    @pytest.mark.asyncio
+    async def test_get_for_time_before_valid_from_misses(self, cache):
+        """Query BEFORE valid_from misses — key wasn't established yet."""
+        ts1 = datetime(2024, 1, 2, 12, 0, 0)
+        ts_before = datetime(2024, 1, 1, 12, 0, 0)
+        ks = make_key_state(valid_from=ts1)
+
+        await cache.put(ks)
+        result = await cache.get_for_time(ks.aid, ts_before)
 
         assert result is None
 

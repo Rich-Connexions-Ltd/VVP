@@ -612,6 +612,18 @@ class TestErrorCodes:
 # =============================================================================
 
 
+def _mock_fetch_dossier_context(mock_client):
+    """Context manager stack that patches validate_url_target and get_shared_client for fetch_dossier tests."""
+
+    async def _noop_validate(*args, **kwargs):
+        pass
+
+    return (
+        patch("common.vvp.url_validation.validate_url_target", new=_noop_validate),
+        patch("common.vvp.http_client.get_shared_client", new=AsyncMock(return_value=mock_client)),
+    )
+
+
 class TestFetchDossier:
     """Tests for fetch_dossier function using mocks."""
 
@@ -623,15 +635,14 @@ class TestFetchDossier:
         mock_response = MagicMock()
         mock_response.headers = {"content-type": "application/json"}
         mock_response.content = json.dumps(VALID_ACDC).encode()
-        mock_response.raise_for_status = MagicMock()
+        mock_response.status_code = 200
 
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(return_value=mock_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
 
-        with patch("common.vvp.dossier.fetch.httpx.AsyncClient", return_value=mock_client):
-            content = await fetch_dossier("http://example.com/dossier")
+        p1, p2 = _mock_fetch_dossier_context(mock_client)
+        with p1, p2:
+            content = await fetch_dossier("https://example.com/dossier")
 
         assert content == json.dumps(VALID_ACDC).encode()
 
@@ -643,15 +654,14 @@ class TestFetchDossier:
         mock_response = MagicMock()
         mock_response.headers = {"content-type": "application/json+cesr"}
         mock_response.content = json.dumps(VALID_ACDC).encode()
-        mock_response.raise_for_status = MagicMock()
+        mock_response.status_code = 200
 
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(return_value=mock_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
 
-        with patch("common.vvp.dossier.fetch.httpx.AsyncClient", return_value=mock_client):
-            content = await fetch_dossier("http://example.com/dossier")
+        p1, p2 = _mock_fetch_dossier_context(mock_client)
+        with p1, p2:
+            content = await fetch_dossier("https://example.com/dossier")
 
         assert content == json.dumps(VALID_ACDC).encode()
 
@@ -663,16 +673,15 @@ class TestFetchDossier:
         mock_response = MagicMock()
         mock_response.headers = {"content-type": "text/html"}
         mock_response.content = b"<html>Not JSON</html>"
-        mock_response.raise_for_status = MagicMock()
+        mock_response.status_code = 200
 
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(return_value=mock_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
 
-        with patch("common.vvp.dossier.fetch.httpx.AsyncClient", return_value=mock_client):
+        p1, p2 = _mock_fetch_dossier_context(mock_client)
+        with p1, p2:
             with pytest.raises(FetchError) as exc:
-                await fetch_dossier("http://example.com/dossier")
+                await fetch_dossier("https://example.com/dossier")
             assert "content-type" in str(exc.value).lower()
 
     @pytest.mark.asyncio
@@ -682,28 +691,12 @@ class TestFetchDossier:
 
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
 
-        with patch("common.vvp.dossier.fetch.httpx.AsyncClient", return_value=mock_client):
+        p1, p2 = _mock_fetch_dossier_context(mock_client)
+        with p1, p2:
             with pytest.raises(FetchError) as exc:
-                await fetch_dossier("http://example.com/dossier")
+                await fetch_dossier("https://example.com/dossier")
             assert "Timeout" in str(exc.value)
-
-    @pytest.mark.asyncio
-    async def test_fetch_too_many_redirects_raises(self):
-        """Too many redirects raises FetchError."""
-        from app.vvp.dossier import fetch_dossier
-
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(side_effect=httpx.TooManyRedirects("Too many"))
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
-
-        with patch("common.vvp.dossier.fetch.httpx.AsyncClient", return_value=mock_client):
-            with pytest.raises(FetchError) as exc:
-                await fetch_dossier("http://example.com/dossier")
-            assert "redirect" in str(exc.value).lower()
 
     @pytest.mark.asyncio
     async def test_fetch_http_error_raises(self):
@@ -716,19 +709,11 @@ class TestFetchDossier:
 
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(return_value=mock_response)
-        mock_response.raise_for_status = MagicMock(
-            side_effect=httpx.HTTPStatusError(
-                "Not Found",
-                request=MagicMock(),
-                response=mock_response,
-            )
-        )
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
 
-        with patch("common.vvp.dossier.fetch.httpx.AsyncClient", return_value=mock_client):
+        p1, p2 = _mock_fetch_dossier_context(mock_client)
+        with p1, p2:
             with pytest.raises(FetchError) as exc:
-                await fetch_dossier("http://example.com/dossier")
+                await fetch_dossier("https://example.com/dossier")
             assert "404" in str(exc.value)
 
     @pytest.mark.asyncio
@@ -741,16 +726,15 @@ class TestFetchDossier:
         mock_response.headers = {"content-type": "application/json"}
         # Create content larger than limit
         mock_response.content = b"x" * (DOSSIER_MAX_SIZE_BYTES + 1)
-        mock_response.raise_for_status = MagicMock()
+        mock_response.status_code = 200
 
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(return_value=mock_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
 
-        with patch("common.vvp.dossier.fetch.httpx.AsyncClient", return_value=mock_client):
+        p1, p2 = _mock_fetch_dossier_context(mock_client)
+        with p1, p2:
             with pytest.raises(FetchError) as exc:
-                await fetch_dossier("http://example.com/dossier")
+                await fetch_dossier("https://example.com/dossier")
             assert "exceeds" in str(exc.value).lower()
 
 

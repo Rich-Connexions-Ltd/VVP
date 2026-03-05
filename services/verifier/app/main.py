@@ -40,6 +40,10 @@ async def lifespan(app):
         await checker.start()
         log.info("Background revocation checker started (lifespan)")
     yield
+    # Shutdown: close shared HTTP client
+    from app.vvp.http_client import close_shared_client
+    await close_shared_client()
+    log.info("Shared HTTP client closed (lifespan)")
     if VVP_VERIFICATION_CACHE_ENABLED:
         from app.vvp.revocation_checker import get_revocation_checker
         checker = get_revocation_checker()

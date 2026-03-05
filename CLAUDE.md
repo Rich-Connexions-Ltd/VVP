@@ -272,14 +272,19 @@ az vm run-command invoke --resource-group VVP --name vvp-pbx --command-id RunShe
 When the user says "Complete", immediately perform all of the following without asking for permission:
 
 1. **Update sprint status** - Update `SPRINTS.md` to reflect any work completed in the current sprint before committing.
-2. **Ensure all knowledge is up to date - 
-Update all knowledge files that have been affected by changes made in this Sprint
-3. **Archive sprint plan** - If this sprint had a plan file, run the archival script:
+2. **Ensure all knowledge is up to date** - Update all knowledge files that have been affected by changes made in this Sprint.
+3. **Council process retrospective** - If `FINDINGS_Sprint<N>.md` exists, review it to identify council process inefficiencies:
+   - Were findings drip-fed across rounds that should have been caught in R1? (Indicates a lens gap — update the relevant member's lens in `scripts/council-config.json`)
+   - Did a single expert area generate findings across 3+ rounds on the same topic? (Indicates the expert needs a more explicit checklist for that pattern)
+   - Did any expert repeatedly return UNAVAILABLE? (Indicates API contention — consider moving that member to a different platform)
+   - Were there findings that crossed expert boundaries? (e.g., Documentation expert finding security-relevant naming issues — indicates the primary expert's lens should be broadened)
+   - If improvements are identified, update `scripts/council-config.json` (lenses, model assignments) and/or `scripts/council-review.py` (prompt templates) and note the changes in the commit message.
+4. **Archive sprint plan** - If this sprint had a plan file, run the archival script:
    - `./scripts/archive-plan.sh <sprint-number> "<title>"`
    - This appends `PLAN_Sprint<N>.md` to `Documentation/PLAN_history.md`, archives it, and removes `REVIEW_Sprint<N>.md`
-4. **Commit all changes** - Stage all modified/new files and create a descriptive commit
-5. **Push to main** - Push the commit to the main branch
-6. **Monitor Azure deployment** - Use `gh run watch` to monitor the GitHub Actions workflow for successful deployment
+5. **Commit all changes** - Stage all modified/new files and create a descriptive commit
+6. **Push to main** - Push the commit to the main branch
+7. **Monitor Azure deployment** - Use `gh run watch` to monitor the GitHub Actions workflow for successful deployment
 
 Do not ask for confirmation - execute all steps automatically.
 

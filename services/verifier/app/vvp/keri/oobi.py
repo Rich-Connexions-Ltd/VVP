@@ -46,17 +46,16 @@ class OOBIResult:
 async def dereference_oobi(
     oobi_url: str,
     timeout: float = 5.0,
-    max_redirects: int = 3
 ) -> OOBIResult:
     """Dereference an OOBI URL to fetch KEL data.
 
-    Fetches the OOBI URL and extracts the Key Event Log for the AID.
-    Follows redirects up to max_redirects.
+    Uses shared HTTP client with connection pooling (Sprint 78).
+    SSRF validation blocks private/loopback/link-local IPs.
+    No redirects followed (follow_redirects=False on shared client).
 
     Args:
         oobi_url: The OOBI URL to dereference.
         timeout: Request timeout in seconds.
-        max_redirects: Maximum redirects to follow.
 
     Returns:
         OOBIResult containing the KEL data and metadata.
@@ -73,61 +72,64 @@ async def dereference_oobi(
     except Exception as e:
         raise ResolutionFailedError(f"Invalid OOBI URL: {e}")
 
+    # SSRF validation (allow http for local witnesses)
+    try:
+        from common.vvp.url_validation import validate_url_target
+        await validate_url_target(oobi_url, allow_http=True)
+    except Exception as e:
+        raise ResolutionFailedError(f"OOBI URL validation failed: {e}")
+
     # Extract AID from URL if present
-    # Common OOBI format: http://witness/oobi/{aid}/witness/{witness_aid}
     aid = _extract_aid_from_url(oobi_url)
 
     try:
-        async with httpx.AsyncClient(
-            timeout=timeout,
-            follow_redirects=True,
-            max_redirects=max_redirects
-        ) as client:
-            response = await client.get(oobi_url)
+        from app.vvp.http_client import get_shared_client
+        client = await get_shared_client()
+        response = await client.get(oobi_url, timeout=timeout)
 
-            # Check for HTTP errors
-            if response.status_code >= 400:
-                raise ResolutionFailedError(
-                    f"OOBI fetch failed: HTTP {response.status_code}"
+        # Check for HTTP errors (including 3xx since follow_redirects=False)
+        if response.status_code >= 300:
+            raise ResolutionFailedError(
+                f"OOBI fetch failed: HTTP {response.status_code}"
+            )
+
+        # Validate content type
+        content_type = response.headers.get("content-type", "").lower()
+
+        # Accept CESR (normative) or JSON (test fallback)
+        if CESR_CONTENT_TYPE.lower() not in content_type and \
+           JSON_CONTENT_TYPE.lower() not in content_type and \
+           "application/octet-stream" not in content_type:
+            # Be lenient - if no content type, try to parse anyway
+            if content_type and "text" not in content_type:
+                raise OOBIContentInvalidError(
+                    f"Invalid OOBI content type: {content_type}, "
+                    f"expected {CESR_CONTENT_TYPE} or {JSON_CONTENT_TYPE}"
                 )
 
-            # Validate content type
-            content_type = response.headers.get("content-type", "").lower()
+        kel_data = response.content
 
-            # Accept CESR (normative) or JSON (test fallback)
-            if CESR_CONTENT_TYPE.lower() not in content_type and \
-               JSON_CONTENT_TYPE.lower() not in content_type and \
-               "application/octet-stream" not in content_type:
-                # Be lenient - if no content type, try to parse anyway
-                if content_type and "text" not in content_type:
-                    raise OOBIContentInvalidError(
-                        f"Invalid OOBI content type: {content_type}, "
-                        f"expected {CESR_CONTENT_TYPE} or {JSON_CONTENT_TYPE}"
-                    )
+        if not kel_data:
+            raise ResolutionFailedError("OOBI response is empty")
 
-            kel_data = response.content
+        # Extract witnesses from response if available
+        witnesses = _extract_witnesses(kel_data, aid)
 
-            if not kel_data:
-                raise ResolutionFailedError("OOBI response is empty")
-
-            # Extract witnesses from response if available
-            witnesses = _extract_witnesses(kel_data, aid)
-
-            # Determine content type for routing
-            detected_content_type = JSON_CONTENT_TYPE  # Default
-            if CESR_CONTENT_TYPE.lower() in content_type:
+        # Determine content type for routing
+        detected_content_type = JSON_CONTENT_TYPE  # Default
+        if CESR_CONTENT_TYPE.lower() in content_type:
+            detected_content_type = CESR_CONTENT_TYPE
+        elif "application/octet-stream" in content_type:
+            # Might be CESR binary - check for CESR markers
+            if kel_data and kel_data[0:1] in (b"-", b"0", b"1", b"4", b"5", b"6"):
                 detected_content_type = CESR_CONTENT_TYPE
-            elif "application/octet-stream" in content_type:
-                # Might be CESR binary - check for CESR markers
-                if kel_data and kel_data[0:1] in (b"-", b"0", b"1", b"4", b"5", b"6"):
-                    detected_content_type = CESR_CONTENT_TYPE
 
-            return OOBIResult(
-                aid=aid,
-                kel_data=kel_data,
-                witnesses=witnesses,
-                content_type=detected_content_type
-            )
+        return OOBIResult(
+            aid=aid,
+            kel_data=kel_data,
+            witnesses=witnesses,
+            content_type=detected_content_type
+        )
 
     except httpx.TimeoutException:
         raise ResolutionFailedError(f"OOBI fetch timeout after {timeout}s")

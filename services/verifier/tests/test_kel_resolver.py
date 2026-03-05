@@ -116,7 +116,7 @@ class TestFindKeyStateAtTime:
             make_kel_event(EventType.ICP, 0, pk, timestamp=inception_time),
         ]
 
-        key_state = _find_key_state_at_time(
+        key_state, _valid_until = _find_key_state_at_time(
             aid="BAID",
             events=events,
             reference_time=reference_time,
@@ -141,7 +141,7 @@ class TestFindKeyStateAtTime:
                           timestamp=rotation_time),
         ]
 
-        key_state = _find_key_state_at_time(
+        key_state, _valid_until = _find_key_state_at_time(
             aid="BAID",
             events=events,
             reference_time=reference_time,
@@ -167,7 +167,7 @@ class TestFindKeyStateAtTime:
                           timestamp=rotation_time),
         ]
 
-        key_state = _find_key_state_at_time(
+        key_state, _valid_until = _find_key_state_at_time(
             aid="BAID",
             events=events,
             reference_time=reference_time,
@@ -197,7 +197,7 @@ class TestFindKeyStateAtTime:
                           timestamp=rot2_time),
         ]
 
-        key_state = _find_key_state_at_time(
+        key_state, _valid_until = _find_key_state_at_time(
             aid="BAID",
             events=events,
             reference_time=reference_time,
@@ -256,7 +256,7 @@ class TestFindKeyStateAtTime:
         ]
 
         # Inception without timestamp is allowed (no rotations to be uncertain about)
-        key_state = _find_key_state_at_time(
+        key_state, _valid_until = _find_key_state_at_time(
             aid="BAID",
             events=events,
             reference_time=datetime(2024, 1, 15),
@@ -287,7 +287,7 @@ class TestFindKeyStateAtTime:
 
         events = [icp_event, rot_event]
 
-        key_state = _find_key_state_at_time(
+        key_state, _valid_until = _find_key_state_at_time(
             aid="BAID",
             events=events,
             reference_time=reference_time,
@@ -331,7 +331,7 @@ class TestWitnessValidation:
         events = [event]
 
         # Should not raise
-        key_state = _find_key_state_at_time(
+        key_state, _valid_until = _find_key_state_at_time(
             aid="BAID",
             events=events,
             reference_time=datetime(2024, 1, 15),
@@ -352,7 +352,7 @@ class TestWitnessValidation:
         events = [event]
 
         # Override with min_witnesses=1
-        key_state = _find_key_state_at_time(
+        key_state, _valid_until = _find_key_state_at_time(
             aid="BAID",
             events=events,
             reference_time=datetime(2024, 1, 15),

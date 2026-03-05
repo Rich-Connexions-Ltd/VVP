@@ -79,14 +79,19 @@ class VectorRunner:
 
             return response
 
-        # AsyncMock for proper async context manager behavior
+        # Mock shared HTTP client to return mock responses
         mock_client = MagicMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
         mock_client.get = mock_get
 
+        async def _noop_validate(*args, **kwargs):
+            pass
+
         stack.enter_context(
-            patch("common.vvp.dossier.fetch.httpx.AsyncClient", return_value=mock_client)
+            patch("common.vvp.url_validation.validate_url_target", new=_noop_validate)
+        )
+        stack.enter_context(
+            patch("common.vvp.http_client.get_shared_client",
+                  new=AsyncMock(return_value=mock_client))
         )
 
         # 3. Mock TEL client to return ACTIVE for all credentials by default
