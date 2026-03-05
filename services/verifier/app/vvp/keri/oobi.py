@@ -74,9 +74,9 @@ async def dereference_oobi(
 
     # SSRF validation (allow http for local witnesses)
     try:
-        from common.vvp.url_validation import validate_url_target
+        from common.vvp.url_validation import URLValidationError, validate_url_target
         await validate_url_target(oobi_url, allow_http=True)
-    except Exception as e:
+    except URLValidationError as e:
         raise ResolutionFailedError(f"OOBI URL validation failed: {e}")
 
     # Extract AID from URL if present

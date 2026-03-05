@@ -1,13 +1,25 @@
-"""Key state cache for KERI resolution.
+"""Range-based key state cache for KERI resolution.
 
 Per spec §5C.2: "Key state cache: AID + timestamp → Minutes (rotation-sensitive)"
 
-The cache uses a two-level keying strategy:
-- Primary key: (AID, establishment_event_digest) - stable across time queries
-- Secondary index: (AID, reference_time) → establishment_digest for time-based lookups
+Sprint 78: Upgraded from exact-timestamp matching to range-based matching.
+Each cached entry covers a validity window [valid_from, valid_until), where:
+- valid_from: timestamp of this establishment event
+- valid_until: timestamp of the next establishment event (None = most recent)
 
-This avoids timestamp rounding issues and ensures cache hits return the exact
-key state that was valid at the queried time.
+Lookup strategy:
+1. Exact match via time index — O(1)
+2. Range scan over entries for the AID — O(N) where N ≈ 1-2 per AID
+3. Higher KEL sequence number wins when multiple entries cover the same time
+
+Freshness guard: Entries with valid_until=None (most recent key state, no known
+rotation) are served only while their immutable cached_at timestamp is within
+the configurable freshness_window_seconds (default 120s). After expiry, an OOBI
+re-fetch is forced to detect any rotations that occurred since caching.
+
+Time-index cap: A secondary index maps (AID, reference_time) → digest for O(1)
+repeat lookups. Capped at max_time_index_entries (default 10,000) with bulk
+eviction of the oldest half when exceeded.
 """
 
 import asyncio
@@ -142,14 +154,20 @@ def _entry_covers_time(
 
 
 class KeyStateCache:
-    """Thread-safe cache for resolved key states.
+    """Thread-safe, range-based cache for resolved key states.
 
     Supports lookup by:
     1. (AID, establishment_digest) - exact match for a specific key state
-    2. (AID, reference_time) - find key state valid at a given time
+    2. (AID, reference_time) - range-based: find key state whose validity
+       window [valid_from, valid_until) covers the reference time
 
-    The cache is designed for async access patterns typical in verification
-    workloads where multiple PASSporTs may reference the same AID.
+    Range matching uses _entry_covers_time() (module-level pure function)
+    to check validity windows and freshness. Higher KEL sequence numbers
+    win tie-breaks. Successful range matches are indexed in _time_index
+    for O(1) repeat lookups.
+
+    The time index is capped at max_time_index_entries to prevent unbounded
+    memory growth from attacker-controlled timestamps.
     """
 
     def __init__(self, config: Optional[CacheConfig] = None):
@@ -285,13 +303,8 @@ class KeyStateCache:
         best_entry.last_access = now
         self._metrics.hits += 1
 
-        # Enforce time-index cap BEFORE inserting
-        if len(self._time_index) >= self._config.max_time_index_entries:
-            to_remove = list(self._time_index.keys())[
-                : len(self._time_index) // 2
-            ]
-            for k in to_remove:
-                del self._time_index[k]
+        # Enforce time-index cap before inserting
+        self._enforce_time_index_cap()
 
         # Index for future O(1) lookups
         self._time_index[(aid, reference_time)] = best_key[1]
@@ -339,6 +352,9 @@ class KeyStateCache:
             self._entries[key] = entry
             self._touch_access_order(key)
 
+            # Enforce time-index cap before adding new entries
+            self._enforce_time_index_cap()
+
             # Store in secondary time index if valid_from is set
             if key_state.valid_from:
                 time_key = (key_state.aid, key_state.valid_from)
@@ -384,6 +400,15 @@ class KeyStateCache:
                 log.info(f"KeyState cache invalidated {count} entries for AID: {aid[:20]}...")
 
             return count
+
+    def _enforce_time_index_cap(self) -> None:
+        """Evict oldest half of time index if at or over cap. Caller holds lock."""
+        if len(self._time_index) >= self._config.max_time_index_entries:
+            to_remove = list(self._time_index.keys())[
+                : len(self._time_index) // 2
+            ]
+            for k in to_remove:
+                del self._time_index[k]
 
     def _remove_entry(self, key: Tuple[str, str]) -> None:
         """Remove entry from all indexes (caller must hold lock)."""

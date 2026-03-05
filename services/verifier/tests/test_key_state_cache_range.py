@@ -264,6 +264,102 @@ class TestRangeBasedCache:
         assert result2 is not None
         assert cache.metrics().hits == 2
 
+    @pytest.mark.asyncio
+    async def test_range_scan_verified_not_exact_match(self, cache):
+        """Range scan path is actually exercised (not just exact match).
+
+        Verifies that querying a time NOT in the time index triggers
+        the range scan code path (_range_match_locked), not just the
+        O(1) exact match path.
+        """
+        vf = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        ks = make_ks(valid_from=vf)
+        await cache.put(ks)
+
+        # Query a time that is NOT indexed (different from valid_from)
+        rt = datetime(2024, 6, 15, tzinfo=timezone.utc)
+
+        # Before query: time index has only (AID, valid_from)
+        assert (ks.aid, rt) not in cache._time_index
+
+        result = await cache.get_for_time(ks.aid, rt)
+        assert result is not None
+        assert result.aid == ks.aid
+
+        # After range match: the queried time is now indexed for future O(1)
+        assert (ks.aid, rt) in cache._time_index
+
+
+# =============================================================================
+# E2E cache + key rotation regression test
+# =============================================================================
+
+
+class TestCacheKeyRotation:
+    """End-to-end test: cache correctly handles key rotation events.
+
+    This validates the core invariant of the range-based cache:
+    after a rotation, queries before the rotation return the OLD key,
+    and queries after return the NEW key.
+    """
+
+    @pytest.mark.asyncio
+    async def test_rotation_splits_cache_correctly(self):
+        """Rotation creates two cache entries with correct validity windows."""
+        cache = KeyStateCache(CacheConfig(
+            ttl_seconds=300,
+            max_entries=100,
+            freshness_window_seconds=3600.0,  # Long window
+        ))
+
+        inception_time = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        rotation_time = datetime(2024, 6, 1, tzinfo=timezone.utc)
+
+        # Simulate caching pre-rotation key state (valid_until = rotation_time)
+        ks_old = make_ks(
+            seq=0, digest="D_INCEPTION",
+            valid_from=inception_time,
+        )
+        await cache.put(ks_old, valid_until=rotation_time, sequence=0)
+
+        # Simulate caching post-rotation key state (valid_until = None, most recent)
+        ks_new = make_ks(
+            seq=1, digest="D_ROTATION",
+            valid_from=rotation_time,
+        )
+        await cache.put(ks_new, valid_until=None, sequence=1)
+
+        # Query BEFORE rotation → should return OLD key
+        rt_before = datetime(2024, 3, 1, tzinfo=timezone.utc)
+        result_before = await cache.get_for_time(ks_old.aid, rt_before)
+        assert result_before is not None
+        assert result_before.sequence == 0
+        assert result_before.establishment_digest == "D_INCEPTION"
+
+        # Query AFTER rotation → should return NEW key
+        rt_after = datetime(2024, 9, 1, tzinfo=timezone.utc)
+        result_after = await cache.get_for_time(ks_old.aid, rt_after)
+        assert result_after is not None
+        assert result_after.sequence == 1
+        assert result_after.establishment_digest == "D_ROTATION"
+
+        # Query AT rotation boundary → should return NEW key (exclusive boundary)
+        result_boundary = await cache.get_for_time(ks_old.aid, rotation_time)
+        assert result_boundary is not None
+        assert result_boundary.sequence == 1
+
+    @pytest.mark.asyncio
+    async def test_before_inception_returns_none(self):
+        """Query before inception returns None (no key existed yet)."""
+        cache = KeyStateCache(CacheConfig(freshness_window_seconds=3600.0))
+
+        inception_time = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        ks = make_ks(valid_from=inception_time)
+        await cache.put(ks)
+
+        before = datetime(2023, 12, 1, tzinfo=timezone.utc)
+        assert await cache.get_for_time(ks.aid, before) is None
+
 
 # =============================================================================
 # Time-index eviction tests

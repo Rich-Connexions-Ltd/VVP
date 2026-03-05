@@ -265,6 +265,82 @@ class TestFindKeyStateAtTime:
 
         assert key_state.signing_keys == [pk1]
 
+    def test_valid_until_none_when_no_subsequent_rotation(self):
+        """valid_until is None when there's no rotation after the valid event."""
+        pk, _ = generate_keypair()
+        inception_time = datetime(2024, 1, 1, 12, 0, 0)
+        reference_time = datetime(2024, 1, 15, 12, 0, 0)
+
+        events = [
+            make_kel_event(EventType.ICP, 0, pk, timestamp=inception_time),
+        ]
+
+        _key_state, valid_until = _find_key_state_at_time(
+            aid="BAID",
+            events=events,
+            reference_time=reference_time,
+            min_witnesses=0
+        )
+
+        # No subsequent rotation → valid_until is None (most recent key)
+        assert valid_until is None
+
+    def test_valid_until_set_to_next_rotation_time(self):
+        """valid_until is set to the timestamp of the next establishment event."""
+        pk1, _ = generate_keypair()
+        pk2, _ = generate_keypair()
+
+        inception_time = datetime(2024, 1, 1)
+        rotation_time = datetime(2024, 1, 20)
+        reference_time = datetime(2024, 1, 15)  # Before rotation
+
+        events = [
+            make_kel_event(EventType.ICP, 0, pk1, digest="D0", timestamp=inception_time),
+            make_kel_event(EventType.ROT, 1, pk2, digest="D1", prior_digest="D0",
+                          timestamp=rotation_time),
+        ]
+
+        key_state, valid_until = _find_key_state_at_time(
+            aid="BAID",
+            events=events,
+            reference_time=reference_time,
+            min_witnesses=0
+        )
+
+        # valid event is inception (pk1), next event is rotation at rotation_time
+        assert key_state.signing_keys == [pk1]
+        assert valid_until == rotation_time
+
+    def test_valid_until_correct_with_multiple_rotations(self):
+        """valid_until points to the NEXT rotation, not the last one."""
+        pk1, _ = generate_keypair()
+        pk2, _ = generate_keypair()
+        pk3, _ = generate_keypair()
+
+        inception_time = datetime(2024, 1, 1)
+        rot1_time = datetime(2024, 1, 10)
+        rot2_time = datetime(2024, 1, 20)
+        reference_time = datetime(2024, 1, 15)  # Between rot1 and rot2
+
+        events = [
+            make_kel_event(EventType.ICP, 0, pk1, digest="D0", timestamp=inception_time),
+            make_kel_event(EventType.ROT, 1, pk2, digest="D1", prior_digest="D0",
+                          timestamp=rot1_time),
+            make_kel_event(EventType.ROT, 2, pk3, digest="D2", prior_digest="D1",
+                          timestamp=rot2_time),
+        ]
+
+        key_state, valid_until = _find_key_state_at_time(
+            aid="BAID",
+            events=events,
+            reference_time=reference_time,
+            min_witnesses=0
+        )
+
+        # valid event is rot1 (pk2), next event is rot2
+        assert key_state.signing_keys == [pk2]
+        assert valid_until == rot2_time
+
     def test_witness_receipt_timestamp_used(self):
         """Event time can come from witness receipts."""
         pk1, _ = generate_keypair()

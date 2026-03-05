@@ -13,7 +13,6 @@ import httpx
 
 from .config import (
     DOSSIER_FETCH_TIMEOUT_SECONDS,
-    DOSSIER_MAX_REDIRECTS,
     DOSSIER_MAX_SIZE_BYTES,
 )
 from .exceptions import FetchError
@@ -51,8 +50,11 @@ async def fetch_dossier(url: str) -> bytes:
         FetchError: On network/timeout/size/SSRF errors (recoverable → INDETERMINATE)
     """
     # SSRF validation: scheme + DNS + IP range checks
-    from common.vvp.url_validation import validate_url_target
-    await validate_url_target(url, allow_http=False)
+    from common.vvp.url_validation import URLValidationError, validate_url_target
+    try:
+        await validate_url_target(url, allow_http=False)
+    except URLValidationError as e:
+        raise FetchError(str(e))
 
     try:
         from common.vvp.http_client import get_shared_client

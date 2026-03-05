@@ -1,5 +1,46 @@
 # VVP Verifier Change Log
 
+## Sprint 78: Verifier SIP Call Performance
+
+**Date:** 2026-03-05
+**Status:** Complete
+
+### Summary
+
+Optimized verifier SIP call performance to reduce second-call latency by 50%+. Two core changes: (1) Range-based `KeyStateCache` replaces exact-timestamp matching — cached entries cover `[valid_from, valid_until)` validity windows, enabling cache hits for any reference time within the window rather than requiring exact timestamp matches. (2) Shared `httpx.AsyncClient` with connection pooling replaces per-request client construction in OOBI fetch and dossier fetch. SSRF prevention via new `url_validation` module (async DNS + IP range blocking + `follow_redirects=False`).
+
+### Key Changes
+
+- **Range-based cache**: `_entry_covers_time()` pure function checks validity windows. Freshness guard for unbounded entries (configurable via `VVP_KEY_STATE_FRESHNESS_WINDOW_SECONDS`, default 120s, bounds 10-3600s). KEL sequence number tie-breaking. Time-index cap (10,000) with bulk eviction.
+- **Shared HTTP client**: Singleton `httpx.AsyncClient` in `common/common/vvp/http_client.py` with `asyncio.Lock` for safe lazy init. `follow_redirects=False` prevents SSRF via DNS rebinding.
+- **SSRF validation**: New `common/common/vvp/url_validation.py` — async DNS via `loop.getaddrinfo()`, blocks private/loopback/link-local/reserved IPs (including cloud metadata `169.254.169.254` and IPv6 `::1`). Domain-agnostic `URLValidationError` exception.
+- **`_find_key_state_at_time`** now returns `tuple[KeyState, Optional[datetime]]` with `valid_until` from next KEL establishment event.
+- **Config single source of truth**: `VVP_KEY_STATE_FRESHNESS_WINDOW_SECONDS` defined in `config.py`, consumed by `kel_resolver.py:get_cache()`.
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `common/common/vvp/url_validation.py` | New: SSRF validation (URLValidationError, validate_url_target) |
+| `common/common/vvp/http_client.py` | New: Shared httpx.AsyncClient lifecycle (get/close/reset/reset_sync) |
+| `services/verifier/app/vvp/http_client.py` | Re-export from common |
+| `services/verifier/app/vvp/keri/cache.py` | Range-based cache with freshness guard, time-index cap |
+| `services/verifier/app/vvp/keri/kel_resolver.py` | Returns (KeyState, valid_until) tuple; config from app.core.config |
+| `services/verifier/app/vvp/keri/oobi.py` | Shared client + SSRF validation |
+| `common/common/vvp/dossier/fetch.py` | Shared client + SSRF validation; removed dead DOSSIER_MAX_REDIRECTS import |
+| `services/verifier/app/core/config.py` | Added VVP_KEY_STATE_FRESHNESS_WINDOW_SECONDS |
+| `services/verifier/app/main.py` | Shutdown close_shared_client() |
+| `services/verifier/app/vvp/keri/tel_client.py` | await get_shared_client() fix |
+| `services/verifier/tests/conftest.py` | Use reset_shared_client_sync() public API |
+| `services/verifier/tests/test_oobi.py` | Rewritten for shared client mocking |
+| `services/verifier/tests/test_kel_cache.py` | Range match + range scan assertions |
+| `services/verifier/tests/test_kel_resolver.py` | Tuple unpack + valid_until tests |
+| `services/verifier/tests/test_key_state_cache_range.py` | New: 24 tests (pure function, range, rotation, eviction) |
+| `services/verifier/tests/test_connection_pooling.py` | New: 18 tests (client, SSRF IPv4/IPv6/metadata, integration) |
+| `services/verifier/tests/vectors/runner.py` | Updated mock pattern |
+| `knowledge/verification-pipeline.md` | Phase 4 updated with range-based cache details |
+| `knowledge/deployment.md` | Added VVP_KEY_STATE_FRESHNESS_WINDOW_SECONDS documentation |
+
 ## Sprint 77: PBX Portal Migration
 
 **Date:** 2026-03-05

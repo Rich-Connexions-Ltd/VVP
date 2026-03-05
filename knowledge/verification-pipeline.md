@@ -64,19 +64,28 @@ Signature: Ed25519 signature bytes
 ### Phase 4: Verify Signature (Tier 2)
 **File**: `app/vvp/verify.py:verify_passport_signature_tier2_with_key_state()`
 **File**: `app/vvp/keri/kel_resolver.py`
+**File**: `app/vvp/keri/cache.py` (range-based key state cache)
 
 Resolves the signer's key state via OOBI and verifies the PASSporT signature.
 
 **Algorithm**:
 1. Extract AID from `kid` (supports OOBI URL and `did:web:` format)
-2. Resolve KEL via OOBI endpoint → get signer's public key at call time
-3. Reconstruct JWT signing input: `base64url(header).base64url(payload)`
-4. Verify Ed25519 signature against public key
+2. Check range-based key state cache for cached entry covering reference time
+3. On cache miss: resolve KEL via OOBI endpoint → parse establishment events
+4. Find key state valid at reference time T (walk KEL chronologically)
+5. Cache result with `[valid_from, valid_until)` range for future lookups
+6. Reconstruct JWT signing input: `base64url(header).base64url(payload)`
+7. Verify Ed25519 signature against public key
 
-**Key State Resolution**:
-- HTTP GET to OOBI URL → CESR stream of KEL events
-- Parse inception event → extract verification key
-- Handle key rotation (use key valid at `iat` time)
+**Key State Resolution** (Sprint 78: range-based cache):
+- HTTP GET to OOBI URL via shared HTTP client (connection pooling)
+- SSRF validation before fetch (DNS resolution + IP range blocking)
+- Parse KEL events → find last establishment event at/before time T
+- Cache entries cover validity windows `[valid_from, valid_until)`
+- `valid_until` = timestamp of next establishment event, or None if most recent
+- Freshness guard: entries with `valid_until=None` expire after `VVP_KEY_STATE_FRESHNESS_WINDOW_SECONDS` (default 120s, configurable 10-3600s)
+- Higher KEL sequence number wins tie-breaks when multiple entries cover same time
+- Shared `httpx.AsyncClient` with `follow_redirects=False` (SSRF prevention)
 
 **Errors**: `PASSPORT_SIG_INVALID`, `KERI_RESOLUTION_FAILED`, `KERI_STATE_INVALID`
 

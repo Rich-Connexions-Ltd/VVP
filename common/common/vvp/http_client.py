@@ -71,3 +71,16 @@ async def reset_shared_client() -> None:
     if _shared_client is not None and not _shared_client.is_closed:
         await _shared_client.aclose()
     _shared_client = None
+
+
+def reset_shared_client_sync() -> None:
+    """Synchronous reset for test fixtures that cannot await.
+
+    Sets the singleton to None without closing the client (the event loop
+    may differ between tests, making aclose() unsafe from a sync fixture).
+    Guarded: only callable within a pytest session.
+    """
+    import sys
+    assert "pytest" in sys.modules, "reset_shared_client_sync() is for test use only"
+    global _shared_client
+    _shared_client = None

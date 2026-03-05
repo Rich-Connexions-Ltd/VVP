@@ -9,6 +9,10 @@ from common.vvp.http_client import (
     get_shared_client,
     close_shared_client,
     reset_shared_client,
+    reset_shared_client_sync,
 )
 
-__all__ = ["get_shared_client", "close_shared_client", "reset_shared_client"]
+__all__ = [
+    "get_shared_client", "close_shared_client",
+    "reset_shared_client", "reset_shared_client_sync",
+]

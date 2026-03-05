@@ -54,14 +54,14 @@ def reset_caches():
     from app.vvp.dossier.cache import reset_dossier_cache
     from app.vvp.verification_cache import reset_verification_cache
     from app.vvp.revocation_checker import reset_revocation_checker
-    import common.vvp.http_client as _http_client_mod
+    from common.vvp.http_client import reset_shared_client_sync
 
     reset_dossier_cache()
     reset_verification_cache()
     reset_revocation_checker()
-    _http_client_mod._shared_client = None
+    reset_shared_client_sync()
     yield
     reset_dossier_cache()
     reset_verification_cache()
     reset_revocation_checker()
-    _http_client_mod._shared_client = None
+    reset_shared_client_sync()

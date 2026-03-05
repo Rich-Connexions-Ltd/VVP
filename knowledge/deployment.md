@@ -274,6 +274,7 @@ az vm run-command invoke --resource-group VVP --name vvp-pbx \
 #### Caching
 | Variable | Default | Purpose |
 |----------|---------|---------|
+| `VVP_KEY_STATE_FRESHNESS_WINDOW_SECONDS` | `120` | Max age (seconds) for cached key states with no known rotation before forcing OOBI re-fetch. Uses immutable `cached_at` timestamp. Bounds: 10-3600s (clamped with warning). Lower = more fresh but more OOBI traffic. Sprint 78. |
 | `VVP_DOSSIER_CACHE_TTL` | `300` | Dossier cache TTL (seconds) |
 | `VVP_DOSSIER_CACHE_MAX_ENTRIES` | `100` | Max dossier cache entries |
 | `VVP_IDENTITY_CACHE_TTL` | `300` | Identity cache TTL |

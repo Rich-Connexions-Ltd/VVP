@@ -145,18 +145,29 @@ class TestCacheTimeIndex:
 
     @pytest.mark.asyncio
     async def test_get_for_time_range_match(self, cache):
-        """Range match: query at ts2 hits entry with valid_from=ts1 (no rotation)."""
+        """Range match: query at ts2 hits entry with valid_from=ts1 (no rotation).
+
+        Verifies that the range scan path (_range_match_locked) is exercised,
+        not just the exact match path — ts2 is NOT in the time index.
+        """
         ts1 = datetime(2024, 1, 1, 12, 0, 0)
-        ts2 = datetime(2024, 1, 2, 12, 0, 0)  # Within freshness window
+        ts2 = datetime(2024, 1, 2, 12, 0, 0)  # Different from valid_from → range scan
         ks = make_key_state(valid_from=ts1)
 
         await cache.put(ks)
+
+        # Confirm ts2 is not in time index (only ts1/valid_from is indexed by put())
+        assert (ks.aid, ts2) not in cache._time_index
+
         result = await cache.get_for_time(ks.aid, ts2)
 
         # Sprint 78: range-based cache — entry covers ts2 since no valid_until
         # and entry was just cached (within freshness_window)
         assert result is not None
         assert result.establishment_digest == ks.establishment_digest
+
+        # After range match, ts2 is now indexed for future O(1) lookups
+        assert (ks.aid, ts2) in cache._time_index
 
     @pytest.mark.asyncio
     async def test_get_for_time_before_valid_from_misses(self, cache):

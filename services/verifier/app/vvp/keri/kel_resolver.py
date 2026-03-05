@@ -71,7 +71,7 @@ def get_cache(config: Optional[CacheConfig] = None) -> KeyStateCache:
     """Get or create the global key state cache.
 
     If no config is provided, reads VVP_KEY_STATE_FRESHNESS_WINDOW_SECONDS
-    from the environment (default 120s, clamped to 10-3600s).
+    from app.core.config (single source of truth) and clamps to 10-3600s.
 
     Args:
         config: Optional configuration for the cache.
@@ -83,11 +83,9 @@ def get_cache(config: Optional[CacheConfig] = None) -> KeyStateCache:
     if _cache is None:
         if config is None:
             import logging
-            import os
             _log = logging.getLogger(__name__)
-            raw_freshness = float(
-                os.getenv("VVP_KEY_STATE_FRESHNESS_WINDOW_SECONDS", "120")
-            )
+            from app.core.config import VVP_KEY_STATE_FRESHNESS_WINDOW_SECONDS
+            raw_freshness = VVP_KEY_STATE_FRESHNESS_WINDOW_SECONDS
             freshness = max(10.0, min(3600.0, raw_freshness))
             if freshness != raw_freshness:
                 _log.warning(
