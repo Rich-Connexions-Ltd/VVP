@@ -1241,8 +1241,15 @@ async def verify_vvp(
                 try:
                     # Resolve issuer key state with strict validation
                     # Per §4.2, OOBI MUST resolve to valid KEL in production
+                    # Construct OOBI URL from witness base URL for bare AIDs
+                    # (only the PASSporT signer's AID is cached from Phase 4;
+                    # other issuer AIDs need explicit OOBI URLs)
+                    acdc_oobi_url = None
+                    if witness_urls:
+                        acdc_oobi_url = f"{witness_urls[0]}/oobi/{acdc.issuer_aid}/controller"
                     key_state = await resolve_key_state(
                         kid=acdc.issuer_aid,
+                        oobi_url=acdc_oobi_url,
                         reference_time=reference_time,
                         _allow_test_mode=False  # Strict validation in production
                     )

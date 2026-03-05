@@ -645,8 +645,13 @@ async def validate_credential_chain(
                             from ..keri import resolve_key_state, ResolutionFailedError
                             from datetime import datetime, timezone
                             try:
+                                # Construct OOBI URL from witness URLs for bare AIDs
+                                ext_oobi_url = None
+                                if witness_urls:
+                                    ext_oobi_url = f"{witness_urls[0]}/oobi/{result.acdc.issuer_aid}/controller"
                                 key_state = await resolve_key_state(
                                     kid=result.acdc.issuer_aid,
+                                    oobi_url=ext_oobi_url,
                                     reference_time=datetime.now(timezone.utc),
                                     _allow_test_mode=False,
                                 )
