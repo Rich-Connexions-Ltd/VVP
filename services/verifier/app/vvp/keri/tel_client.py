@@ -303,7 +303,7 @@ class TELClient:
                 f"/oobi/{credential_said}/tels",
             ]
 
-            from app.vvp.http_client import get_shared_client
+            from common.vvp.http_client import get_shared_client
             client = await get_shared_client()
             for endpoint in endpoints:
                 url = urljoin(base_url, endpoint)
@@ -357,7 +357,7 @@ class TELClient:
         2. Standard KERI TEL endpoint: /tels/<registry_said or credential_said>
         """
         try:
-            from app.vvp.http_client import get_shared_client
+            from common.vvp.http_client import get_shared_client
             client = await get_shared_client()
             # Try Provenant-specific query endpoint first
             # Format: /query?typ=tel&vcid=<credential_said>

@@ -283,3 +283,169 @@ class TestDossierFetchIntegration:
         with _mock_dns('127.0.0.1'):
             with pytest.raises(FetchError, match="non-routable"):
                 await fetch_dossier("https://evil.com/dossier")
+
+
+# =============================================================================
+# URL validation policy assertion tests (R4 finding #73)
+# =============================================================================
+
+
+class TestUrlValidationPolicy:
+    """Assert that callers pass the correct allow_http policy to validate_url_target.
+
+    Prevents security regressions where allow_http=True is accidentally used
+    for untrusted dossier URLs, or allow_http=False blocks local witness OOBIs.
+    """
+
+    @pytest.mark.asyncio
+    async def test_dossier_fetch_rejects_http(self):
+        """fetch_dossier calls validate_url_target with allow_http=False (https only)."""
+        from common.vvp.dossier.fetch import fetch_dossier
+
+        captured_kwargs = {}
+
+        async def spy_validate(url, *, allow_http=False):
+            captured_kwargs["allow_http"] = allow_http
+            # Let it pass through to the HTTP client (which we'll mock)
+
+        mock_response = AsyncMock()
+        mock_response.status_code = 200
+        mock_response.headers = {"content-type": "application/json"}
+        mock_response.content = b'{"d": "ESAID"}'
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        # validate_url_target is imported inside fetch_dossier via deferred import;
+        # patch at the source module where it's defined
+        with patch("common.vvp.url_validation.validate_url_target", new=spy_validate), \
+             patch("common.vvp.http_client.get_shared_client",
+                   new=AsyncMock(return_value=mock_client)):
+            await fetch_dossier("https://example.com/dossier")
+
+        assert captured_kwargs["allow_http"] is False, \
+            "fetch_dossier must call validate_url_target with allow_http=False"
+
+    @pytest.mark.asyncio
+    async def test_oobi_allows_http(self):
+        """dereference_oobi calls validate_url_target with allow_http=True."""
+        from app.vvp.keri.oobi import dereference_oobi
+
+        captured_kwargs = {}
+
+        async def spy_validate(url, *, allow_http=False):
+            captured_kwargs["allow_http"] = allow_http
+
+        mock_response = AsyncMock()
+        mock_response.status_code = 200
+        mock_response.headers = {"content-type": "application/json"}
+        mock_response.content = b'{"t": "icp", "i": "EAID123", "b": []}'
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        with patch("common.vvp.url_validation.validate_url_target", new=spy_validate), \
+             patch("common.vvp.http_client.get_shared_client",
+                   new=AsyncMock(return_value=mock_client)):
+            await dereference_oobi("http://witness.local:5642/oobi/EAID123/witness")
+
+        assert captured_kwargs["allow_http"] is True, \
+            "dereference_oobi must call validate_url_target with allow_http=True"
+
+
+# =============================================================================
+# E2E cached second-call regression test (R4 finding #68)
+# =============================================================================
+
+
+class TestCachedSecondCallRegression:
+    """Verify the Sprint 78 goal: a second verification call with cached key state
+    avoids OOBI network fetches, proving the range-based cache eliminates redundant
+    lookups for different iat values against the same AID.
+    """
+
+    @pytest.mark.asyncio
+    async def test_second_call_uses_cache_no_refetch(self):
+        """Second resolve_key_state call with different reference_time uses cache,
+        does NOT re-fetch OOBI — proving the Sprint 78 performance goal.
+        """
+        from datetime import datetime, timezone
+        from app.vvp.keri.kel_resolver import resolve_key_state, get_cache, reset_cache
+        from app.vvp.keri.cache import CacheConfig
+
+        reset_cache()
+
+        # Build a cache with a generous freshness window
+        cache = get_cache(CacheConfig(
+            ttl_seconds=300, max_entries=100,
+            freshness_window_seconds=300.0,
+        ))
+
+        # Mock OOBI fetch to return valid KEL data
+        from app.vvp.keri.kel_parser import KELEvent, EventType
+        from app.vvp.keri.oobi import OOBIResult
+
+        aid = "ETestAID12345678901234567890123456789012"
+        iat1 = datetime(2024, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+        iat2 = datetime(2024, 6, 1, 12, 0, 5, tzinfo=timezone.utc)  # 5s later
+
+        mock_icp = KELEvent(
+            event_type=EventType.ICP,
+            sequence=0,
+            prior_digest="",
+            digest="ESAID_ICP_0001",
+            signing_keys=[b"\x01" * 32],
+            next_keys_digest=None,
+            witnesses=["BWITNESS1"],
+            toad=1,
+            timestamp=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        )
+
+        mock_oobi_result = OOBIResult(
+            aid=aid,
+            kel_data=b'[{"t":"icp"}]',
+            witnesses=["BWITNESS1"],
+            content_type="application/json",
+        )
+
+        oobi_fetch_count = 0
+
+        async def mock_fetch_and_validate(oobi_url, aid_, strict_validation=True):
+            nonlocal oobi_fetch_count
+            oobi_fetch_count += 1
+            return mock_oobi_result, [mock_icp]
+
+        # First call: should fetch OOBI
+        with patch("app.vvp.keri.kel_resolver._fetch_and_validate_oobi",
+                    new=mock_fetch_and_validate), \
+             patch("app.core.config.TIER2_KEL_RESOLUTION_ENABLED", True):
+            ks1 = await resolve_key_state(
+                aid, iat1,
+                oobi_url=f"http://witness.local/oobi/{aid}/witness",
+                _allow_test_mode=True,
+            )
+
+        assert oobi_fetch_count == 1, "First call should fetch OOBI"
+        assert ks1.aid == aid
+
+        # Second call with different iat: should use cache, NOT re-fetch
+        with patch("app.vvp.keri.kel_resolver._fetch_and_validate_oobi",
+                    new=mock_fetch_and_validate), \
+             patch("app.core.config.TIER2_KEL_RESOLUTION_ENABLED", True):
+            ks2 = await resolve_key_state(
+                aid, iat2,
+                oobi_url=f"http://witness.local/oobi/{aid}/witness",
+                _allow_test_mode=True,
+            )
+
+        # CRITICAL ASSERTION: OOBI fetch count did NOT increase
+        assert oobi_fetch_count == 1, \
+            "Second call with different iat must use range-based cache — " \
+            "OOBI fetch count should remain 1 (Sprint 78 goal)"
+        assert ks2.aid == aid
+        assert ks2.signing_keys == ks1.signing_keys
+
+        # Verify cache metrics confirm the hit
+        assert cache.metrics().hits >= 1, "Cache should record at least one hit"
+
+        reset_cache()

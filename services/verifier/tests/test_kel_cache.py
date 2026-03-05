@@ -272,7 +272,11 @@ class TestCacheLRUEviction:
 
 
 class TestCacheTTL:
-    """Test TTL expiration behavior."""
+    """Test TTL expiration behavior.
+
+    Uses direct manipulation of entry.expires_at instead of asyncio.sleep()
+    to avoid timing-dependent flakiness under load (R4 finding #72).
+    """
 
     @pytest.mark.asyncio
     async def test_expired_entry_returns_none(self, short_ttl_cache):
@@ -284,8 +288,10 @@ class TestCacheTTL:
         # Entry should be present immediately
         assert await short_ttl_cache.get(ks.aid, ks.establishment_digest) is not None
 
-        # Wait for TTL to expire
-        await asyncio.sleep(1.5)
+        # Force expiry by backdating the entry's expires_at
+        key = (ks.aid, ks.establishment_digest)
+        entry = short_ttl_cache._entries[key]
+        entry.expires_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
 
         # Entry should now be expired
         result = await short_ttl_cache.get(ks.aid, ks.establishment_digest)
@@ -297,9 +303,11 @@ class TestCacheTTL:
         ks = make_key_state()
 
         await short_ttl_cache.put(ks)
-        initial_size = short_ttl_cache.size
 
-        await asyncio.sleep(1.5)
+        # Force expiry by backdating
+        key = (ks.aid, ks.establishment_digest)
+        entry = short_ttl_cache._entries[key]
+        entry.expires_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
 
         # Access triggers cleanup
         await short_ttl_cache.get(ks.aid, ks.establishment_digest)

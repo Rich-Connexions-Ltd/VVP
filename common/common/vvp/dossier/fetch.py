@@ -87,9 +87,6 @@ async def fetch_dossier(url: str) -> bytes:
 
         return content
 
-    except FetchError:
-        # Re-raise our own errors
-        raise
     except httpx.TimeoutException:
         raise FetchError(
             f"Timeout after {DOSSIER_FETCH_TIMEOUT_SECONDS}s fetching {url}"

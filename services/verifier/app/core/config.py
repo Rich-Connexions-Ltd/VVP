@@ -58,10 +58,12 @@ ALLOW_PASSPORT_EXP_OMISSION: bool = False
 # POLICY CONSTANTS (spec requires enforcement, values are implementation choice)
 # =============================================================================
 
-# Dossier fetch constraints
-# §6.1B: "timeouts... size limits" - spec requires enforcement but doesn't specify values
-DOSSIER_FETCH_TIMEOUT_SECONDS: int = 5
-DOSSIER_MAX_SIZE_BYTES: int = 1_048_576  # 1 MB
+# Dossier fetch constraints — canonical definitions in common.vvp.dossier.config.
+# Re-exported here for admin endpoint visibility and backward compatibility.
+from common.vvp.dossier.config import (  # noqa: E402
+    DOSSIER_FETCH_TIMEOUT_SECONDS,
+    DOSSIER_MAX_SIZE_BYTES,
+)
 
 # Schema SAID validation strictness (§6.3.3-6)
 # Per spec, schema rules are MUSTs and should reject unknown schema SAIDs.

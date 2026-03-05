@@ -103,7 +103,7 @@ def _mock_oobi_context(mock_client):
 
     return (
         patch("common.vvp.url_validation.validate_url_target", new=_noop_validate),
-        patch("app.vvp.http_client.get_shared_client",
+        patch("common.vvp.http_client.get_shared_client",
               new=AsyncMock(return_value=mock_client)),
     )
 

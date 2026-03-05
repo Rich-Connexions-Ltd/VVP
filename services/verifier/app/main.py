@@ -41,7 +41,7 @@ async def lifespan(app):
         log.info("Background revocation checker started (lifespan)")
     yield
     # Shutdown: close shared HTTP client
-    from app.vvp.http_client import close_shared_client
+    from common.vvp.http_client import close_shared_client
     await close_shared_client()
     log.info("Shared HTTP client closed (lifespan)")
     if VVP_VERIFICATION_CACHE_ENABLED:
@@ -495,15 +495,30 @@ async def _fetch_dossier_logic(evd_url: str) -> dict:
     """
     Fetch a dossier from the evidence URL.
     Shared logic used by /proxy-fetch JSON endpoint and /ui/fetch-dossier.
-    """
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.get(evd_url)
-        content_type = resp.headers.get("content-type", "")
 
-        if "json" in content_type or evd_url.endswith(".json"):
-            return {"data": resp.json(), "content_type": content_type, "raw": None}
-        else:
-            return {"data": resp.text, "content_type": content_type, "raw": resp.text}
+    Uses shared HTTP client with SSRF validation (Sprint 78).
+    """
+    from common.vvp.url_validation import URLValidationError, validate_url_target
+    from common.vvp.http_client import get_shared_client
+
+    # SSRF validation: block private/loopback/link-local IPs
+    # allow_http=True since dossier URLs may use http in dev/local
+    await validate_url_target(evd_url, allow_http=True)
+
+    client = await get_shared_client()
+    resp = await client.get(evd_url, timeout=10.0)
+
+    if resp.status_code >= 300:
+        raise httpx.HTTPStatusError(
+            f"HTTP {resp.status_code}", request=resp.request, response=resp
+        )
+
+    content_type = resp.headers.get("content-type", "")
+
+    if "json" in content_type or evd_url.endswith(".json"):
+        return {"data": resp.json(), "content_type": content_type, "raw": None}
+    else:
+        return {"data": resp.text, "content_type": content_type, "raw": resp.text}
 
 
 class RevocationCheckRequest(BaseModel):

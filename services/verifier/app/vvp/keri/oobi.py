@@ -76,7 +76,7 @@ async def dereference_oobi(
     aid = _extract_aid_from_url(oobi_url)
 
     try:
-        from app.vvp.http_client import get_shared_client
+        from common.vvp.http_client import get_shared_client
         client = await get_shared_client()
         response = await client.get(oobi_url, timeout=timeout)
 

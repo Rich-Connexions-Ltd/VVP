@@ -13,15 +13,7 @@ from common.vvp.dossier.fetch import (
     fetch_dossier,
 )
 
-# Also re-export configuration (for backward compatibility)
-from app.core.config import (
-    DOSSIER_FETCH_TIMEOUT_SECONDS,
-    DOSSIER_MAX_SIZE_BYTES,
-)
-
 __all__ = [
     "fetch_dossier",
     "ACCEPTED_CONTENT_TYPES",
-    "DOSSIER_FETCH_TIMEOUT_SECONDS",
-    "DOSSIER_MAX_SIZE_BYTES",
 ]
