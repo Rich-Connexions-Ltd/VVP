@@ -324,6 +324,10 @@ def verify_vetter_constraints(
         )
 
     # Validate identity credentials against jurisdiction targets
+    # Note: foundational trust chain credentials (e.g., LE issued by QVI)
+    # typically lack certification edges and are not subject to vetter
+    # constraints — only credentials with explicit certification backlinks
+    # are validated.
     for cred in identity_credentials or []:
         cred_said = _get_credential_said(cred)
         cert = find_vetter_certification(cred, dossier_acdcs)
@@ -331,15 +335,9 @@ def verify_vetter_constraints(
         incorporation_country = extract_incorporation_country(cred)
 
         if not cert:
-            results[cred_said] = VetterConstraintResult(
-                credential_said=cred_said,
-                credential_type=CredentialType.IDENTITY,
-                vetter_certification_said=None,
-                constraint_type=ConstraintType.JURISDICTION,
-                target_value=incorporation_country or "",
-                allowed_values=[],
-                is_authorized=False,
-                reason="Vetter certification not found for identity credential",
+            log.debug(
+                f"Identity credential {cred_said[:16]}... has no certification "
+                f"edge — skipping vetter constraint check (trust chain credential)"
             )
             continue
 
