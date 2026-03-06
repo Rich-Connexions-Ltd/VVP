@@ -631,6 +631,18 @@ class TELClient:
             oobi_url=oobi_url,
         )
         log.info(f"  live_query_result: status={result.status.value}")
+
+        # Step 3: If live query returned UNKNOWN but dossier showed ACTIVE,
+        # use dossier result as fallback — the dossier's inline TEL iss event
+        # proves the credential was issued, which is better than UNKNOWN
+        if (
+            result.status == CredentialStatus.UNKNOWN
+            and dossier_data
+            and dossier_result.status == CredentialStatus.ACTIVE
+        ):
+            log.info("  live_query_unknown_with_dossier_active: using dossier ACTIVE as fallback")
+            return dossier_result
+
         return result
 
     async def check_chain_revocation(
