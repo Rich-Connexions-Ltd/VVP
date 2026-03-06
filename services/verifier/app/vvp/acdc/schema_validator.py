@@ -19,6 +19,21 @@ except ImportError:
 log = logging.getLogger(__name__)
 
 
+def _strip_optional_nonce(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove 'u' (salty nonce) from a schema's required array.
+
+    Per the ACDC spec, the 'u' field is OPTIONAL — it provides privacy
+    via compaction but is not required for validity. Many governance
+    schemas include 'u' in their required arrays, but credentials issued
+    without private=true will not have it.
+    """
+    required = schema.get("required")
+    if required and "u" in required:
+        schema = dict(schema)
+        schema["required"] = [f for f in required if f != "u"]
+    return schema
+
+
 def _extract_attributes_schema(schema_doc: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Extract the attributes ('a' field) schema from a full ACDC schema.
 
@@ -45,13 +60,13 @@ def _extract_attributes_schema(schema_doc: Dict[str, Any]) -> Optional[Dict[str,
     if "oneOf" in a_schema:
         for option in a_schema["oneOf"]:
             if option.get("type") == "object":
-                return option
+                return _strip_optional_nonce(option)
         # No object variant found
         return None
 
     # Direct object schema
     if a_schema.get("type") == "object":
-        return a_schema
+        return _strip_optional_nonce(a_schema)
 
     # SAID string reference only
     if a_schema.get("type") == "string":
@@ -97,7 +112,7 @@ def validate_acdc_against_schema(
     else:
         # Fall back to full schema (might be attributes-only or custom schema)
         log.debug("Using full schema for validation (no 'a' field found)")
-        validation_schema = schema_doc
+        validation_schema = _strip_optional_nonce(schema_doc)
 
     errors: List[str] = []
 
