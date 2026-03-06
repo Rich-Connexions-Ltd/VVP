@@ -2209,6 +2209,9 @@ async def ui_browse_said(
                     log.debug(f"Could not resolve {aid[:16]}... via {witness_url}: {e}")
                     continue
 
+        # Derive chain status from graph trust path
+        graph_chain_status = "VALID" if graph.trust_path_valid else "INDETERMINATE"
+
         credential_vms: dict[str, Any] = {}
         for acdc, acdc_dict, said in parsed_acdcs:
             if acdc is None:
@@ -2225,6 +2228,17 @@ async def ui_browse_said(
                     issuer_identities=issuer_identities,
                     key_states=key_states,
                 )
+
+                # Override chain status from graph trust path analysis
+                vm.chain_status = graph_chain_status
+
+                # Derive overall status from chain + revocation
+                if vm.revocation.state == "REVOKED":
+                    vm.status = "INVALID"
+                elif graph_chain_status == "VALID" and vm.revocation.state == "ACTIVE":
+                    vm.status = "VALID"
+                else:
+                    vm.status = "INDETERMINATE"
 
                 schema_info = await build_schema_info_with_fetch(acdc)
                 vm.schema_info = schema_info
@@ -2518,6 +2532,9 @@ async def ui_jwt_explore(
                 except Exception:
                     continue
 
+        # Derive chain status from graph trust path
+        graph_chain_status = "VALID" if graph.trust_path_valid else "INDETERMINATE"
+
         credential_vms: dict[str, Any] = {}
         for acdc, acdc_dict, said in parsed_acdcs:
             if acdc is None:
@@ -2534,6 +2551,17 @@ async def ui_jwt_explore(
                     issuer_identities=issuer_identities,
                     key_states=key_states,
                 )
+
+                # Override chain status from graph trust path analysis
+                vm.chain_status = graph_chain_status
+
+                # Derive overall status from chain + revocation
+                if vm.revocation.state == "REVOKED":
+                    vm.status = "INVALID"
+                elif graph_chain_status == "VALID" and vm.revocation.state == "ACTIVE":
+                    vm.status = "VALID"
+                else:
+                    vm.status = "INDETERMINATE"
 
                 schema_info = await build_schema_info_with_fetch(acdc)
                 vm.schema_info = schema_info
@@ -2857,6 +2885,9 @@ async def ui_simple_verify(
                     log.debug(f"Could not resolve {aid[:16]}... via {witness_url}: {e}")
                     continue  # Try next witness
 
+        # Derive chain status from graph trust path
+        graph_chain_status = "VALID" if graph.trust_path_valid else "INDETERMINATE"
+
         credential_vms: dict[str, Any] = {}
         for acdc, acdc_dict, said in parsed_acdcs:
             if acdc is None:
@@ -2873,6 +2904,17 @@ async def ui_simple_verify(
                     issuer_identities=issuer_identities,
                     key_states=key_states,
                 )
+
+                # Override chain status from graph trust path analysis
+                vm.chain_status = graph_chain_status
+
+                # Derive overall status from chain + revocation
+                if vm.revocation.state == "REVOKED":
+                    vm.status = "INVALID"
+                elif graph_chain_status == "VALID" and vm.revocation.state == "ACTIVE":
+                    vm.status = "VALID"
+                else:
+                    vm.status = "INDETERMINATE"
 
                 schema_info = await build_schema_info_with_fetch(acdc)
                 vm.schema_info = schema_info
