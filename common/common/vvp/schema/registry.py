@@ -93,6 +93,7 @@ KNOWN_SCHEMA_SAIDS: Dict[str, FrozenSet[str]] = {
     # Source: VVP Draft - pending vLEI governance publication
     "TNAlloc": frozenset({
         "EFvnoHDY7I-kaBBeKlbDbkjG4BaI0nKLGadxBdjMGgSQ",  # Base TN Allocation
+        "EGUh_fVLbjfkYFb5zAsY2Rqq0NqwnD3r5jsdKWLTpU8_",  # Extended TN Allocation (numbers + certification edge)
     }),
 
     # Vetter Certification credential
@@ -107,6 +108,23 @@ KNOWN_SCHEMA_SAIDS: Dict[str, FrozenSet[str]] = {
     # Has name/role attributes, no edges
     "VetterGov": frozenset({
         "EIBowJmxx5hNWQlfXqGcbN0aP_RBuucMW6mle4tAN6TL",  # VVP VetterGov schema
+    }),
+
+    # Brand Owner credential (Provenant brand-owner schema with vcard array + logo hash)
+    # Source: https://github.com/provenant-dev/public-schema/blob/brand-owner/brand-owner/brand-owner.schema.json
+    # Has vcard array with RFC 6350 properties including LOGO;HASH=<SAID>;VALUE=URI:<url>
+    # Edges: "issuer" with I2I operator (issuer AID must be issuee of pointed credential)
+    # Attributes SAID: EIDYFHkBOgNVWGFRcN1cEXNvRV47-nrNJGx6mKHBA7ia
+    # Edges SAID: EKk5ejftEjNwjRhw2lYQAwKwvRWapqCNEOx3gUR7WW7n
+    "BrandOwner": frozenset({
+        "EFdennObbYoKFHlMbLkskgED-2w-npDO11yDvcNUhjsk",  # Provenant brand-owner v1.0.0
+    }),
+
+    # Extended Brand Credential (legacy scalar-field schema)
+    # Source: VVP Sprint 58 - scalar attributes (brandName, logoUrl, etc.)
+    # Deprecated in favor of BrandOwner vcard schema
+    "ExtendedBrand": frozenset({
+        "EK7kPhs5YkPsq9mZgUfPYfU-zq5iSlU8XVYJWqrVPk6g",  # Extended brand credential (brandName, logoUrl, assertionCountry)
     }),
 }
 
@@ -123,6 +141,8 @@ SCHEMA_SOURCE: Dict[str, str] = {
     "TNAlloc": "Pending - accept any until governance publishes",
     "VetterCert": "VVP Draft - vetter certification credential (EOefmhWU2...)",
     "VetterGov": "VVP Draft - vetter governance authority credential (EIBowJmxx...)",
+    "BrandOwner": "Provenant brand-owner v1.0.0 with vcard array + logo hash (EFdennOb...)",
+    "ExtendedBrand": "VVP Sprint 58 - legacy scalar-field brand credential (EK7kPhs5..., deprecated)",
 }
 
 
@@ -155,6 +175,18 @@ def is_known_schema(credential_type: str, schema_said: str) -> bool:
     if not known:
         return True
     return schema_said in known
+
+
+# All brand-related schema SAIDs (for brand credential detection)
+BRAND_SCHEMA_SAIDS: FrozenSet[str] = (
+    KNOWN_SCHEMA_SAIDS.get("BrandOwner", frozenset())
+    | KNOWN_SCHEMA_SAIDS.get("ExtendedBrand", frozenset())
+)
+
+
+def is_brand_schema(schema_said: str) -> bool:
+    """Check if a schema SAID is a known brand credential schema."""
+    return schema_said in BRAND_SCHEMA_SAIDS
 
 
 def has_governance_schemas(credential_type: str) -> bool:
