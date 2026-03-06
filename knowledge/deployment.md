@@ -73,13 +73,18 @@ This eliminates the LMDB lock contention that previously prevented concurrent re
 - **No downtime**: New revision rebuilds state from PostgreSQL seeds while old revision continues serving
 - **No `lock_wait_seconds`**: The workflow dispatch input is retained for backwards compatibility but is no longer used by the keri-agent deploy job
 
-**Startup sequence:**
+**Startup sequence (Sprint 81: Readiness-gated):**
 1. Container starts with empty LMDB at `VVP_KERI_AGENT_DATA_DIR` (tmpfs)
-2. Reads key seeds from PostgreSQL (`VVP_KERI_AGENT_DATABASE_URL`)
-3. Deterministically rebuilds Habery, registries, and credential state from seeds
-4. **Re-publishes all identity KELs to witnesses** (Sprint 70) — concurrently via `asyncio.gather`, non-fatal if witnesses are still starting
-5. Passes `/healthz` readiness check
-6. Old revision is drained and stopped
+2. ReadinessTracker initialized — `/readyz` returns 503 (`{"state": "not_started"}`)
+3. Reads key seeds from PostgreSQL → transitions to **REBUILDING**
+4. Deterministically rebuilds Habery, registries, and credential state from seeds
+5. Transitions to **PUBLISHING** — publishes full KEL (all event types via `clonePreIter`) to witnesses with two-phase receipt protocol, bounded concurrency (semaphore), startup timeout (`VVP_WITNESS_PUBLISH_TIMEOUT`, default 120s)
+6. Transitions to **VERIFYING** — exact count matching, full-set SAID validation, TEL integrity checks (all offloaded to thread pool)
+7. If all checks pass → transitions to **READY** (`/readyz` returns 200)
+8. CI deploy job polls `/readyz` via `az containerapp exec` until `{"state": "ready"}` (max 5 minutes)
+9. Old revision is drained and stopped
+
+Failed witness publishes are retried in supervised background tasks (up to 3 rounds with exponential backoff). The `ReadinessTracker` tracks and cancels all background tasks on shutdown.
 
 **Seed management:**
 - Key seeds are generated once (on first identity creation) and persisted to PostgreSQL

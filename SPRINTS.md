@@ -70,6 +70,7 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 78 | Verifier SIP Call Performance | COMPLETE | Sprint 51, 76 |
 | 79 | Provenant Brand Schema & Logo Integrity | COMPLETE | Sprint 58, 78 |
 | 80 | TEL Publication to Witnesses | COMPLETE | Sprint 74b |
+| 81 | Robust Post-Update State Restoration | PLANNED | Sprint 69, 70, 75, 80 |
 
 ---
 
@@ -6036,3 +6037,89 @@ services/verifier/tests/test_tel_issuer_source.py        # 14 tests
 - [x] CESR binary passthrough (no JSON intermediary)
 - [x] All existing tests pass (1950 total)
 - [x] Documentation updated
+
+---
+
+## Sprint 81: Robust Post-Update State Restoration
+
+**Status:** COMPLETE
+**Goal:** Ensure that after a container restart or CI/CD deploy, the KERI Agent fully and verifiably restores all cryptographic state (identities, registries, credentials, KEL events) and publishes it to witnesses — blocking traffic until restoration is confirmed complete and correct.
+
+### Problem Statement
+
+Since Sprint 69 introduced ephemeral LMDB with deterministic state rebuild from PostgreSQL seeds, the system has never had a fully robust restoration guarantee. The `KeriStateBuilder` rebuilds LMDB state and attempts witness publishing, but several gaps mean that after an update the system can serve requests in a degraded state:
+
+1. **Incomplete KEL publishing** — Only inception events (`icp`) are published to witnesses on startup. Interaction events (`ixn`) that anchor registry creation, credential issuance, and credential revocation are NOT republished. Witnesses have incomplete event logs.
+
+2. **No TEL event republishing** — TEL events (registry `vcp`, credential `iss`, revocation `rev`) are rebuilt in LMDB but never published to witnesses after a restart. The verifier's TEL queries work (Sprint 80) because they go to the Issuer/KERI Agent directly, but witness-based TEL resolution would fail.
+
+3. **No readiness gate** — `/healthz` returns 200 as soon as LMDB is accessible, before rebuild or witness publishing completes. Azure Container Apps routes traffic to the container immediately, causing OOBI resolution failures (verifier returns INDETERMINATE).
+
+4. **Incomplete state verification** — `_verify_state()` only checks identity count. Registry count and credential count are not verified against seed expectations. SAID mismatches are logged but don't affect readiness.
+
+5. **Best-effort witness publishing** — Background retry (`_retry_failed_publishes`) uses `asyncio.create_task()` with no supervision. If witnesses are slow (common during rolling deploys), the service accepts traffic while publishing is still in progress.
+
+6. **No CI post-deploy KERI Agent health gate** — `deploy.yml` doesn't verify KERI Agent rebuild completion after deploy. Bootstrap runs against a potentially incomplete agent.
+
+7. **No rebuild idempotency verification** — After rebuild, there's no check that the rebuilt LMDB state actually produces the same dossiers/credentials as before. A subtle rebuild bug could silently corrupt state.
+
+### Deliverables
+
+- [ ] **Readiness probe (`/readyz`)** — Returns 503 until rebuild + witness publishing complete. Azure Container Apps uses this for traffic routing. Separate from `/healthz` (which remains a basic liveness check).
+- [ ] **Full KEL republishing** — Publish the complete KEL (icp + all ixn events) for each identity to witnesses, not just inception events. Use `hby.db.cloneKelIter()` or equivalent to stream all events.
+- [ ] **TEL event republishing** — After credential rebuild, publish TEL events (vcp, iss, rev) to witnesses via `regery.reger.cloneTvt()`.
+- [ ] **Comprehensive state verification** — `_verify_state()` checks identity count, registry count, credential count, and optionally SAID spot-checks against seed expectations. Mismatches produce structured error report.
+- [ ] **Rebuild report in health endpoint** — `/readyz` exposes the last `RebuildReport` (counts, errors, timing, witness publish status) so operators can diagnose issues.
+- [ ] **CI deploy health gate** — Add a post-deploy step in `deploy.yml` that polls KERI Agent `/readyz` (with timeout) before proceeding to bootstrap/smoke tests. Fail the deploy if readyz doesn't return 200 within threshold.
+- [ ] **Supervised background retry** — Replace fire-and-forget `asyncio.create_task()` with a tracked task set. Readiness probe reflects retry status. Shutdown handler cancels pending retries gracefully.
+- [ ] **Rebuild integrity spot-check** — After full rebuild, pick N random credentials from seeds, serialize them, and verify SAID matches expected. Catches subtle canonicalization or ordering bugs.
+
+### Key Files to Create/Modify
+
+| File | Action | Purpose |
+|------|--------|---------|
+| `services/keri-agent/app/keri/state_builder.py` | Modify | Full KEL/TEL republishing, comprehensive verification, integrity spot-check |
+| `services/keri-agent/app/keri/witness.py` | Modify | `publish_full_kel()` method for multi-event publishing |
+| `services/keri-agent/app/api/health.py` | Modify | Add `/readyz` endpoint with rebuild report |
+| `services/keri-agent/app/main.py` | Modify | Wire readiness state, supervised task tracking |
+| `.github/workflows/deploy.yml` | Modify | Add KERI Agent readyz polling step |
+| `services/keri-agent/tests/test_state_builder.py` | Modify | Tests for full KEL/TEL republishing, verification |
+| `services/keri-agent/tests/test_health.py` | Modify | Tests for `/readyz` behavior |
+| `scripts/system-health-check.sh` | Modify | Check KERI Agent `/readyz` in health checks |
+
+### Technical Notes
+
+- **Full KEL publishing**: keripy's `hby.db.getKelIter(pre)` returns all events in sequence. Concatenate and send as single CESR stream to `/receipts` endpoint. Witnesses will escrow ixn events they can't verify (lacking TEL context) but that's acceptable — the events are durably stored.
+- **TEL publishing**: `regery.reger.cloneTvt(pre, dig)` returns CESR-encoded TEL events. These need the KEL anchor to validate, so publish KEL first, then TEL.
+- **Readiness state machine**: `NOT_STARTED` → `REBUILDING` → `PUBLISHING` → `VERIFYING` → `READY` (or `DEGRADED` if errors but counts match). `/readyz` returns 503 for all states except `READY`/`DEGRADED`.
+- **Backward compatibility**: `/healthz` behavior unchanged (basic LMDB check). New `/readyz` is opt-in for Azure readiness probe configuration.
+- **Witness escrow handling**: Witnesses may 202-escrow ixn events. This is expected — the events are stored and will be processable once the witness has full context. The important thing is durability, not immediate processing.
+- **Deploy ordering**: The current deploy.yml correctly deploys witnesses before KERI Agent (Sprint 75). This sprint adds a readyz gate between KERI Agent deploy and bootstrap/tests.
+
+### Risks and Mitigations
+
+| Risk | Likelihood | Impact | Mitigation |
+|------|------------|--------|------------|
+| Full KEL publish significantly slows startup | Medium | Medium | Parallelize per-identity, measure in staging first. Current: 69 identities in 2.1s for icp-only. Full KEL may be 5-10x. |
+| Witnesses reject/escrow full KEL events | Medium | Low | Events are durably stored even if escrowed. Background retry handles eventual consistency. |
+| Readyz gate causes deploy timeouts in CI | Low | Medium | Generous timeout (5 min) with clear error messages. Fallback: manual republish endpoint. |
+| TEL events too large for HTTP headers | Low | Low | Use chunked transfer or POST body instead of CESR-ATTACHMENT header. |
+
+### Dependencies
+
+- Sprint 69 (Ephemeral LMDB & Seeds) — core rebuild infrastructure
+- Sprint 70 (Automatic Witness Re-Publishing) — witness publishing on startup
+- Sprint 75 (Witness Receipt Fix) — Phase 1/2 receipt processing
+- Sprint 80 (TEL Publication) — TEL endpoint infrastructure
+
+### Exit Criteria
+
+- [ ] After KERI Agent restart, `/readyz` returns 503 during rebuild, then 200 when complete
+- [ ] Full KEL (icp + all ixn) published to witnesses for every identity
+- [ ] TEL events published to witnesses for every registry and credential
+- [ ] `_verify_state()` checks identity, registry, AND credential counts against seeds
+- [ ] CI deploy waits for KERI Agent `/readyz` before running bootstrap
+- [ ] Background retry tasks are tracked and cancelled on shutdown
+- [ ] Rebuild report accessible via `/readyz` response body
+- [ ] All existing tests pass + new tests for readyz, full KEL publish, TEL publish, verification
+- [ ] E2E call works immediately after a fresh deploy (no manual republish needed)

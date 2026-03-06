@@ -1,6 +1,7 @@
 """Tests for KERI state builder (deterministic rebuild).
 
 Sprint 69: Ephemeral LMDB & Zero-Downtime KERI Deploys.
+Sprint 81: Readiness gating, full KEL publishing, comprehensive verification.
 """
 import importlib
 import json
@@ -11,7 +12,13 @@ from pathlib import Path
 import pytest
 
 from app.keri.seed_store import get_seed_store, reset_seed_store
-from app.keri.state_builder import KeriStateBuilder, RebuildReport
+from app.keri.readiness import (
+    RebuildReport,
+    ReadinessState,
+    reset_readiness_tracker,
+    get_readiness_tracker,
+)
+from app.keri.state_builder import KeriStateBuilder
 
 
 @pytest.fixture
@@ -47,6 +54,7 @@ async def rebuild_env(tmp_path):
     reset_credential_issuer()
     reset_persistence_manager()
     reset_witness_publisher()
+    reset_readiness_tracker()
 
     yield {
         "lmdb_dir": lmdb_dir,
@@ -64,6 +72,7 @@ async def rebuild_env(tmp_path):
     reset_credential_issuer()
     reset_persistence_manager()
     reset_witness_publisher()
+    reset_readiness_tracker()
 
     if original_data_dir is not None:
         os.environ["VVP_KERI_AGENT_DATA_DIR"] = original_data_dir
@@ -86,21 +95,42 @@ async def rebuild_env(tmp_path):
 class TestRebuildReport:
     """Tests for RebuildReport."""
 
-    def test_str_format(self):
+    def test_to_probe_dict(self):
+        report = RebuildReport()
+        d = report.to_probe_dict()
+        assert d == {"state": "not_started"}
+
+    def test_to_probe_dict_ready(self):
+        report = RebuildReport(state=ReadinessState.READY)
+        d = report.to_probe_dict()
+        assert d == {"state": "ready"}
+
+    def test_to_internal_dict(self):
         report = RebuildReport(
+            state=ReadinessState.READY,
             total_seconds=5.2,
             identities_rebuilt=3,
             registries_rebuilt=2,
             credentials_rebuilt=10,
         )
-        s = str(report)
-        assert "5.2s" in s
-        assert "3 identities" in s
+        d = report.to_internal_dict()
+        assert d["state"] == "ready"
+        assert d["total_seconds"] == 5.2
+        assert d["identities"]["rebuilt"] == 3
+        assert d["registries"]["rebuilt"] == 2
+        assert d["credentials"]["rebuilt"] == 10
 
-    def test_str_with_errors(self):
-        report = RebuildReport(errors=["error1"])
-        s = str(report)
-        assert "1 errors" in s
+    def test_to_internal_dict_with_errors(self):
+        report = RebuildReport(error_codes=["AID_MISMATCH:test"])
+        d = report.to_internal_dict()
+        assert d["error_codes"] == ["AID_MISMATCH:test"]
+
+    def test_default_values(self):
+        report = RebuildReport()
+        assert report.witnesses_published == 0
+        assert report.witness_publish_seconds == 0.0
+        assert report.error_codes == []
+        assert report.said_checks_passed == 0
 
 
 class TestIdentityRebuild:
@@ -145,6 +175,7 @@ class TestIdentityRebuild:
         # Phase 3: Re-initialize (uses stored salt) and rebuild
         from app.keri.persistence import reset_persistence_manager
         reset_persistence_manager()
+        reset_readiness_tracker()
 
         identity_mgr = await get_identity_manager()
         builder = KeriStateBuilder()
@@ -165,7 +196,7 @@ class TestIdentityRebuild:
         builder = KeriStateBuilder()
         report = await builder.rebuild()
         assert report.identities_rebuilt == 0
-        assert report.errors == []
+        assert report.error_codes == []
 
     @pytest.mark.asyncio
     async def test_rebuild_multiple_identities(self, rebuild_env):
@@ -195,6 +226,7 @@ class TestIdentityRebuild:
                 item.unlink()
 
         reset_persistence_manager()
+        reset_readiness_tracker()
         identity_mgr = await get_identity_manager()
 
         builder = KeriStateBuilder()
@@ -251,6 +283,7 @@ class TestRegistryRebuild:
                 item.unlink()
 
         reset_persistence_manager()
+        reset_readiness_tracker()
 
         # Rebuild
         await get_identity_manager()
@@ -260,7 +293,7 @@ class TestRegistryRebuild:
         report = await builder.rebuild()
 
         assert report.registries_rebuilt >= 1
-        assert len(report.errors) == 0, f"Errors: {report.errors}"
+        assert len(report.error_codes) == 0, f"Errors: {report.error_codes}"
 
 
 class TestCredentialRebuild:
@@ -316,6 +349,7 @@ class TestCredentialRebuild:
                 item.unlink()
 
         reset_persistence_manager()
+        reset_readiness_tracker()
 
         # Rebuild
         await get_identity_manager()
@@ -326,11 +360,59 @@ class TestCredentialRebuild:
         report = await builder.rebuild()
 
         assert report.credentials_rebuilt >= 1
-        assert len(report.errors) == 0, f"Errors: {report.errors}"
+        assert len(report.error_codes) == 0, f"Errors: {report.error_codes}"
+
+
+class TestReadinessStateTransitions:
+    """Tests for readiness state transitions during rebuild (Sprint 81)."""
+
+    @pytest.mark.asyncio
+    async def test_rebuild_transitions_to_ready(self, rebuild_env):
+        """Empty rebuild should transition through all states to READY."""
+        from app.keri.identity import get_identity_manager
+
+        await get_identity_manager()
+        tracker = get_readiness_tracker()
+
+        assert tracker.state == ReadinessState.NOT_STARTED
+
+        builder = KeriStateBuilder(tracker=tracker)
+        report = await builder.rebuild()
+
+        assert tracker.state == ReadinessState.READY
+        assert tracker.is_ready is True
+        assert report.state == ReadinessState.READY
+
+    @pytest.mark.asyncio
+    async def test_rebuild_report_has_timing(self, rebuild_env):
+        """Rebuild report should have started_at, completed_at, total_seconds."""
+        from app.keri.identity import get_identity_manager
+
+        await get_identity_manager()
+        builder = KeriStateBuilder()
+        report = await builder.rebuild()
+
+        assert report.started_at is not None
+        assert report.completed_at is not None
+        assert report.total_seconds >= 0
+
+    @pytest.mark.asyncio
+    async def test_verification_counts_match(self, rebuild_env):
+        """After rebuild, expected counts should match actual."""
+        from app.keri.identity import get_identity_manager
+
+        await get_identity_manager()
+        builder = KeriStateBuilder()
+        report = await builder.rebuild()
+
+        # Empty rebuild — all expected counts should be 0
+        assert report.identities_expected == 0
+        assert report.registries_expected == 0
+        assert report.credentials_expected == 0
 
 
 class TestWitnessPublishing:
-    """Tests for witness re-publishing during rebuild (Sprint 70)."""
+    """Tests for witness re-publishing during rebuild (Sprint 70/81)."""
 
     def test_report_includes_witness_fields(self):
         """RebuildReport should include witness publishing stats."""
@@ -338,17 +420,14 @@ class TestWitnessPublishing:
             witnesses_published=2,
             witness_publish_seconds=1.5,
         )
-        s = str(report)
-        assert "2 witness publications" in s
-        assert "1.5s" in s
+        d = report.to_internal_dict()
+        assert d["witnesses"]["published"] == 2
 
     def test_report_zero_witnesses(self):
         """RebuildReport with no witness publishing should show 0."""
         report = RebuildReport()
         assert report.witnesses_published == 0
         assert report.witness_publish_seconds == 0.0
-        s = str(report)
-        assert "0 witness publications" in s
 
     @pytest.mark.asyncio
     async def test_publish_skips_identities_without_witnesses(self, rebuild_env):
@@ -358,8 +437,6 @@ class TestWitnessPublishing:
 
         identity_mgr = await get_identity_manager()
 
-        # Create identity directly via makeHab with wits=[] to bypass
-        # create_identity's default witness fallback ([] is falsy)
         hab = identity_mgr.hby.makeHab(
             name="no-witness-id",
             transferable=True,
@@ -391,8 +468,8 @@ class TestWitnessPublishing:
             builder = KeriStateBuilder()
             report = await builder.rebuild()
 
-        # publish_oobi should never be called — no habs have witnesses
-        mock_publisher.publish_oobi.assert_not_called()
+        # publish_full_kel should never be called — no habs have witnesses
+        mock_publisher.publish_full_kel.assert_not_called()
         assert report.witnesses_published == 0
 
     @pytest.mark.asyncio
@@ -404,7 +481,6 @@ class TestWitnessPublishing:
 
         identity_mgr = await get_identity_manager()
 
-        # Create identity with fake witness AIDs
         fake_witness_aids = ["BIKKuvBwpmDVA4Ds-EpL5bt9OqPzWPja2LigFYZN2YfX"]
         await identity_mgr.create_identity(
             name="witnessed-id",
@@ -417,7 +493,7 @@ class TestWitnessPublishing:
         )
 
         mock_publisher = AsyncMock()
-        mock_publisher.publish_oobi.return_value = PublishResult(
+        mock_publisher.publish_full_kel.return_value = PublishResult(
             aid="test",
             success_count=1,
             total_count=1,
@@ -432,8 +508,7 @@ class TestWitnessPublishing:
             builder = KeriStateBuilder()
             report = await builder.rebuild()
 
-        # publish_oobi should be called for the witnessed identity
-        assert mock_publisher.publish_oobi.call_count >= 1
+        assert mock_publisher.publish_full_kel.call_count >= 1
         assert report.witnesses_published >= 1
         assert report.witness_publish_seconds > 0
 
@@ -457,7 +532,7 @@ class TestWitnessPublishing:
         )
 
         mock_publisher = AsyncMock()
-        mock_publisher.publish_oobi.side_effect = Exception("Connection refused")
+        mock_publisher.publish_full_kel.side_effect = Exception("Connection refused")
 
         with patch(
             "app.keri.witness.get_witness_publisher",
@@ -469,8 +544,7 @@ class TestWitnessPublishing:
         # Rebuild should complete despite witness failure
         assert report.identities_rebuilt >= 1
         assert report.witnesses_published == 0
-        # Error should be logged in report
-        witness_errors = [e for e in report.errors if "Witness publish" in e]
+        witness_errors = [e for e in report.error_codes if "WITNESS_PUBLISH" in e]
         assert len(witness_errors) >= 1
 
     @pytest.mark.asyncio
@@ -496,11 +570,11 @@ class TestWitnessPublishing:
 
         call_count = 0
 
-        async def mock_publish(aid, kel_bytes, hby=None):
+        async def mock_publish(pre, hby=None):
             nonlocal call_count
             call_count += 1
             return PublishResult(
-                aid=aid,
+                aid=pre,
                 success_count=1,
                 total_count=1,
                 threshold_met=True,
@@ -508,7 +582,7 @@ class TestWitnessPublishing:
             )
 
         mock_publisher = AsyncMock()
-        mock_publisher.publish_oobi = mock_publish
+        mock_publisher.publish_full_kel = mock_publish
 
         with patch(
             "app.keri.witness.get_witness_publisher",

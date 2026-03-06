@@ -4,6 +4,7 @@ Standalone service owning all LMDB/keripy state. Exposes a REST API
 for identity, registry, credential, dossier, VVP, and bootstrap operations.
 
 Sprint 68: KERI Agent Service Extraction.
+Sprint 81: Readiness gating via ReadinessTracker.
 """
 import logging
 import os
@@ -29,6 +30,10 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler for startup/shutdown."""
     log.info("Starting VVP KERI Agent service...")
 
+    # Sprint 81: Initialize readiness tracker
+    from app.keri.readiness import get_readiness_tracker
+    tracker = get_readiness_tracker()
+
     try:
         # Sprint 69: Initialize seed database (create tables if needed)
         from app.db.session import init_database
@@ -44,9 +49,13 @@ async def lifespan(app: FastAPI):
         seed_store = get_seed_store()
         if seed_store.has_seeds():
             from app.keri.state_builder import KeriStateBuilder
-            builder = KeriStateBuilder()
+            builder = KeriStateBuilder(tracker=tracker)
             report = await builder.rebuild()
-            log.info(f"State rebuild complete: {report}")
+            log.info(f"State rebuild complete: {report.state.value} in {report.total_seconds:.1f}s")
+        else:
+            # No seeds — mark as ready immediately
+            from app.keri.readiness import ReadinessState
+            await tracker.transition(ReadinessState.READY)
 
         # Initialize mock vLEI infrastructure if enabled
         if MOCK_VLEI_ENABLED:
@@ -64,8 +73,9 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Shutdown: Close managers in reverse order
+    # Shutdown: Cancel background tasks, close managers in reverse order
     log.info("Shutting down VVP KERI Agent service...")
+    await tracker.cancel_all_tasks()
     await close_credential_issuer()
     await close_registry_manager()
     await close_identity_manager()

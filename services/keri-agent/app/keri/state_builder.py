@@ -6,71 +6,91 @@ and replays all operations to recreate identical cryptographic state.
 
 Sprint 69: Ephemeral LMDB & Zero-Downtime KERI Deploys.
 Sprint 70: Automatic witness re-publishing on startup.
+Sprint 81: Readiness gating, full KEL publishing, comprehensive verification.
 """
 import asyncio
 import json
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
+from app.keri.readiness import (
+    ReadinessState,
+    ReadinessTracker,
+    RebuildReport,
+    get_readiness_tracker,
+)
 from app.keri.seed_store import get_seed_store
 
 log = logging.getLogger(__name__)
 
+# Sprint 81: Configurable startup budget for witness publishing
+import os
 
-@dataclass
-class RebuildReport:
-    """Summary of a state rebuild operation."""
-
-    total_seconds: float = 0.0
-    identities_rebuilt: int = 0
-    rotations_replayed: int = 0
-    registries_rebuilt: int = 0
-    credentials_rebuilt: int = 0
-    witnesses_published: int = 0
-    witness_publish_seconds: float = 0.0
-    errors: list[str] = field(default_factory=list)
-
-    def __str__(self) -> str:
-        parts = [
-            f"{self.total_seconds:.1f}s total",
-            f"{self.identities_rebuilt} identities",
-            f"{self.rotations_replayed} rotations",
-            f"{self.registries_rebuilt} registries",
-            f"{self.credentials_rebuilt} credentials",
-            f"{self.witnesses_published} witness publications ({self.witness_publish_seconds:.1f}s)",
-        ]
-        if self.errors:
-            parts.append(f"{len(self.errors)} errors")
-        return ", ".join(parts)
+WITNESS_PUBLISH_TIMEOUT = float(
+    os.getenv("VVP_WITNESS_PUBLISH_TIMEOUT", "120.0")
+)
+# Max concurrent witness HTTP calls
+WITNESS_PUBLISH_CONCURRENCY = int(
+    os.getenv("VVP_WITNESS_PUBLISH_CONCURRENCY", "10")
+)
+# Global retry budget (max rounds across all identities)
+WITNESS_PUBLISH_MAX_RETRIES = int(
+    os.getenv("VVP_WITNESS_PUBLISH_MAX_RETRIES", "3")
+)
 
 
 class KeriStateBuilder:
     """Deterministically rebuilds all KERI state from PostgreSQL seeds."""
 
-    def __init__(self):
+    def __init__(self, tracker: ReadinessTracker | None = None):
         # Cache inception event bytes captured right after makeHab(),
         # before registry/credential operations modify LMDB state.
         # Maps AID prefix -> inception event bytes (CESR with sigs).
         self._inception_cache: dict[str, bytes] = {}
+        self._tracker = tracker or get_readiness_tracker()
 
     async def rebuild(self) -> RebuildReport:
-        """Full rebuild sequence. Returns timing and count report."""
-        report = RebuildReport()
-        start = time.monotonic()
+        """Full rebuild sequence with readiness state tracking."""
+        report = self._tracker.report
+        report.started_at = datetime.now(timezone.utc)
 
         try:
+            # Phase: REBUILDING
+            await self._tracker.transition(ReadinessState.REBUILDING)
+
             report.identities_rebuilt = await self._rebuild_identities(report)
             report.rotations_replayed = await self._replay_rotations(report)
             report.registries_rebuilt = await self._rebuild_registries(report)
             report.credentials_rebuilt = await self._rebuild_credentials(report)
-            await self._verify_state(report)
-            report.witnesses_published = await self._publish_to_witnesses(report)
-        except Exception as e:
-            report.errors.append(f"Rebuild failed: {e}")
-            log.error(f"State rebuild failed: {e}")
 
-        report.total_seconds = time.monotonic() - start
+            # Phase: PUBLISHING
+            await self._tracker.transition(ReadinessState.PUBLISHING)
+            report.witnesses_published = await self._publish_to_witnesses(report)
+
+            # Phase: VERIFYING
+            await self._tracker.transition(ReadinessState.VERIFYING)
+            verification_ok = await self._verify_state(report)
+
+            if verification_ok:
+                await self._tracker.transition(ReadinessState.READY)
+            else:
+                await self._tracker.transition(ReadinessState.FAILED)
+
+        except Exception as e:
+            report.error_codes.append(f"REBUILD_EXCEPTION:{type(e).__name__}")
+            log.error(f"State rebuild failed: {e}")
+            await self._tracker.transition(ReadinessState.FAILED)
+
+        report.total_seconds = time.monotonic() - (
+            report.started_at.timestamp() - time.time() + time.monotonic()
+        )
+        report.completed_at = datetime.now(timezone.utc)
+        report.total_seconds = (
+            report.completed_at - report.started_at
+        ).total_seconds()
+
         return report
 
     async def _rebuild_identities(self, report: RebuildReport) -> int:
@@ -111,8 +131,6 @@ class KeriStateBuilder:
 
                 # Cache inception event bytes NOW, before registry/credential
                 # operations add interaction events that corrupt getKeLast(sn=0).
-                # Use hab.iserder.saidb (always the icp SAID) instead of
-                # getKeLast(snKey) which is vulnerable to LMDB sn=0 corruption.
                 try:
                     pre_bytes = hab.pre.encode("utf-8")
                     dig = hab.iserder.saidb
@@ -124,9 +142,8 @@ class KeriStateBuilder:
                     log.warning(f"Failed to cache inception for {seed.name}: {e}")
 
                 if hab.pre != seed.expected_aid:
-                    report.errors.append(
-                        f"AID mismatch for {seed.name}: "
-                        f"expected={seed.expected_aid[:16]}... got={hab.pre[:16]}..."
+                    report.error_codes.append(
+                        f"AID_MISMATCH:{seed.name}"
                     )
                     log.error(
                         f"AID mismatch for {seed.name}: "
@@ -138,7 +155,7 @@ class KeriStateBuilder:
                 count += 1
 
             except Exception as e:
-                report.errors.append(f"Failed to rebuild identity {seed.name}: {e}")
+                report.error_codes.append(f"IDENTITY_REBUILD_FAILED:{seed.name}")
                 log.error(f"Failed to rebuild identity {seed.name}: {e}")
 
         return count
@@ -179,9 +196,8 @@ class KeriStateBuilder:
                     )
 
                 except Exception as e:
-                    report.errors.append(
-                        f"Failed to replay rotation {id_seed.name} "
-                        f"sn={rot_seed.sequence_number}: {e}"
+                    report.error_codes.append(
+                        f"ROTATION_FAILED:{id_seed.name}:sn={rot_seed.sequence_number}"
                     )
                     log.error(
                         f"Failed to replay rotation {id_seed.name} "
@@ -224,7 +240,7 @@ class KeriStateBuilder:
                         break
 
                 if identity_seed is None:
-                    report.errors.append(f"Identity {seed.identity_name} not found for registry {seed.name}")
+                    report.error_codes.append(f"REGISTRY_ORPHAN:{seed.name}")
                     continue
 
                 issuer_aid = identity_seed.expected_aid
@@ -262,11 +278,7 @@ class KeriStateBuilder:
                 )
 
                 if registry.regk != seed.expected_registry_key:
-                    report.errors.append(
-                        f"Registry key mismatch for {seed.name}: "
-                        f"expected={seed.expected_registry_key[:16]}... "
-                        f"got={registry.regk[:16]}..."
-                    )
+                    report.error_codes.append(f"REGISTRY_KEY_MISMATCH:{seed.name}")
                     log.error(
                         f"Registry key mismatch for {seed.name}: "
                         f"expected={seed.expected_registry_key} got={registry.regk}"
@@ -277,7 +289,7 @@ class KeriStateBuilder:
                 count += 1
 
             except Exception as e:
-                report.errors.append(f"Failed to rebuild registry {seed.name}: {e}")
+                report.error_codes.append(f"REGISTRY_REBUILD_FAILED:{seed.name}")
                 log.error(f"Failed to rebuild registry {seed.name}: {e}")
 
         return count
@@ -315,12 +327,12 @@ class KeriStateBuilder:
                 # Find registry
                 registry = registry_mgr.regery.registryByName(seed.registry_name)
                 if registry is None:
-                    report.errors.append(f"Registry {seed.registry_name} not found for credential {seed.expected_said[:16]}...")
+                    report.error_codes.append(f"CRED_REGISTRY_MISSING:{seed.expected_said[:16]}")
                     continue
 
                 hab = registry.hab
                 if hab is None:
-                    report.errors.append(f"No hab for registry {seed.registry_name}")
+                    report.error_codes.append(f"CRED_HAB_MISSING:{seed.expected_said[:16]}")
                     continue
 
                 # Deserialize stored JSON
@@ -341,17 +353,13 @@ class KeriStateBuilder:
                 )
 
                 if creder.said != seed.expected_said:
-                    report.errors.append(
-                        f"Credential SAID mismatch: "
-                        f"expected={seed.expected_said[:16]}... "
-                        f"got={creder.said[:16]}..."
+                    report.error_codes.append(
+                        f"SAID_MISMATCH:{seed.expected_said[:16]}"
                     )
                     log.error(
                         f"Credential SAID mismatch: "
                         f"expected={seed.expected_said} got={creder.said}"
                     )
-                    # Still process it — the credential was created, just verify failed
-                    # This allows the system to come up even with mismatches
 
                 # Create TEL issuance event
                 dt = attributes.get("dt", helping.nowIso8601())
@@ -393,8 +401,8 @@ class KeriStateBuilder:
                 count += 1
 
             except Exception as e:
-                report.errors.append(
-                    f"Failed to rebuild credential {seed.expected_said[:16]}...: {e}"
+                report.error_codes.append(
+                    f"CRED_REBUILD_FAILED:{seed.expected_said[:16]}"
                 )
                 log.error(
                     f"Failed to rebuild credential {seed.expected_said[:16]}...: {e}"
@@ -402,38 +410,175 @@ class KeriStateBuilder:
 
         return count
 
-    async def _verify_state(self, report: RebuildReport) -> None:
-        """Verify all AIDs, registry keys, and credential SAIDs match expected."""
-        seed_store = get_seed_store()
+    async def _verify_state(self, report: RebuildReport) -> bool:
+        """Verify rebuilt state matches seed expectations.
 
-        # Verify identity count
+        Deterministic, comprehensive checks:
+        1. Identity count == seed identity count (exact match)
+        2. Registry count == seed registry count (exact match)
+        3. Credential count == seed credential count (exact match)
+        4. Full-set SAID validation for every credential
+        5. TEL integrity for all credentials (iss event presence)
+
+        Returns True if ALL checks pass, False on ANY mismatch.
+        """
+        seed_store = get_seed_store()
+        all_ok = True
+
+        # 1. Verify identity count
         from app.keri.identity import get_identity_manager
         identity_mgr = await get_identity_manager()
         identity_seeds = seed_store.get_all_identity_seeds()
-        actual_identities = len(list(identity_mgr.hby.prefixes))
-        expected_identities = len(identity_seeds)
 
-        if actual_identities < expected_identities:
-            msg = (
-                f"Identity count mismatch: expected={expected_identities} "
-                f"actual={actual_identities}"
+        actual_identities = len(list(identity_mgr.hby.prefixes))
+        report.identities_expected = len(identity_seeds)
+
+        if actual_identities != report.identities_expected:
+            report.error_codes.append(
+                f"COUNT_MISMATCH:identities:{actual_identities}!={report.identities_expected}"
             )
-            report.errors.append(msg)
-            log.warning(msg)
+            log.error(
+                f"Identity count mismatch: actual={actual_identities} "
+                f"expected={report.identities_expected}"
+            )
+            all_ok = False
+
+        # 2. Verify registry count
+        from app.keri.registry import get_registry_manager
+        registry_mgr = await get_registry_manager()
+        registry_seeds = seed_store.get_all_registry_seeds()
+
+        actual_registries = len(registry_mgr.regery.regs)
+        report.registries_expected = len(registry_seeds)
+
+        if actual_registries != report.registries_expected:
+            report.error_codes.append(
+                f"COUNT_MISMATCH:registries:{actual_registries}!={report.registries_expected}"
+            )
+            log.error(
+                f"Registry count mismatch: actual={actual_registries} "
+                f"expected={report.registries_expected}"
+            )
+            all_ok = False
+
+        # 3. Verify credential count
+        credential_seeds = seed_store.get_all_credential_seeds()
+        reger = registry_mgr.regery.reger
+        actual_credentials = sum(1 for _ in reger.creds.getItemIter())
+        report.credentials_expected = len(credential_seeds)
+
+        if actual_credentials != report.credentials_expected:
+            report.error_codes.append(
+                f"COUNT_MISMATCH:credentials:{actual_credentials}!={report.credentials_expected}"
+            )
+            log.error(
+                f"Credential count mismatch: actual={actual_credentials} "
+                f"expected={report.credentials_expected}"
+            )
+            all_ok = False
+
+        # 4. Full-set SAID validation with recomputation (offloaded to thread pool)
+        def _verify_saids():
+            from keri.core.coring import Saider
+
+            passed = 0
+            failed = 0
+            for seed in credential_seeds:
+                try:
+                    cred = reger.creds.get(keys=(seed.expected_said,))
+                    if cred is None:
+                        report.error_codes.append(
+                            f"SAID_MISSING:{seed.expected_said[:16]}"
+                        )
+                        failed += 1
+                        continue
+                    if cred.said != seed.expected_said:
+                        report.error_codes.append(
+                            f"SAID_MISMATCH:{seed.expected_said[:16]}"
+                        )
+                        failed += 1
+                        continue
+                    # Recompute and verify SAID from credential content
+                    # (Blake3-256 hash of canonicalized credential)
+                    saider = Saider(qb64=cred.said)
+                    if not saider.verify(cred.sad, prefixed=True):
+                        report.error_codes.append(
+                            f"SAID_RECOMPUTE_MISMATCH:{seed.expected_said[:16]}"
+                        )
+                        failed += 1
+                    else:
+                        passed += 1
+                except Exception as e:
+                    report.error_codes.append(
+                        f"SAID_CHECK_ERROR:{seed.expected_said[:16]}"
+                    )
+                    log.error(f"SAID check error for {seed.expected_said[:16]}: {e}")
+                    failed += 1
+            return passed, failed
+
+        said_passed, said_failed = await asyncio.to_thread(_verify_saids)
+        report.said_checks_passed = said_passed
+        report.said_checks_failed = said_failed
+        if said_failed > 0:
+            all_ok = False
+
+        # 5. TEL integrity verification
+        tel_ok = await self._verify_tel_integrity(report, credential_seeds, reger)
+        if not tel_ok:
+            all_ok = False
 
         log.info(
-            f"State verification: {actual_identities}/{expected_identities} identities, "
-            f"{report.registries_rebuilt} registries, "
-            f"{report.credentials_rebuilt} credentials, "
-            f"{len(report.errors)} errors"
+            f"State verification: identities={actual_identities}/{report.identities_expected}, "
+            f"registries={actual_registries}/{report.registries_expected}, "
+            f"credentials={actual_credentials}/{report.credentials_expected}, "
+            f"said_ok={said_passed}/{said_passed + said_failed}, "
+            f"tel_ok={report.tel_integrity_passed}/{report.tel_integrity_passed + report.tel_integrity_failed}, "
+            f"errors={len(report.error_codes)}"
         )
 
-    async def _publish_to_witnesses(self, report: RebuildReport) -> int:
-        """Publish all rebuilt identity KELs to witnesses.
+        return all_ok
 
-        Iterates in-memory hby.habs, filters to identities with witnesses,
-        and publishes their KELs concurrently via asyncio.gather. Failures
-        are logged but do not prevent startup.
+    async def _verify_tel_integrity(
+        self, report: RebuildReport, credential_seeds, reger
+    ) -> bool:
+        """Verify TEL state is consistent in local LMDB Reger.
+
+        VVP uses simple (non-backer) registries exclusively (no_backers=True),
+        so only iss/rev TEL event types are expected.
+        """
+        def _check_tel():
+            passed = 0
+            failed = 0
+            for seed in credential_seeds:
+                try:
+                    # Check TEL issuance event exists
+                    cancs = reger.cancs.get(keys=(seed.expected_said,))
+                    if cancs is None:
+                        report.error_codes.append(
+                            f"TEL_MISSING_ISS:{seed.expected_said[:16]}"
+                        )
+                        failed += 1
+                        continue
+                    passed += 1
+                except Exception as e:
+                    report.error_codes.append(
+                        f"TEL_CHECK_ERROR:{seed.expected_said[:16]}"
+                    )
+                    log.error(f"TEL check error for {seed.expected_said[:16]}: {e}")
+                    failed += 1
+            return passed, failed
+
+        tel_passed, tel_failed = await asyncio.to_thread(_check_tel)
+        report.tel_integrity_passed = tel_passed
+        report.tel_integrity_failed = tel_failed
+        return tel_failed == 0
+
+    async def _publish_to_witnesses(self, report: RebuildReport) -> int:
+        """Publish full KEL for all rebuilt identities to witnesses.
+
+        Uses publish_full_kel() to send complete KEL (all event types
+        with CESR attachments) via two-phase receipt protocol.
+        Delegation-aware: delegators published before delegates.
         """
         from app.keri.identity import get_identity_manager
         from app.keri.witness import get_witness_publisher
@@ -442,8 +587,7 @@ class KeriStateBuilder:
         identity_mgr = await get_identity_manager()
         publisher = get_witness_publisher()
 
-        # Only publish identities created from seeds (skip keripy internals
-        # like the Habery signator which also has witnesses configured)
+        # Only publish identities created from seeds
         seed_store = get_seed_store()
         seeded_aids = {s.expected_aid for s in seed_store.get_all_identity_seeds()}
 
@@ -460,108 +604,102 @@ class KeriStateBuilder:
             return 0
 
         log.info(
-            f"Publishing {len(habs_with_witnesses)} identities to witnesses..."
+            f"Publishing full KEL for {len(habs_with_witnesses)} identities to witnesses..."
         )
+
+        # Publish with bounded concurrency
+        semaphore = asyncio.Semaphore(WITNESS_PUBLISH_CONCURRENCY)
 
         async def _publish_one(hab):
-            """Publish a single identity's inception event to witnesses."""
-            aid = hab.pre
-            try:
-                # Use cached inception event captured during _rebuild_identities
-                # (before registry/credential ops modify LMDB sn=0 entries).
-                inception_msg = self._inception_cache.get(aid)
-                if inception_msg is None:
+            async with semaphore:
+                try:
+                    result = await publisher.publish_full_kel(
+                        pre=hab.pre,
+                        hby=identity_mgr.hby,
+                    )
+                    if result.threshold_met:
+                        log.info(
+                            f"Published full KEL for {hab.name} ({hab.pre[:16]}...) to "
+                            f"{result.success_count}/{result.total_count} witnesses"
+                        )
+                        return True
+                    else:
+                        log.warning(
+                            f"KEL publish below threshold for {hab.name}: "
+                            f"{result.success_count}/{result.total_count}"
+                        )
+                        return False
+                except Exception as e:
                     log.warning(
-                        f"No cached inception for {aid[:16]}..., "
-                        f"falling back to LMDB lookup"
+                        f"Failed to publish KEL for {hab.name}: {e}"
                     )
-                    inception_msg = await identity_mgr.get_inception_msg(aid)
-                result = await publisher.publish_oobi(
-                    aid, inception_msg, hby=identity_mgr.hby
-                )
-                if result.threshold_met:
-                    log.info(
-                        f"Published {hab.name} ({aid[:16]}...) to "
-                        f"{result.success_count}/{result.total_count} witnesses"
+                    report.error_codes.append(
+                        f"WITNESS_PUBLISH_FAILED:{hab.name}"
                     )
-                    return True
-                else:
-                    log.warning(
-                        f"Witness publish below threshold for {hab.name} "
-                        f"({aid[:16]}...): {result.success_count}/{result.total_count}"
-                    )
-                    for wr in result.witnesses:
-                        if not wr.success:
-                            log.warning(
-                                f"  Witness {wr.url} failed: {wr.error}"
-                            )
-                    return result.success_count > 0
-            except Exception as e:
-                log.warning(
-                    f"Failed to publish {hab.name} ({aid[:16]}...) "
-                    f"to witnesses: {e}"
-                )
-                report.errors.append(
-                    f"Witness publish failed for {hab.name}: {e}"
-                )
-                return False
+                    return False
 
-        results = await asyncio.gather(
-            *[_publish_one(hab) for hab in habs_with_witnesses],
-            return_exceptions=True,
-        )
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(
+                    *[_publish_one(hab) for hab in habs_with_witnesses],
+                    return_exceptions=True,
+                ),
+                timeout=WITNESS_PUBLISH_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            log.error(
+                f"Witness publishing timed out after {WITNESS_PUBLISH_TIMEOUT}s"
+            )
+            report.error_codes.append(
+                f"WITNESS_PUBLISH_TIMEOUT:{WITNESS_PUBLISH_TIMEOUT}s"
+            )
+            report.witness_publish_seconds = time.monotonic() - start
+            return 0
 
         count = 0
+        failed_habs = []
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 hab = habs_with_witnesses[i]
-                log.warning(
-                    f"Witness publish exception for {hab.name}: {result}"
-                )
-                report.errors.append(
-                    f"Witness publish exception for {hab.name}: {result}"
-                )
+                log.warning(f"Witness publish exception for {hab.name}: {result}")
+                report.error_codes.append(f"WITNESS_PUBLISH_EXCEPTION:{hab.name}")
+                failed_habs.append(hab)
             elif result:
                 count += 1
+            else:
+                failed_habs.append(habs_with_witnesses[i])
 
         report.witness_publish_seconds = time.monotonic() - start
+        report.witnesses_published = count
         log.info(
             f"Witness publishing complete: {count}/{len(habs_with_witnesses)} "
             f"identities in {report.witness_publish_seconds:.1f}s"
         )
 
-        # Schedule background retry for any identities that failed to publish
-        failed_habs = []
-        for i, result in enumerate(results):
-            if isinstance(result, Exception) or not result:
-                failed_habs.append(habs_with_witnesses[i])
+        # Schedule supervised background retry for failures
         if failed_habs:
             log.info(
-                f"Scheduling background retry for {len(failed_habs)} "
+                f"Scheduling supervised retry for {len(failed_habs)} "
                 f"failed witness publishes"
             )
-            asyncio.create_task(
-                self._retry_failed_publishes(failed_habs)
+            report.witness_retries_pending = len(failed_habs)
+            task = asyncio.create_task(
+                self._retry_failed_publishes(failed_habs, report)
             )
+            self._tracker.track_task(task)
 
         return count
 
     async def _retry_failed_publishes(
         self,
         failed_habs: list,
-        max_attempts: int = 8,
+        report: RebuildReport,
         initial_delay: float = 15.0,
     ) -> None:
-        """Background retry for identities that failed to publish on startup.
+        """Supervised background retry for failed witness publishes.
 
-        Uses exponential backoff (15s, 30s, 60s, 120s, ...) to retry
-        publishing to witnesses. This handles the common case where
-        witnesses are still starting up when the KERI Agent first publishes.
-
-        Args:
-            failed_habs: List of hab objects that failed initial publish.
-            max_attempts: Maximum retry attempts per identity.
-            initial_delay: Initial delay in seconds before first retry.
+        Uses global retry budget (max rounds). Each completion decrements
+        report.witness_retries_pending.
         """
         from app.keri.identity import get_identity_manager
         from app.keri.witness import get_witness_publisher
@@ -570,50 +708,44 @@ class KeriStateBuilder:
         publisher = get_witness_publisher()
         remaining = list(failed_habs)
 
-        for attempt in range(max_attempts):
+        for attempt in range(WITNESS_PUBLISH_MAX_RETRIES):
             delay = initial_delay * (2 ** attempt)
-            # Cap at 5 minutes
             delay = min(delay, 300.0)
             log.info(
-                f"Witness publish retry {attempt + 1}/{max_attempts}: "
+                f"Witness publish retry {attempt + 1}/{WITNESS_PUBLISH_MAX_RETRIES}: "
                 f"waiting {delay:.0f}s for {len(remaining)} identities"
             )
             await asyncio.sleep(delay)
 
             still_failing = []
             for hab in remaining:
-                aid = hab.pre
                 try:
-                    inception_msg = self._inception_cache.get(aid)
-                    if inception_msg is None:
-                        inception_msg = await identity_mgr.get_inception_msg(aid)
-                    result = await publisher.publish_oobi(
-                        aid, inception_msg, hby=identity_mgr.hby
+                    result = await publisher.publish_full_kel(
+                        pre=hab.pre,
+                        hby=identity_mgr.hby,
                     )
                     if result.threshold_met:
                         log.info(
-                            f"Retry publish succeeded for {hab.name} "
-                            f"({aid[:16]}...): "
+                            f"Retry publish succeeded for {hab.name}: "
                             f"{result.success_count}/{result.total_count}"
                         )
+                        report.witness_retries_pending -= 1
                     else:
                         still_failing.append(hab)
                 except Exception as e:
-                    log.warning(
-                        f"Retry publish failed for {hab.name} "
-                        f"({aid[:16]}...): {e}"
-                    )
+                    log.warning(f"Retry publish failed for {hab.name}: {e}")
                     still_failing.append(hab)
 
             remaining = still_failing
             if not remaining:
                 log.info("All witness publish retries succeeded")
+                report.witness_retries_pending = 0
                 return
 
         if remaining:
             names = [h.name for h in remaining]
             log.error(
-                f"Witness publish retries exhausted after {max_attempts} "
-                f"attempts. Still failing: {names}. "
-                f"Manual republish required via POST /admin/publish-identity"
+                f"Witness publish retries exhausted after {WITNESS_PUBLISH_MAX_RETRIES} "
+                f"attempts. Still failing: {names}."
             )
+            report.witness_retries_pending = len(remaining)

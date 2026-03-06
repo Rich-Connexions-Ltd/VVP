@@ -639,6 +639,52 @@ jobs:
             --revision "$NEW_REV" -o json 2>/dev/null || true
           exit 1
 
+      - name: Wait for keri-agent readyz
+        run: |
+          # Sprint 81: Poll /readyz inside the container (internal-only ingress).
+          # Waits for state rebuild + witness publishing to complete.
+          # The container must reach {"state": "ready"} before the Issuer deploys.
+          RG="${{ secrets.AZURE_RG }}"
+          MAX_ATTEMPTS=30
+          INTERVAL=10
+          echo "Polling /readyz inside keri-agent container (max ${MAX_ATTEMPTS}x${INTERVAL}s = $((MAX_ATTEMPTS * INTERVAL))s)..."
+
+          for i in $(seq 1 $MAX_ATTEMPTS); do
+            RESPONSE=$(az containerapp exec \
+              --name vvp-keri-agent \
+              --resource-group "$RG" \
+              --command "curl -sf http://localhost:8002/readyz" 2>/dev/null || echo "")
+
+            if [ -n "$RESPONSE" ]; then
+              STATE=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('state',''))" 2>/dev/null || echo "")
+              echo "Attempt ${i}/${MAX_ATTEMPTS}: readyz state=$STATE"
+
+              if [ "$STATE" = "ready" ]; then
+                echo "KERI Agent is ready — state rebuild and witness publishing complete"
+                exit 0
+              elif [ "$STATE" = "failed" ]; then
+                echo "::error::KERI Agent readyz state is 'failed' — rebuild did not complete successfully"
+                # Fetch full diagnostic report
+                az containerapp exec \
+                  --name vvp-keri-agent \
+                  --resource-group "$RG" \
+                  --command "curl -sf http://localhost:8002/admin/readyz" 2>/dev/null || true
+                exit 1
+              fi
+            else
+              echo "Attempt ${i}/${MAX_ATTEMPTS}: readyz not available yet"
+            fi
+
+            sleep $INTERVAL
+          done
+
+          echo "::error::KERI Agent /readyz did not reach 'ready' state within $((MAX_ATTEMPTS * INTERVAL))s"
+          az containerapp exec \
+            --name vvp-keri-agent \
+            --resource-group "$RG" \
+            --command "curl -sf http://localhost:8002/admin/readyz" 2>/dev/null || true
+          exit 1
+
   # =========================================================================
   # DEPLOY ISSUER
   # =========================================================================

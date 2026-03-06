@@ -611,7 +611,11 @@ Base URL: `http://keri-agent.internal:8002` (internal only)
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `GET` | `/healthz` | Readiness probe (KERI managers initialized) |
+| `GET` | `/livez` | Liveness probe — always 200 |
+| `GET` | `/healthz` | Basic readiness probe (KERI managers + LMDB accessible) |
+| `GET` | `/readyz` | Readiness probe — 200 only when state rebuild complete (Sprint 81). Minimal `{"state": "ready"}` response, `Cache-Control: no-store`. Returns 503 with state when not ready. |
+| `GET` | `/admin/readyz` | Full diagnostic readiness (Sprint 81). Returns complete rebuild report with timing, counts, verification results, witness publishing status. `Cache-Control: private, no-store`, `Vary: Authorization`. |
+| `GET` | `/stats` | Identity/registry/credential counts |
 | `GET` | `/bootstrap/status` | Mock vLEI bootstrap status |
 
 ### TEL (Transaction Event Log) — Sprint 80

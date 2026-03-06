@@ -1,15 +1,21 @@
 """Health check endpoints for the KERI Agent.
 
-Three-tier probe design:
-- /livez  — Liveness: is the process alive? Always 200.
-- /healthz — Readiness: is LMDB accessible? 200 or 503.
-- /stats  — Counts of identities, registries, credentials.
+Four-tier probe design:
+- /livez      — Liveness: is the process alive? Always 200.
+- /healthz    — Basic readiness: is LMDB accessible? 200 or 503.
+- /readyz     — Full readiness: is rebuild + publishing + verification
+                complete? 200 only when READY, 503 otherwise.
+                Minimal response (state only) for unauthenticated probe.
+- /admin/readyz — Full diagnostic readyz. Requires admin auth.
+- /stats      — Counts of identities, registries, credentials.
 
 Sprint 68: KERI Agent Service Extraction.
+Sprint 81: /readyz readiness probe + admin diagnostic endpoint.
 """
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse
 
 from common.vvp.models.keri_agent import AgentHealthResponse, AgentStatsResponse
 
@@ -25,7 +31,7 @@ async def livez():
 
 @router.get("/healthz", response_model=AgentHealthResponse)
 async def healthz():
-    """Readiness probe — checks LMDB accessibility."""
+    """Basic readiness probe — checks LMDB accessibility."""
     try:
         from app.keri.identity import get_identity_manager
         from app.keri.registry import get_registry_manager
@@ -48,7 +54,6 @@ async def healthz():
         )
     except Exception as e:
         log.error(f"Health check failed: {e}")
-        from fastapi.responses import JSONResponse
         return JSONResponse(
             status_code=503,
             content=AgentHealthResponse(
@@ -59,6 +64,58 @@ async def healthz():
                 lmdb_accessible=False,
             ).model_dump(),
         )
+
+
+@router.get("/readyz")
+async def readyz():
+    """Readiness probe for Azure Container Apps and CI deploy gates.
+
+    Returns:
+        200 + minimal state when READY
+        503 + minimal state when not READY
+
+    Response body contains only {"state": "ready"|"failed"|...}.
+    No operational metadata exposed. For diagnostics, use /admin/readyz.
+    """
+    from app.keri.readiness import get_readiness_tracker
+
+    tracker = get_readiness_tracker()
+    body = tracker.report.to_probe_dict()
+    status = 200 if tracker.is_ready else 503
+
+    return JSONResponse(
+        status_code=status,
+        content=body,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get("/admin/readyz")
+async def admin_readyz(request: Request):
+    """Full diagnostic readyz for operators.
+
+    Returns the complete rebuild report including error codes,
+    timing, and verification details. Protected by bearer token auth
+    (handled by BearerTokenMiddleware on non-health endpoints).
+
+    Returns:
+        200 + full report when READY
+        503 + full report when not READY
+    """
+    from app.keri.readiness import get_readiness_tracker
+
+    tracker = get_readiness_tracker()
+    body = tracker.report.to_internal_dict()
+    status = 200 if tracker.is_ready else 503
+
+    return JSONResponse(
+        status_code=status,
+        content=body,
+        headers={
+            "Cache-Control": "private, no-store",
+            "Vary": "Authorization",
+        },
+    )
 
 
 @router.get("/stats", response_model=AgentStatsResponse)

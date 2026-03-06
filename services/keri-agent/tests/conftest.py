@@ -25,6 +25,7 @@ from app.keri.registry import (
 )
 from app.keri.witness import reset_witness_publisher
 from app.keri.seed_store import reset_seed_store
+from app.keri.readiness import reset_readiness_tracker
 from app.dossier.builder import reset_dossier_builder
 from app.mock_vlei import reset_mock_vlei_manager
 
@@ -91,6 +92,7 @@ def _reset_all_singletons():
     reset_persistence_manager()
     reset_witness_publisher()
     reset_seed_store()
+    reset_readiness_tracker()
     reset_dossier_builder()
     reset_mock_vlei_manager()
 

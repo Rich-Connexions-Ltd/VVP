@@ -189,6 +189,138 @@ class WitnessPublisher:
             witnesses=results,
         )
 
+    async def publish_full_kel(
+        self,
+        pre: str,
+        hby,
+        *,
+        witnesses: list[str] | None = None,
+    ) -> PublishResult:
+        """Publish the complete KEL for an identity to witnesses.
+
+        Uses hby.db.clonePreIter(pre) to get all events with CESR
+        attachments (signatures, witness receipts, seal source couples)
+        in first-seen order. Concatenates into a single CESR stream
+        and POSTs to each witness with two-phase receipt protocol.
+
+        Args:
+            pre: AID prefix (identifier)
+            hby: Habery instance for KEL access and receipt parsing
+            witnesses: Optional override of witness URLs
+
+        Returns:
+            PublishResult with success/total/threshold_met counts
+        """
+        target_urls = witnesses or self._witness_urls
+        if not target_urls:
+            log.warning("No witness URLs configured for full KEL publishing")
+            return PublishResult(
+                aid=pre,
+                success_count=0,
+                total_count=0,
+                threshold_met=False,
+                witnesses=[],
+            )
+
+        # Get full KEL as CESR stream with all attachments
+        pre_bytes = pre.encode("utf-8")
+        kel_stream = bytearray()
+        event_count = 0
+        for msg in hby.db.clonePreIter(pre=pre_bytes, fn=0):
+            kel_stream.extend(msg)
+            event_count += 1
+
+        if not kel_stream:
+            log.warning(f"Empty KEL for {pre[:16]}..., nothing to publish")
+            return PublishResult(
+                aid=pre,
+                success_count=0,
+                total_count=0,
+                threshold_met=False,
+                witnesses=[],
+            )
+
+        log.info(
+            f"Publishing full KEL for {pre[:16]}...: "
+            f"{event_count} events, {len(kel_stream)} bytes"
+        )
+
+        # Publish to witnesses using same retry logic as publish_oobi
+        # The full stream is posted to /receipts — witnesses process
+        # all events in sequence
+        results: list[WitnessResult] = []
+        receipts: dict[str, bytes] = {}
+
+        # Convert to immutable bytes once — reused by all witness tasks
+        kel_bytes = bytes(kel_stream)
+
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            # Phase 1: Send full KEL to each witness, collect receipts
+            tasks = [
+                self._publish_to_witness(
+                    client, url, pre, kel_bytes
+                )
+                for url in target_urls
+            ]
+            phase1_results = await asyncio.gather(
+                *tasks, return_exceptions=True
+            )
+
+            for i, result in enumerate(phase1_results):
+                url = target_urls[i]
+                if isinstance(result, tuple):
+                    wr, receipt = result
+                    results.append(wr)
+                    if wr.success and receipt:
+                        receipts[url] = receipt
+                elif isinstance(result, Exception):
+                    results.append(
+                        WitnessResult(
+                            url=url, success=False, error=str(result)
+                        )
+                    )
+                else:
+                    results.append(result)
+
+            # Parse Phase 1 receipts locally
+            if hby is not None and receipts:
+                for url, receipt_bytes in receipts.items():
+                    try:
+                        hby.psr.parse(bytearray(receipt_bytes))
+                    except Exception as e:
+                        log.warning(
+                            f"Failed to parse KEL receipt from {url}: {e}"
+                        )
+
+            # Phase 2: Redistribute receipts
+            if len(receipts) > 1:
+                try:
+                    # Build receipt for the latest event in the stream
+                    rct_msg = self._build_witness_receipt(
+                        bytes(kel_stream), receipts
+                    )
+                    if rct_msg:
+                        dist_tasks = [
+                            self._distribute_receipt(client, url, rct_msg)
+                            for url in target_urls
+                        ]
+                        await asyncio.gather(
+                            *dist_tasks, return_exceptions=True
+                        )
+                except Exception as e:
+                    log.warning(
+                        f"Failed to build/distribute KEL receipt: {e}"
+                    )
+
+        success_count = sum(1 for r in results if r.success)
+        return PublishResult(
+            aid=pre,
+            success_count=success_count,
+            total_count=len(results),
+            threshold_met=success_count >= self._threshold,
+            witnesses=results,
+        )
+
     async def publish_event(
         self,
         pre: str,

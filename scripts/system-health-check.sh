@@ -471,6 +471,15 @@ check_container_apps() {
     check_http_health "Issuer" "$ISSUER_URL" "/healthz" || failed=1
     check_http_version "Issuer" "$ISSUER_URL" || true
 
+    # --- KERI Agent readyz (Sprint 81) ---
+    # KERI Agent has internal-only ingress in Azure; check via Issuer's /readyz
+    # which gates on KERI Agent availability. In local mode, check directly.
+    if [ "$MODE" = "local" ]; then
+        check_http_health "KERI-Agent-readyz" "http://localhost:8002" "/readyz" || failed=1
+    else
+        check_http_health "KERI-Agent-via-Issuer" "$ISSUER_URL" "/readyz" || failed=1
+    fi
+
     # --- Witnesses ---
     check_witness_oobi "Witness-wan" "$WITNESS1_URL" "$WAN_AID" || failed=1
     check_witness_oobi "Witness-wil" "$WITNESS2_URL" "$WIL_AID" || failed=1
