@@ -13,11 +13,33 @@ cause INVALID (per Reviewer guidance).
 
 import logging
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
+
+from common.vvp.schema.registry import BRAND_SCHEMA_SAIDS, is_brand_schema
+from common.vvp.vcard.brand import NormalizedBrand, normalize_brand
+from common.vvp.vcard.comparison import ComparisonResult, vcard_properties_match
 
 from .api_models import ClaimStatus, ErrorCode
 
 log = logging.getLogger(__name__)
+
+
+class BrandErrorCode(str, Enum):
+    """Typed error codes for brand verification failures."""
+    HASH_DOWNGRADE = "HASH_DOWNGRADE"
+    PROPERTY_MISMATCH = "PROPERTY_MISMATCH"
+    PROPERTY_MISSING = "PROPERTY_MISSING"
+    LOGO_FETCH_FAILED = "LOGO_FETCH_FAILED"
+    LOGO_HASH_MISMATCH = "LOGO_HASH_MISMATCH"
+
+
+@dataclass
+class BrandError:
+    """Structured brand verification error."""
+    code: BrandErrorCode
+    message: str
+    fields: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -47,14 +69,17 @@ class BrandInfo:
     """Extracted brand information from PASSporT card claim.
 
     Sprint 44: Used by SIP services to populate X-VVP-Brand-* headers.
+    Sprint 79: Added logo_hash for logo integrity verification.
 
     Attributes:
         brand_name: Organization name from card.org or full name from card.fn.
         brand_logo_url: Logo URL from card.logo (parsed from vCard LOGO format).
+        brand_logo_hash: Blake3-256 SAID from LOGO HASH parameter (Sprint 79).
     """
 
     brand_name: Optional[str] = None
     brand_logo_url: Optional[str] = None
+    brand_logo_hash: Optional[str] = None
 
 
 # Known vCard fields per RFC 6350 (subset relevant to brand identity)
@@ -81,6 +106,7 @@ VCARD_FIELDS: Set[str] = {
 BRAND_INDICATOR_FIELDS: Set[str] = {
     "fn", "org", "logo", "url", "photo",  # vCard names
     "brandName", "brandDisplayName", "logoUrl", "websiteUrl",  # Extended Brand Credential
+    "vcard",  # Provenant-style vcard array
 }
 
 # Sprint 58: Mapping from vCard card claim field names to credential attribute names.
@@ -124,24 +150,44 @@ def parse_vcard_properties(card: List[str]) -> Dict[str, str]:
 
 
 def extract_brand_info(card: List[str]) -> BrandInfo:
-    """Extract brand name and logo URL from PASSporT card claim.
+    """Extract brand name, logo URL, and logo hash from PASSporT card claim.
 
-    Sprint 44/58: Extracts brand information for SIP header population.
+    Sprint 44/58/79: Extracts brand information for SIP header population.
     Card is an array of RFC 6350 vCard property strings per VVP §4.1.2.
 
     Brand name priority: ORG > NICKNAME > FN.
-    Logo URL: parsed from LOGO property value.
+    Logo URL and HASH: parsed from LOGO property (uses shared vcard parser).
 
     Args:
         card: List of vCard property strings from PASSporT ``card`` claim.
 
     Returns:
-        BrandInfo with brand_name and brand_logo_url (may be None if not found)
+        BrandInfo with brand_name, brand_logo_url, brand_logo_hash
     """
+    # Use shared NormalizedBrand for extraction
+    brand = normalize_brand({"vcard": card})
+    if brand is not None:
+        # Filter non-URL logos (base64 data, etc.)
+        logo_url = brand.logo_url
+        if logo_url and not logo_url.startswith(("http://", "https://")):
+            log.debug(f"Brand logo is not a URL: {logo_url[:50]}...")
+            logo_url = None
+
+        info = BrandInfo(
+            brand_name=brand.name or None,
+            brand_logo_url=logo_url,
+            brand_logo_hash=brand.logo_hash if logo_url else None,
+        )
+        # Fall back to NICKNAME/FN if ORG is empty
+        if not info.brand_name:
+            props = parse_vcard_properties(card)
+            info.brand_name = props.get("nickname") or props.get("fn")
+        return info
+
+    # Fallback: use the simple parser for legacy card claims
     props = parse_vcard_properties(card)
     info = BrandInfo()
 
-    # Extract brand name: prefer ORG, fall back to NICKNAME, then FN
     org = props.get("org")
     nickname = props.get("nickname")
     fn = props.get("fn")
@@ -153,13 +199,10 @@ def extract_brand_info(card: List[str]) -> BrandInfo:
     elif fn:
         info.brand_name = fn
 
-    # Extract logo URL
     logo = props.get("logo")
     if logo:
         if logo.startswith(("http://", "https://")):
             info.brand_logo_url = logo
-        else:
-            log.debug(f"Brand logo is not a URL: {logo[:50]}...")
 
     return info
 
@@ -189,8 +232,9 @@ def validate_vcard_format(card: List[str]) -> List[str]:
 def find_brand_credential(dossier_acdcs: Dict[str, Any]) -> Optional[Any]:
     """Locate brand credential in dossier.
 
-    Brand credentials are identified by having brand-related attributes
-    (fn, org, logo, url, photo) in their attributes section.
+    Detection priority:
+    1. Schema SAID match against BRAND_SCHEMA_SAIDS (definitive)
+    2. Heuristic: 2+ brand indicator fields or brandName alone (fallback)
 
     Args:
         dossier_acdcs: Dict mapping SAID to ACDC objects
@@ -198,28 +242,37 @@ def find_brand_credential(dossier_acdcs: Dict[str, Any]) -> Optional[Any]:
     Returns:
         ACDC object that appears to be a brand credential, or None
     """
+    # Pass 1: Schema SAID match (definitive)
     for said, acdc in dossier_acdcs.items():
-        # Check if this credential has brand-indicative attributes
+        schema = getattr(acdc, "schema", None)
+        if schema is None:
+            raw = getattr(acdc, "raw", None)
+            schema = raw.get("s", "") if isinstance(raw, dict) else ""
+        if schema and is_brand_schema(schema):
+            log.debug(f"Found brand credential {said[:16]}... by schema SAID {schema[:16]}...")
+            return acdc
+
+    # Pass 2: Heuristic fallback (legacy/unknown schemas)
+    for said, acdc in dossier_acdcs.items():
         attrs = getattr(acdc, "attributes", None)
         if attrs is None:
-            # Try raw dict access
             raw = getattr(acdc, "raw", {})
             attrs = raw.get("a", {})
 
         if not isinstance(attrs, dict):
             continue
 
-        # Look for brand indicator fields
         found_indicators = set()
         for indicator in BRAND_INDICATOR_FIELDS:
             if indicator in attrs:
                 found_indicators.add(indicator)
 
-        # Sprint 58: brandName alone is sufficient (it's the required field in
-        # Extended Brand Credential schema).  For vCard-style credentials,
-        # still require 2+ indicators to avoid false positives.
+        # brandName alone is sufficient (Extended Brand schema).
+        # vcard alone is sufficient (Provenant schema).
+        # For others, require 2+ indicators.
         has_brand_name = "brandName" in attrs
-        if has_brand_name or len(found_indicators) >= 2:
+        has_vcard = "vcard" in attrs and isinstance(attrs.get("vcard"), list) and len(attrs.get("vcard", [])) > 0
+        if has_brand_name or has_vcard or len(found_indicators) >= 2:
             log.debug(
                 f"Found brand credential {said[:16]}... with indicators: {found_indicators}"
             )
@@ -230,17 +283,23 @@ def find_brand_credential(dossier_acdcs: Dict[str, Any]) -> Optional[Any]:
 
 def verify_brand_attributes(
     card: List[str], brand_credential
-) -> Tuple[bool, List[str]]:
+) -> Tuple[bool, List[str], List[BrandError]]:
     """Verify card attributes are justified by brand credential.
 
     Per §5.1.1-2.12: MUST verify brand attributes are justified.
+
+    For vcard-array credentials (Provenant schema), uses shared
+    vcard_properties_match() for case-insensitive, multi-value comparison
+    with HASH downgrade enforcement.
+
+    For scalar-attribute credentials (legacy), uses the field mapping approach.
 
     Args:
         card: List of vCard property strings from PASSporT ``card`` claim.
         brand_credential: ACDC brand credential from dossier
 
     Returns:
-        Tuple of (is_valid, list of mismatches or evidence)
+        Tuple of (is_valid, list of mismatches or evidence, list of BrandError)
     """
     # Extract attributes from brand credential
     cred_attrs = getattr(brand_credential, "attributes", None)
@@ -249,14 +308,66 @@ def verify_brand_attributes(
         cred_attrs = raw.get("a", {})
 
     if not isinstance(cred_attrs, dict):
-        return False, ["Brand credential has no attributes"]
+        return False, ["Brand credential has no attributes"], []
 
+    # If credential has vcard array, use shared comparison
+    vcard_lines = cred_attrs.get("vcard")
+    if vcard_lines and isinstance(vcard_lines, list) and len(vcard_lines) > 0:
+        return _verify_vcard_attributes(card, vcard_lines)
+
+    # Legacy scalar-attribute comparison
+    return _verify_scalar_attributes(card, cred_attrs)
+
+
+def _verify_vcard_attributes(
+    card: List[str], credential_vcard: List[str]
+) -> Tuple[bool, List[str], List[BrandError]]:
+    """Verify card claim against credential vcard lines using shared comparison."""
+    result = vcard_properties_match(credential_vcard, card)
+    brand_errors: List[BrandError] = []
+
+    if result.match:
+        evidence = ["vcard_comparison:match"]
+        if result.hash_integrity == "verified":
+            evidence.append("logo_hash:verified")
+        elif result.hash_integrity == "missing":
+            evidence.append("logo_hash:none")
+        return True, evidence, brand_errors
+
+    # Map mismatches to structured errors
+    evidence: List[str] = []
+    for mismatch in result.mismatches:
+        if "downgrade" in mismatch.lower():
+            brand_errors.append(BrandError(
+                code=BrandErrorCode.HASH_DOWNGRADE,
+                message=mismatch,
+                fields=["LOGO"],
+            ))
+        elif "but not in credential" in mismatch and "values" not in mismatch:
+            # "Property X in card claim but not in credential" — missing property
+            brand_errors.append(BrandError(
+                code=BrandErrorCode.PROPERTY_MISSING,
+                message=mismatch,
+            ))
+        else:
+            # Value mismatch or "not in credential values" (set comparison)
+            brand_errors.append(BrandError(
+                code=BrandErrorCode.PROPERTY_MISMATCH,
+                message=mismatch,
+            ))
+
+    return False, result.mismatches, brand_errors
+
+
+def _verify_scalar_attributes(
+    card: List[str], cred_attrs: dict
+) -> Tuple[bool, List[str], List[BrandError]]:
+    """Legacy scalar-attribute verification."""
     props = parse_vcard_properties(card)
     mismatches = []
     evidence = []
 
     for card_field, card_value in props.items():
-        # Sprint 58: Try vCard-to-credential mapping, then fall back to direct lookup
         search_names = _VCARD_CREDENTIAL_MAP.get(card_field, [card_field])
         cred_value = None
         for name in search_names:
@@ -265,10 +376,8 @@ def verify_brand_attributes(
                 break
 
         if cred_value is None:
-            # Card claims attribute not in credential
             mismatches.append(f"card.{card_field} not in brand credential")
         elif str(cred_value) != str(card_value):
-            # Values don't match
             mismatches.append(
                 f"card.{card_field} '{card_value}' != credential '{cred_value}'"
             )
@@ -276,8 +385,8 @@ def verify_brand_attributes(
             evidence.append(f"card.{card_field}:matched")
 
     if mismatches:
-        return False, mismatches
-    return True, evidence
+        return False, mismatches, []
+    return True, evidence, []
 
 
 def verify_brand_jl(
@@ -410,12 +519,14 @@ def verify_brand(
     claim = ClaimBuilder("brand_verified")
     claim.add_evidence("card:present")
 
-    # Extract brand info from card (Sprint 44)
+    # Extract brand info from card (Sprint 44/79)
     brand_info = extract_brand_info(card)
     if brand_info.brand_name:
         claim.add_evidence(f"brand_name:{brand_info.brand_name}")
     if brand_info.brand_logo_url:
         claim.add_evidence(f"brand_logo_url:{brand_info.brand_logo_url[:40]}...")
+    if brand_info.brand_logo_hash:
+        claim.add_evidence(f"brand_logo_hash:{brand_info.brand_logo_hash[:16]}...")
 
     # Validate vCard format (warn on unknown fields, don't fail)
     warnings = validate_vcard_format(card)
@@ -433,7 +544,7 @@ def verify_brand(
     claim.add_evidence(f"brand_credential:{brand_said[:16]}...")
 
     # Verify brand attributes match
-    attrs_valid, attr_result = verify_brand_attributes(card, brand_credential)
+    attrs_valid, attr_result, brand_errors = verify_brand_attributes(card, brand_credential)
     if attrs_valid:
         for ev in attr_result:
             claim.add_evidence(ev)

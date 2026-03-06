@@ -24,10 +24,12 @@ from app.vvp.brand import (
     extract_brand_info,
     parse_vcard_properties,
     BrandInfo,
+    BrandErrorCode,
     VCARD_FIELDS,
     ClaimBuilder,
 )
 from app.vvp.api_models import ClaimStatus
+from common.vvp.schema.registry import BRAND_SCHEMA_SAIDS
 
 
 # =============================================================================
@@ -44,6 +46,7 @@ class MockACDC:
     attributes: Optional[Dict[str, Any]] = None
     edges: Optional[Dict[str, Any]] = None
     raw: Optional[Dict[str, Any]] = None
+    schema: Optional[str] = None
 
     def __post_init__(self):
         if self.raw is None:
@@ -231,7 +234,7 @@ class TestBrandAttributeVerification:
             attributes={"fn": "ACME Corp", "org": "ACME", "extra": "value"},
         )
 
-        valid, result = verify_brand_attributes(card, brand)
+        valid, result, _errors = verify_brand_attributes(card, brand)
         assert valid is True
         assert "fn" in str(result)
 
@@ -244,7 +247,7 @@ class TestBrandAttributeVerification:
             attributes={"fn": "ACME Corp", "org": "ACME"},
         )
 
-        valid, result = verify_brand_attributes(card, brand)
+        valid, result, _errors = verify_brand_attributes(card, brand)
         assert valid is False
         assert any("org" in r for r in result)
 
@@ -257,7 +260,7 @@ class TestBrandAttributeVerification:
             attributes={"fn": "ACME Corp"},  # Missing email
         )
 
-        valid, result = verify_brand_attributes(card, brand)
+        valid, result, _errors = verify_brand_attributes(card, brand)
         assert valid is False
         assert any("email" in r for r in result)
 
@@ -613,7 +616,7 @@ class TestVCardToCredentialMapping:
             attributes={"brandName": "ACME Corporation", "assertionCountry": "USA"},
         )
 
-        valid, result = verify_brand_attributes(card, brand)
+        valid, result, _errors = verify_brand_attributes(card, brand)
         assert valid is True
         assert any("org" in r for r in result)
 
@@ -626,7 +629,7 @@ class TestVCardToCredentialMapping:
             attributes={"brandName": "ACME Corporation", "brandDisplayName": "ACME Corp"},
         )
 
-        valid, result = verify_brand_attributes(card, brand)
+        valid, result, _errors = verify_brand_attributes(card, brand)
         assert valid is True
 
     def test_vcard_nickname_falls_back_to_brand_name(self):
@@ -638,7 +641,7 @@ class TestVCardToCredentialMapping:
             attributes={"brandName": "ACME Corporation"},
         )
 
-        valid, result = verify_brand_attributes(card, brand)
+        valid, result, _errors = verify_brand_attributes(card, brand)
         assert valid is True
 
     def test_vcard_logo_matches_logo_url(self):
@@ -650,7 +653,7 @@ class TestVCardToCredentialMapping:
             attributes={"logoUrl": "https://cdn.acme.com/logo.png"},
         )
 
-        valid, result = verify_brand_attributes(card, brand)
+        valid, result, _errors = verify_brand_attributes(card, brand)
         assert valid is True
 
     def test_vcard_url_matches_website_url(self):
@@ -662,7 +665,7 @@ class TestVCardToCredentialMapping:
             attributes={"websiteUrl": "https://www.acme.com"},
         )
 
-        valid, result = verify_brand_attributes(card, brand)
+        valid, result, _errors = verify_brand_attributes(card, brand)
         assert valid is True
 
     def test_full_card_matches_extended_brand_credential(self):
@@ -685,7 +688,7 @@ class TestVCardToCredentialMapping:
             },
         )
 
-        valid, result = verify_brand_attributes(card, brand)
+        valid, result, _errors = verify_brand_attributes(card, brand)
         assert valid is True
         assert len(result) == 4  # All 4 fields matched
 
@@ -698,7 +701,7 @@ class TestVCardToCredentialMapping:
             attributes={"brandName": "ACME Corporation"},
         )
 
-        valid, result = verify_brand_attributes(card, brand)
+        valid, result, _errors = verify_brand_attributes(card, brand)
         assert valid is False
         assert any("org" in r for r in result)
 
@@ -786,7 +789,7 @@ class TestVerifyBrandAttributesEdgeCases:
         )
         card = ["FN:ACME Corp", "ORG:ACME"]
 
-        valid, result = verify_brand_attributes(card, brand)
+        valid, result, _errors = verify_brand_attributes(card, brand)
         assert valid is True
 
     def test_non_dict_attrs_returns_invalid(self):
@@ -806,6 +809,213 @@ class TestVerifyBrandAttributesEdgeCases:
         )
         card = ["FN:ACME Corp"]
 
-        valid, result = verify_brand_attributes(card, brand)
+        valid, result, _errors = verify_brand_attributes(card, brand)
         assert valid is False
         assert "no attributes" in result[0]
+
+
+# =============================================================================
+# Sprint 79: Provenant Brand Schema & Logo Integrity Tests
+# =============================================================================
+
+
+class TestSchemaSaidBrandDetection:
+    """Brand credentials detected by schema SAID (definitive, no heuristic)."""
+
+    def test_find_by_brand_owner_schema_said(self):
+        """Credential with BrandOwner schema SAID is found as brand."""
+        # Get one of the BrandOwner SAIDs
+        brand_said = next(iter(BRAND_SCHEMA_SAIDS))
+        brand = MockACDC(
+            said="BRAND123",
+            issuer_aid="ISSUER1",
+            schema=brand_said,
+            attributes={"vcard": ["ORG:ACME"]},
+        )
+        dossier = {"BRAND123": brand}
+
+        result = find_brand_credential(dossier)
+        assert result is not None
+        assert result.said == "BRAND123"
+
+    def test_schema_said_preferred_over_heuristic(self):
+        """Schema SAID match takes priority over heuristic indicator fields."""
+        brand_said = next(iter(BRAND_SCHEMA_SAIDS))
+        # First credential: no schema match, but has indicators
+        heuristic = MockACDC(
+            said="HEURISTIC1",
+            issuer_aid="ISSUER1",
+            attributes={"brandName": "Heuristic Brand", "logoUrl": "https://example.com/logo.png"},
+        )
+        # Second credential: has schema SAID match
+        schema_match = MockACDC(
+            said="SCHEMA1",
+            issuer_aid="ISSUER1",
+            schema=brand_said,
+            attributes={"vcard": ["ORG:Schema Brand"]},
+        )
+        dossier = {"HEURISTIC1": heuristic, "SCHEMA1": schema_match}
+
+        result = find_brand_credential(dossier)
+        assert result.said == "SCHEMA1"
+
+
+class TestVCardAttributeVerification:
+    """Verify card claims against vcard-array credentials."""
+
+    def test_vcard_exact_match(self):
+        """Identical vcard lines in credential and card claim pass."""
+        vcard = ["ORG:ACME Corporation", "URL:https://acme.com"]
+        brand = MockACDC(
+            said="BRAND123",
+            issuer_aid="ISSUER1",
+            attributes={"vcard": vcard},
+        )
+
+        valid, result, errors = verify_brand_attributes(
+            ["ORG:ACME Corporation", "URL:https://acme.com"], brand
+        )
+        assert valid is True
+        assert "vcard_comparison:match" in result
+
+    def test_vcard_card_subset(self):
+        """Card claim as subset of credential vcard passes."""
+        brand = MockACDC(
+            said="BRAND123",
+            issuer_aid="ISSUER1",
+            attributes={"vcard": [
+                "ORG:ACME Corporation",
+                "NICKNAME:ACME",
+                "URL:https://acme.com",
+            ]},
+        )
+
+        valid, result, errors = verify_brand_attributes(
+            ["ORG:ACME Corporation"], brand
+        )
+        assert valid is True
+
+    def test_vcard_hash_verified(self):
+        """Hash integrity reported as verified when both have matching HASH."""
+        said = "E" + "a" * 43
+        vcard = [f"LOGO;HASH={said};VALUE=URI:https://cdn.acme.com/logo.png"]
+        brand = MockACDC(
+            said="BRAND123",
+            issuer_aid="ISSUER1",
+            attributes={"vcard": vcard},
+        )
+
+        valid, result, errors = verify_brand_attributes(
+            [f"LOGO;HASH={said};VALUE=URI:https://cdn.acme.com/logo.png"], brand
+        )
+        assert valid is True
+        assert "logo_hash:verified" in result
+
+    def test_vcard_hash_downgrade_detected(self):
+        """HASH downgrade attack detected and flagged."""
+        said = "E" + "a" * 43
+        brand = MockACDC(
+            said="BRAND123",
+            issuer_aid="ISSUER1",
+            attributes={"vcard": [
+                f"LOGO;HASH={said};VALUE=URI:https://cdn.acme.com/logo.png"
+            ]},
+        )
+
+        valid, result, errors = verify_brand_attributes(
+            ["LOGO;VALUE=URI:https://cdn.acme.com/logo.png"], brand
+        )
+        assert valid is False
+        assert any(e.code == BrandErrorCode.HASH_DOWNGRADE for e in errors)
+
+    def test_vcard_value_mismatch(self):
+        """Mismatched property values fail."""
+        brand = MockACDC(
+            said="BRAND123",
+            issuer_aid="ISSUER1",
+            attributes={"vcard": ["ORG:ACME Corporation"]},
+        )
+
+        valid, result, errors = verify_brand_attributes(
+            ["ORG:Evil Corp"], brand
+        )
+        assert valid is False
+        assert any(e.code == BrandErrorCode.PROPERTY_MISMATCH for e in errors)
+
+    def test_vcard_property_not_in_credential(self):
+        """Card claim property not in credential fails."""
+        brand = MockACDC(
+            said="BRAND123",
+            issuer_aid="ISSUER1",
+            attributes={"vcard": ["ORG:ACME"]},
+        )
+
+        valid, result, errors = verify_brand_attributes(
+            ["ORG:ACME", "PHOTO:https://evil.com/fake.png"], brand
+        )
+        assert valid is False
+        assert any(e.code == BrandErrorCode.PROPERTY_MISSING for e in errors)
+
+
+class TestExtractBrandInfoLogoHash:
+    """Sprint 79: extract_brand_info returns logo hash."""
+
+    def test_logo_hash_extracted(self):
+        """HASH parameter extracted from LOGO property."""
+        said = "E" + "a" * 43
+        card = [
+            "ORG:ACME",
+            f"LOGO;HASH={said};VALUE=URI:https://cdn.acme.com/logo.png",
+        ]
+
+        info = extract_brand_info(card)
+
+        assert info.brand_name == "ACME"
+        assert info.brand_logo_url == "https://cdn.acme.com/logo.png"
+        assert info.brand_logo_hash == said
+
+    def test_no_hash_when_no_logo(self):
+        """No logo hash when no LOGO property."""
+        card = ["ORG:ACME"]
+
+        info = extract_brand_info(card)
+
+        assert info.brand_logo_hash is None
+
+    def test_no_hash_when_logo_has_no_hash_param(self):
+        """No logo hash when LOGO has no HASH parameter."""
+        card = ["LOGO;VALUE=URI:https://cdn.acme.com/logo.png"]
+
+        info = extract_brand_info(card)
+
+        assert info.brand_logo_url == "https://cdn.acme.com/logo.png"
+        assert info.brand_logo_hash is None
+
+
+class TestFindBrandVCardIndicator:
+    """Sprint 79: vcard attribute as brand indicator."""
+
+    def test_vcard_array_detected_as_brand(self):
+        """Credential with vcard array is detected as brand."""
+        brand = MockACDC(
+            said="BRAND123",
+            issuer_aid="ISSUER1",
+            attributes={"vcard": ["ORG:ACME Corp"]},
+        )
+        dossier = {"BRAND123": brand}
+
+        result = find_brand_credential(dossier)
+        assert result is not None
+        assert result.said == "BRAND123"
+
+    def test_empty_vcard_not_detected(self):
+        """Empty vcard array is NOT detected as brand."""
+        brand = MockACDC(
+            said="BRAND123",
+            issuer_aid="ISSUER1",
+            attributes={"vcard": []},
+        )
+        dossier = {"BRAND123": brand}
+
+        result = find_brand_credential(dossier)
+        assert result is None

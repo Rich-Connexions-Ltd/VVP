@@ -1903,9 +1903,11 @@ async def verify_vvp(
     # Sprint 44: Populate brand fields when brand verification succeeded
     response_brand_name = None
     response_brand_logo_url = None
+    response_brand_logo_hash = None
     if brand_info and brand_claim and brand_claim.status == ClaimStatus.VALID:
         response_brand_name = brand_info.brand_name
         response_brand_logo_url = brand_info.brand_logo_url
+        response_brand_logo_hash = brand_info.brand_logo_hash
 
     if timer:
         timer.stop()  # phase6_claim_tree
@@ -1924,6 +1926,7 @@ async def verify_vvp(
         vetter_constraints=vetter_constraint_results if vetter_constraint_results else None,
         brand_name=response_brand_name,
         brand_logo_url=response_brand_logo_url,
+        brand_logo_hash=response_brand_logo_hash,
         revocation_pending=_revocation_pending,
         cache_hit=_verification_cache_hit,
         vetter_warning_reason=_vetter_warning_reason if overall_status == ClaimStatus.WARNING else None,

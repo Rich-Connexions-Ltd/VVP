@@ -366,6 +366,7 @@ class VerifyResponse(BaseModel):
     vetter_constraints: Optional[Dict[str, VetterConstraintInfo]] = None
     brand_name: Optional[str] = None
     brand_logo_url: Optional[str] = None
+    brand_logo_hash: Optional[str] = None  # Sprint 79: Blake3 SAID from LOGO HASH param
     revocation_pending: bool = False
     cache_hit: bool = False
     vetter_warning_reason: Optional[str] = None

@@ -125,6 +125,10 @@ class SIPResponse:
     # Sprint 75: Vetter scope warning reason (when overall_status=WARNING)
     warning_reason: Optional[str] = None  # e.g. "vetter_not_authorised_for_jurisdiction"
 
+    # Sprint 79: Logo integrity verification
+    logo_verified: Optional[bool] = None  # True if hash matched, False if not or no hash
+    logo_reason: Optional[str] = None  # "no-hash" | "fetch-error" (when logo_verified=False)
+
     # Error info (for non-2xx responses)
     error_reason: Optional[str] = None
     error_code: Optional[str] = None  # Sprint 44: X-VVP-Error code
@@ -174,6 +178,12 @@ class SIPResponse:
         # Sprint 75: Vetter scope warning reason
         if self.warning_reason:
             lines.append(f"X-VVP-Warning-Reason: {self.warning_reason}")
+
+        # Sprint 79: Logo integrity verification
+        if self.logo_verified is not None:
+            lines.append(f"X-VVP-Brand-Logo-Verified: {'true' if self.logo_verified else 'false'}")
+        if self.logo_reason:
+            lines.append(f"X-VVP-Brand-Logo-Reason: {self.logo_reason}")
 
         # Error code for INVALID status (Sprint 44)
         if self.error_code:

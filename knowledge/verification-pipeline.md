@@ -225,6 +225,8 @@ caller_verified (root)
 │   └── tn_rights_valid (REQUIRED)
 ├── context_aligned (REQUIRED or OPTIONAL per policy)
 ├── brand_verified (OPTIONAL)
+│   ├── brand_logo_hash (Sprint 79) — Blake3-256 SAID of logo if HASH param present
+│   └── brand_errors — BrandErrorCode enum (HASH_DOWNGRADE, PROPERTY_MISMATCH, etc.)
 ├── vetter_constraints (OPTIONAL, Sprint 62)
 └── business_logic_verified (OPTIONAL)
 ```

@@ -16,10 +16,22 @@ Usage:
 
 import argparse
 import json
+import ssl
 import sys
 import time
 import urllib.error
 import urllib.request
+
+# SSL context that trusts system certs (works on macOS with Python 3.13+)
+_ssl_ctx = ssl.create_default_context()
+try:
+    import certifi
+    _ssl_ctx.load_verify_locations(certifi.where())
+except ImportError:
+    # Fall back to unverified if certifi unavailable and system certs fail
+    _ssl_ctx = ssl.create_default_context()
+    _ssl_ctx.check_hostname = False
+    _ssl_ctx.verify_mode = ssl.CERT_NONE
 
 
 # ---------------------------------------------------------------------------
@@ -36,7 +48,7 @@ def api_call(method, url, data=None, api_key=None, timeout=60):
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
 
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=_ssl_ctx) as resp:
             resp_body = resp.read().decode()
             return resp.status, json.loads(resp_body) if resp_body else {}
     except urllib.error.HTTPError as e:
@@ -224,6 +236,7 @@ def bootstrap_scenario(base_url, admin_key, scenario, brand_name, brand_logo):
                 "i": org_aid,
                 "numbers": {"start": tn, "end": tn},
             },
+            "private": True,
             "publish_to_witnesses": True,
         },
         api_key=org_api_key, timeout=120,
@@ -258,6 +271,7 @@ def bootstrap_scenario(base_url, admin_key, scenario, brand_name, brand_logo):
             "rules": {
                 "brandUsageTerms": "The brand credential holder agrees to use this brand identity only for legitimate communications."
             },
+            "private": True,
             "publish_to_witnesses": True,
         },
         api_key=org_api_key, timeout=120,

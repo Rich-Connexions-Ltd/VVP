@@ -282,3 +282,81 @@ class TestCardInJWTPayload:
             jwt_payload["card"] = card
 
         assert "card" not in jwt_payload
+
+
+class TestVCardPassthrough:
+    """Sprint 79: vcard array passthrough for Provenant-style credentials."""
+
+    def test_vcard_array_passed_through(self):
+        """vcard array in attributes is returned directly."""
+        vcard = [
+            "ORG:ACME Corporation",
+            "NICKNAME:ACME Corp",
+            "LOGO;HASH=Eaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;VALUE=URI:https://cdn.acme.com/logo.png",
+            "URL:https://www.acme.com",
+        ]
+        attrs = {"vcard": vcard, "i": "EAID123", "dt": "2025-01-01T00:00:00.000000+00:00"}
+
+        card = build_card_claim(attrs)
+
+        assert card is not None
+        assert card == vcard  # Exact passthrough
+        assert len(card) == 4
+
+    def test_vcard_preserves_hash_parameter(self):
+        """HASH parameter in LOGO is preserved through passthrough."""
+        said = "E" + "a" * 43
+        vcard = [f"LOGO;HASH={said};VALUE=URI:https://cdn.acme.com/logo.png"]
+        attrs = {"vcard": vcard}
+
+        card = build_card_claim(attrs)
+
+        assert card is not None
+        assert f"HASH={said}" in card[0]
+
+    def test_vcard_takes_priority_over_scalars(self):
+        """When both vcard and scalar fields present, vcard wins."""
+        attrs = {
+            "vcard": ["ORG:VCard Brand"],
+            "brandName": "Scalar Brand",
+        }
+
+        card = build_card_claim(attrs)
+
+        assert card is not None
+        assert card == ["ORG:VCard Brand"]
+
+    def test_empty_vcard_falls_back_to_scalars(self):
+        """Empty vcard array falls back to scalar-to-vcard conversion."""
+        attrs = {
+            "vcard": [],
+            "brandName": "Scalar Brand",
+        }
+
+        card = build_card_claim(attrs)
+
+        assert card is not None
+        assert "ORG:Scalar Brand" in card
+
+    def test_non_list_vcard_falls_back(self):
+        """Non-list vcard falls back to scalar conversion."""
+        attrs = {
+            "vcard": "not a list",
+            "brandName": "Scalar Brand",
+        }
+
+        card = build_card_claim(attrs)
+
+        assert card is not None
+        assert "ORG:Scalar Brand" in card
+
+    def test_vcard_returns_copy(self):
+        """Returned list should be a copy, not the same object."""
+        vcard = ["ORG:ACME"]
+        attrs = {"vcard": vcard}
+
+        card = build_card_claim(attrs)
+
+        # Modify returned card, original should be unaffected
+        card.append("URL:https://acme.com")
+        assert len(vcard) == 1

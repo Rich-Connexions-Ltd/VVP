@@ -763,6 +763,12 @@ Returns whether the identity's inception event has witness receipts in the LMDB 
 |-------|-----------|--------|
 | SIP INVITE with X-VVP-API-Key | Extract caller TN, call Issuer `/vvp/create` | SIP 302 with Identity + VVP-Identity headers |
 
-**Status Endpoint** (HTTP):
-- `GET http://localhost:8080/health` - Health check
-- `GET http://localhost:8080/status` - Status with metrics (requires X-Admin-Key)
+**HTTP Endpoints** (port 8080, proxied via nginx at `https://pbx.rcnx.io`):
+- `GET /health` - Health check
+- `GET /status` - Status with metrics (requires X-Admin-Key)
+- `GET /logo/{said}` - Serve cached brand logo by Blake3-256 SAID (Sprint 79). Returns image with `Cache-Control: public, max-age=86400, immutable`. SAID format: `^E[A-Za-z0-9_-]{43}$`. Returns 404 for unknown SAIDs.
+- `GET /logo/unknown` - Placeholder SVG for unknown/unverified brands
+
+**SIP Response Headers** (Sprint 79):
+- `X-VVP-Brand-Logo-Verified: true|false` - Whether logo hash was verified against credential
+- `X-VVP-Brand-Logo-Reason: <text>` - Explanation if logo_verified is false

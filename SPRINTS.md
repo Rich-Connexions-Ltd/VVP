@@ -67,7 +67,8 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 75 | Witness Receipt Fix + E2E Call Restoration | COMPLETE | Sprint 74 |
 | 76 | Issuer Call-Path Performance | COMPLETE | Sprint 75 |
 | 77 | PBX Portal Migration | IN PROGRESS | Sprint 71 |
-| 78 | Verifier SIP Call Performance | PENDING | Sprint 51, 76 |
+| 78 | Verifier SIP Call Performance | COMPLETE | Sprint 51, 76 |
+| 79 | Provenant Brand Schema & Logo Integrity | COMPLETE | Sprint 58, 78 |
 
 ---
 
@@ -5860,3 +5861,126 @@ common/common/vvp/dossier/fetch.py                # Dossier fetch — connection
 - [ ] All existing verifier tests pass (1844+)
 - [ ] New tests for range-based cache, connection pooling, and deep-copy optimization
 - [ ] E2E VVP call flow unaffected
+
+---
+
+## Sprint 79: Provenant Brand Schema & Logo Integrity
+
+**Status:** PENDING
+**Goal:** Adopt the canonical Provenant brand-owner schema with vCard-embedded logo hashes, and implement a logo integrity proxy in the SIP verification service so that brand logos are cryptographically verified before delivery to the handset.
+
+### Context
+
+The VVP draft spec (§4.1.2) requires the `card` claim to include `LOGO;HASH=<SAID>;VALUE=URI:<url>`, where the HASH is a Blake3-256 CESR-encoded digest of the logo image bytes. The canonical Provenant [brand-owner schema](https://github.com/provenant-dev/public-schema/tree/main/brand-owner) stores brand data as a `vcard` array of RFC 6350 property strings directly in the credential attributes — the vetter computes and includes the logo hash at issuance time, and the ACDC signature covers it.
+
+Our current Extended Brand Credential schema uses separate scalar fields (`brandName`, `logoUrl`, etc.) with **no logo hash**. This means:
+1. The logo is not cryptographically committed to at credential issuance
+2. If the logo at `logoUrl` is swapped between issuance and verification, there is no way to detect the substitution
+3. The `card.py` builder produces `LOGO;VALUE=URI:<url>` without a HASH parameter
+
+Additionally, the SIP verifier currently passes the raw external logo URL in `X-VVP-Brand-Logo`. This has two problems:
+- The handset/PBX must fetch from an arbitrary external URL (latency, privacy, availability)
+- No integrity check is performed — even with a hash in the credential, nobody verifies it
+
+### Deliverables
+
+#### Phase A: Schema Migration (Issuer)
+
+- [ ] **Replace Extended Brand schema with Provenant brand-owner schema** — Adopt `EBpGNZSWwj-btOJMJSMLCVoXbtKdJTcggO-zMevr4vH_` (Provenant SAID) or create a VVP-specific derivative. Key change: replace scalar `brandName`/`brandDisplayName`/`logoUrl`/`websiteUrl` with a `vcard` array of RFC 6350 property strings and optional `goals` array.
+- [ ] **Logo hash computation at credential issuance** — When the vetter issues a brand credential containing a `LOGO;VALUE=URI:<url>` line, the issuer MUST:
+  1. Fetch the logo from the URL
+  2. Compute Blake3-256 hash of the raw image bytes
+  3. CESR-encode the hash (44-char `E`-prefix string)
+  4. Insert `HASH=<said>` parameter into the LOGO vCard line before `VALUE=URI`
+  5. Store the complete `LOGO;HASH=<said>;VALUE=URI:<url>` in the credential's `vcard` array
+- [ ] **Update `card.py` builder** — `build_card_claim()` should pass through the `vcard` array from the brand credential directly (it's already in RFC 6350 format), rather than constructing vCard lines from scalar fields. The hash is already embedded.
+- [ ] **Update `_brand_from_attrs()` in `tn.py`** — Parse the `vcard` array to extract brand name (ORG/NICKNAME/FN) and logo URL for TN mapping display, with backward compatibility for old-style scalar attributes.
+- [ ] **Update credential issuance UI** — Brand credential creation form should accept vCard property lines or maintain the friendly fields (brandName, logoUrl, etc.) and convert them into `vcard` array format on submission.
+- [ ] **Schema registry update** — Register the new schema in the issuer schema registry, deprecate Extended Brand Credential (or keep for backward compatibility during transition).
+- [ ] **Update `find_brand_credential()` in verifier** — Add `"vcard"` to `BRAND_INDICATOR_FIELDS` so credentials using the Provenant schema are detected as brand credentials.
+- [ ] **Update `verify_brand_attributes()` in verifier** — When credential has a `vcard` array attribute (not scalars), parse the vCard lines and verify card claim values match.
+
+#### Phase B: Logo Integrity Proxy (SIP Verifier)
+
+- [ ] **Logo cache storage** — Add a logo cache directory to the sip-verify service (e.g., `/tmp/vvp-logo-cache/` or configurable via `VVP_LOGO_CACHE_DIR`). Logos are stored by their SAID hash as filename (e.g., `EK2r6EnDXre...abc.png`).
+- [ ] **Logo fetch and verify** — After successful VVP verification, if the `card` claim contains a `LOGO;HASH=<said>;VALUE=URI:<url>` entry:
+  1. Check if `<said>.{ext}` exists in the logo cache → if yes, serve from cache
+  2. If not cached, fetch the logo from `<url>` via HTTP GET (with timeout, size limit)
+  3. Compute Blake3-256 SAID of the fetched bytes
+  4. Compare computed SAID against the `HASH` value from the card claim
+  5. If match: store in cache as `<said>.{ext}`, set `X-VVP-Brand-Logo` to the local proxy URL
+  6. If mismatch: log warning, set `X-VVP-Brand-Logo` to the "unknown logo" placeholder URL
+- [ ] **Unknown/fallback logo** — Add a static "?" placeholder logo image to the sip-verify service's static assets (e.g., `web/unknown-brand.svg`). Used when:
+  - Logo hash verification fails (tampered image)
+  - Logo fetch fails (timeout, 404, network error)
+  - No logo URL in credential
+- [ ] **Logo serving endpoint** — Add `GET /logo/<said>` endpoint to the sip-verify HTTP server that serves cached logo images with appropriate `Content-Type` and cache headers. The `X-VVP-Brand-Logo` header value becomes `http://localhost:<port>/logo/<said>` (or configurable base URL).
+- [ ] **Cache eviction** — LRU eviction policy with configurable max cache size (default 100MB, configurable via `VVP_LOGO_CACHE_MAX_MB`). Entries expire after configurable TTL (default 24h, via `VVP_LOGO_CACHE_TTL_HOURS`).
+- [ ] **SSRF prevention** — Logo fetch must use the same URL validation as the verifier's OOBI/dossier fetches (async DNS resolution, private IP range blocking via `common/vvp/url_validation.py`).
+
+#### Phase C: Tests
+
+- [ ] **Issuer tests** — Logo hash computation: verify Blake3-256 SAID computed from test image matches expected value. `build_card_claim()` with vcard array passthrough. `_brand_from_attrs()` with both vcard and scalar formats.
+- [ ] **Verifier tests** — `find_brand_credential()` detects Provenant-style credentials. `verify_brand_attributes()` matches vcard-array credentials against card claims.
+- [ ] **SIP verifier tests** — Logo fetch + hash verify (match and mismatch cases). Cache hit/miss behavior. Fallback to unknown logo on fetch failure. SSRF prevention (reject private IPs). Cache eviction.
+- [ ] **Integration test** — End-to-end: issue brand credential with logo hash → create dossier → create PASSporT → verify → confirm `X-VVP-Brand-Logo` points to local cache URL with correct image.
+
+### Key Files
+
+```
+# Issuer — Schema & Issuance
+services/issuer/app/schema/schemas/extended-brand-credential.json    # Replace or supplement
+services/issuer/app/schema/schemas/provenant-brand-owner.json        # New: Provenant schema
+services/issuer/app/vvp/card.py                                      # Rewrite: vcard passthrough
+services/issuer/app/api/tn.py                                        # Update: parse vcard array
+services/issuer/app/keri/issuer.py                                   # Update: logo hash at issuance
+services/issuer/web/credentials.html                                 # Update: brand form → vcard
+
+# Verifier — Brand detection
+services/verifier/app/vvp/brand.py                                   # Update: vcard-aware detection & verification
+
+# SIP Verifier — Logo proxy
+services/sip-verify/app/verify/logo_cache.py                         # New: logo fetch, hash verify, cache
+services/sip-verify/app/verify/handler.py                            # Update: use logo proxy URL
+services/sip-verify/app/verify/client.py                             # Update: VerifyResult with logo hash
+services/sip-verify/app/main.py                                      # Add: /logo/<said> serving endpoint
+services/sip-verify/web/unknown-brand.svg                            # New: "?" placeholder logo
+
+# Common
+common/common/vvp/url_validation.py                                  # Reuse: SSRF prevention for logo fetch
+
+# Tests
+services/issuer/tests/test_card.py                                   # Update: vcard array tests
+services/issuer/tests/test_logo_hash.py                              # New: Blake3-256 SAID computation
+services/sip-verify/tests/test_logo_cache.py                         # New: logo proxy tests
+services/verifier/tests/test_brand.py                                # Update: Provenant schema detection
+```
+
+### Technical Notes
+
+- **Blake3-256 SAID computation for logos**: The SAID is computed over the raw image bytes (not base64, not JSON). Use `hashlib`-compatible Blake3 (via `blake3` PyPI package or keripy's built-in SAID utils). CESR encoding: 32-byte digest → left-pad to 33 bytes → base64url encode → replace first char with `E` (Blake3-256 code). This is the same algorithm used for ACDC SAIDs.
+- **vCard property format**: `LOGO;HASH=EK2r6EnDXre...;VALUE=URI:https://example.com/logo.png`. Parameters are separated by `;`, name/value by `:`. Property names MUST be uppercase, parameter names in lexicographic order (per Provenant schema).
+- **Backward compatibility**: During the transition period, `_brand_from_attrs()` should check for both `vcard` array and scalar `brandName`/`logoUrl` attributes. The `build_card_claim()` function should handle both formats. Old credentials with scalar attributes continue to work but won't have logo hash verification.
+- **Logo proxy URL**: In the PBX deployment, `X-VVP-Brand-Logo` should point to the sip-verify service's own address (e.g., `http://127.0.0.1:5071/logo/EK2r6EnDXre...`). The PBX/phone app fetches from localhost rather than an external CDN, ensuring low latency and verified integrity.
+- **Logo cache is ephemeral**: Like LMDB, the logo cache on `/tmp` is acceptable since logos can be re-fetched and re-verified. The cache is purely a performance optimization.
+- **`goals` array**: The Provenant schema includes an optional `goals` array. For this sprint, the goals field is accepted but not validated — it maps to VVP §5A Step 13 (business logic verification) which is OPTIONAL.
+
+### Dependencies
+
+- Sprint 58 (PASSporT vCard Card Claim) — card claim builder and verifier
+- Sprint 78 (Verifier SIP Call Performance) — shared HTTP client, SSRF prevention
+
+### Exit Criteria
+
+- [ ] Brand credentials issued with Provenant-style `vcard` array attribute containing `LOGO;HASH=<SAID>;VALUE=URI:<url>`
+- [ ] Logo hash computed at credential issuance time using Blake3-256 SAID
+- [ ] PASSporT `card` claim preserves the logo hash from the credential
+- [ ] SIP verifier fetches logo, verifies hash, and caches on match
+- [ ] SIP verifier returns local proxy URL in `X-VVP-Brand-Logo` header
+- [ ] SIP verifier returns "?" placeholder logo when hash verification fails
+- [ ] Backward compatibility with existing scalar-attribute brand credentials
+- [ ] All existing issuer tests pass (900+)
+- [ ] All existing verifier tests pass (1905+)
+- [ ] All existing sip-verify tests pass
+- [ ] New tests for logo hash computation, cache, and verification
+- [ ] E2E VVP call flow delivers verified logo through proxy

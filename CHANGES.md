@@ -1,5 +1,55 @@
 # VVP Verifier Change Log
 
+## Sprint 79: Provenant Brand Schema & Logo Integrity
+
+**Date:** 2026-03-06
+**Status:** Complete
+**Review:** 6 code review rounds (R1-R6), 109 findings total (mostly plan-phase carryover). 98% convergence. Anthropic API degraded (400 errors) — 3/7 experts available per round.
+
+### Summary
+
+Adopted the Provenant brand-owner schema (`EFdennObbYoKFHlMbLkskgED-2w-npDO11yDvcNUhjsk`) for interoperable dossier exchange. Brand credentials now use RFC 6350 vCard arrays with LOGO HASH parameters (Blake3-256 SAID). Logo integrity proxy on sip-verify always fetches, hash-verifies, and caches logos locally — never passes raw external URLs to handsets. Backward-compatible with legacy scalar-attribute brand credentials.
+
+### Key Changes
+
+- **Provenant schema**: Exact copy from `provenant-dev/public-schema` with SAID verification. Uses `vcard` array, `issuer` edge with `I2I` operator, attributes SAID `EIDYFHkBOgNVWGFRcN1cEXNvRV47-nrNJGx6mKHBA7ia`.
+- **Brand detection**: Schema-SAID-first (`BRAND_SCHEMA_SAIDS` frozenset) with heuristic fallback. `is_brand_schema()` helper.
+- **Logo hash verification**: `common/common/vvp/logo_hash.py` — `fetch_validate_hash()` with Blake3-256 SAID computation, content-type allowlist (png/jpeg/webp/gif, SVG excluded), SSRF validation, URL redaction in logs.
+- **Logo integrity proxy**: `LogoCache` in sip-verify with per-SAID async locks (refcount + 1000-cap eviction), LRU disk cache, asyncio.to_thread for disk I/O. HTTP endpoint `GET /logo/{said}` with SAID regex validation + path traversal protection.
+- **vCard support**: `common/common/vvp/vcard/` package — parser, normalizer, types. `NormalizedBrand` canonical representation from either vcard-array or scalar credentials.
+- **SIP response headers**: `X-VVP-Brand-Logo-Verified` and `X-VVP-Brand-Logo-Reason` propagated in SIP 302 redirects.
+- **Brand verification errors**: `BrandErrorCode` enum (HASH_DOWNGRADE, PROPERTY_MISMATCH, PROPERTY_MISSING, LOGO_FETCH_FAILED, LOGO_HASH_MISMATCH).
+- **Issuer vcard builder**: `vcard_builder.py` builds vcard arrays from form inputs with LOGO HASH parameter.
+- **nginx TLS proxy**: `nginx-logo-proxy.conf` for `https://pbx.rcnx.io/logo/` → `localhost:8080/logo/`.
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `common/common/vvp/logo_hash.py` | New: Blake3-256 logo hash verification, SAID format validation, content-type allowlist |
+| `common/common/vvp/vcard/` | New: vCard parser, normalizer, NormalizedBrand types |
+| `common/common/vvp/schema/registry.py` | Added BrandOwner/ExtendedBrand SAIDs, BRAND_SCHEMA_SAIDS, is_brand_schema() |
+| `common/common/vvp/sip/models.py` | Added logo_verified, logo_reason fields to SIPResponse |
+| `common/tests/vvp/test_logo_hash.py` | New: 26 tests for logo hash module |
+| `common/tests/vvp/vcard/` | New: vCard parser/normalizer tests |
+| `services/issuer/app/schema/schemas/brand-owner-credential.json` | New: Provenant brand-owner schema (verbatim) |
+| `services/issuer/app/vvp/card.py` | vCard array passthrough before scalar fallback |
+| `services/issuer/app/vvp/vcard_builder.py` | New: Build vcard arrays from form inputs |
+| `services/issuer/tests/test_card.py` | 6 new vCard passthrough tests |
+| `services/verifier/app/vvp/brand.py` | Schema-SAID-first brand detection, vCard attribute verification, BrandErrorCode |
+| `services/verifier/app/vvp/api_models.py` | Added brand_logo_hash to VerifyResponse |
+| `services/verifier/app/vvp/verify.py` | Propagate brand_logo_hash |
+| `services/verifier/tests/test_brand.py` | 13 new tests for vCard/schema-SAID brand detection |
+| `services/sip-verify/app/verify/logo_cache.py` | New: LogoCache with per-SAID locks, LRU disk cache |
+| `services/sip-verify/app/verify/handler.py` | Always-proxy logos via LogoCache |
+| `services/sip-verify/app/verify/client.py` | Added brand_logo_hash to VerifyResult |
+| `services/sip-verify/app/main.py` | HTTP endpoints: /logo/{said}, /logo/unknown |
+| `services/sip-verify/app/config.py` | Logo cache config (VVP_LOGO_CACHE_DIR, etc.) |
+| `services/sip-verify/web/unknown-brand.svg` | New: Placeholder logo SVG |
+| `services/sip-verify/tests/test_logo_cache.py` | New: 16 LogoCache tests |
+| `services/sip-verify/tests/test_handler.py` | Updated for proxied logo URLs |
+| `services/pbx/config/nginx-logo-proxy.conf` | New: nginx TLS proxy for logo endpoint |
+
 ## Sprint 78: Verifier SIP Call Performance
 
 **Date:** 2026-03-05

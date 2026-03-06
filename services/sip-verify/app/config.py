@@ -62,6 +62,28 @@ VVP_MONITOR_ENABLED = os.getenv("VVP_MONITOR_ENABLED", "true").lower() == "true"
 VVP_MONITOR_TIMEOUT = float(os.getenv("VVP_MONITOR_TIMEOUT", "1.0"))
 
 # =============================================================================
+# Logo Cache Configuration (Sprint 79)
+# =============================================================================
+
+# Cache directory for verified logos
+VVP_LOGO_CACHE_DIR = os.getenv("VVP_LOGO_CACHE_DIR", "/tmp/vvp-logo-cache")
+
+# Max cache size in MB
+VVP_LOGO_CACHE_MAX_MB = int(os.getenv("VVP_LOGO_CACHE_MAX_MB", "100"))
+
+# Cache TTL in hours
+VVP_LOGO_CACHE_TTL_HOURS = int(os.getenv("VVP_LOGO_CACHE_TTL_HOURS", "24"))
+
+# Public base URL for serving cached logos to handsets.
+# MUST be the externally-reachable address of this service's HTTP port.
+# Default uses pbx.rcnx.io (the PBX's public DNS) since sip-verify runs on the PBX.
+# Override via env var for other deployments.
+VVP_LOGO_BASE_URL = os.getenv(
+    "VVP_LOGO_BASE_URL",
+    "https://pbx.rcnx.io",
+)
+
+# =============================================================================
 # Logging Configuration
 # =============================================================================
 

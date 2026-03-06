@@ -25,9 +25,14 @@ log = logging.getLogger(__name__)
 def build_card_claim(attributes: dict) -> Optional[list[str]]:
     """Build a vCard card claim array from credential attributes.
 
-    Maps Extended Brand Credential attribute names to RFC 6350 vCard
-    property strings.  Returns ``None`` if the credential does not
-    contain any brand attributes (i.e. ``brandName`` is absent).
+    If attributes contain a ``vcard`` array (Provenant brand-owner schema),
+    pass it through directly — it's already in RFC 6350 format with any
+    HASH parameters embedded.
+
+    If attributes contain scalar fields (Extended Brand Credential schema),
+    convert to RFC 6350 format (backward compatibility, no logo hash).
+
+    Returns ``None`` if the credential does not contain any brand data.
 
     Args:
         attributes: ACDC credential attributes dict (the ``a`` section).
@@ -36,6 +41,13 @@ def build_card_claim(attributes: dict) -> Optional[list[str]]:
         List of vCard property strings for PASSporT ``card`` claim,
         or ``None`` if no brand data is present.
     """
+    # Provenant-style vcard array — pass through directly
+    vcard = attributes.get("vcard")
+    if vcard and isinstance(vcard, list) and len(vcard) > 0:
+        log.debug(f"Using vcard array from credential ({len(vcard)} properties)")
+        return list(vcard)
+
+    # Fall back to scalar fields (Extended Brand Credential)
     brand_name = attributes.get("brandName")
     if not brand_name:
         return None

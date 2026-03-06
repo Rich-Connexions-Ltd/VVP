@@ -37,6 +37,7 @@ class VerifyResult:
     status: str
     brand_name: Optional[str] = None
     brand_logo_url: Optional[str] = None
+    brand_logo_hash: Optional[str] = None  # Sprint 79: Blake3 SAID from LOGO HASH param
     caller_id: Optional[str] = None
     error_code: Optional[str] = None
     error_message: Optional[str] = None
@@ -342,6 +343,7 @@ class VerifierClient:
         status = data.get("overall_status", "INDETERMINATE")
         brand_name = data.get("brand_name")
         brand_logo_url = data.get("brand_logo_url")
+        brand_logo_hash = data.get("brand_logo_hash")
         request_id = data.get("request_id")
 
         # Extract error info
@@ -376,6 +378,7 @@ class VerifierClient:
             status=status,
             brand_name=brand_name,
             brand_logo_url=brand_logo_url,
+            brand_logo_hash=brand_logo_hash,
             caller_id=caller_id,
             error_code=error_code,
             error_message=error_message,

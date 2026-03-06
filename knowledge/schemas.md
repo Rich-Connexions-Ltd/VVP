@@ -25,7 +25,8 @@ This document catalogs all credential schemas, their SAIDs, and governance rules
 | **APE** (Auth Phone Entity) | *(pending governance)* | Accept any |
 | **DE / GCD** (Delegate / Cooperative Delegation) | `EL7irIKYJL9Io0hhKSGWI4OznhwC7qgJG5Qf4aEs6j0o` | VVP project |
 | **TNAlloc** (TN Allocation) | `EFvnoHDY7I-kaBBeKlbDbkjG4BaI0nKLGadxBdjMGgSQ` | VVP project |
-| **Brand** (Brand Owner) | *(pending governance)* | Accept any |
+| **BrandOwner** (Provenant) | `EFdennObbYoKFHlMbLkskgED-2w-npDO11yDvcNUhjsk` | Provenant `provenant-dev/public-schema` (Sprint 79) |
+| **Brand** (Brand Owner) | *(pending governance)* | Accept any (legacy) |
 | **Dossier (CVD)** | `EH1jN4U4LMYHmPVI4FYdZ10bIPR7YWKp8TDdZ9Y9Al-P` | VVP project |
 | **GSMA Governance** | `EIBowJmxx5hNWQlfXqGcbN0aP_RBuucMW6mle4tAN6TL` | VVP project (Sprint 62) |
 | **VetterCertification** | `EOefmhWU2qTpMiEQhXohE6z3xRXkpLloZdhTYIenlD4H` | VVP project (Sprint 61) |
@@ -98,6 +99,7 @@ EDGE_NAME_MAP = {
 | `gsma-governance-credential.json` | `EIBowJmxx5hNWQ...` | GSMA Governance |
 | `extended-legal-entity-credential.json` | `EPknTwPpSZi379...` | Extended LE |
 | `extended-brand-credential.json` | `EK7kPhs5YkPsq9...` | Extended Brand |
+| `brand-owner-credential.json` | `EFdennObbYoKFHl...` | BrandOwner (Provenant v1.0.0, Sprint 79) |
 | `extended-tn-allocation-credential.json` | `EGUh_fVLbjfkYF...` | Extended TNAlloc |
 | `oor-authorization-vlei-credential.json` | `EKA57bKBKxr_kN...` | OOR Auth |
 | `ecr-authorization-vlei-credential.json` | `EH6ekLjSr8V32W...` | ECR Auth |
@@ -136,6 +138,41 @@ Extended schemas (Extended LE, Extended Brand, Extended TNAlloc) have a `certifi
 edge that links to the org's VetterCertification. This edge is auto-injected by
 `_inject_certification_edge()` during credential issuance when the schema has a
 `oneOf` edge block containing a `certification` variant.
+
+### Provenant Brand Owner Schema (Sprint 79)
+
+The BrandOwner credential (`EFdennObbYoKFHlMbLkskgED-2w-npDO11yDvcNUhjsk`) from
+`provenant-dev/public-schema` uses a `vcard` array instead of scalar brand fields:
+
+```json
+{
+  "a": {
+    "vcard": [
+      "ORG:ACME Inc",
+      "LOGO;HASH=EK2r6EnDXre2pecTBO8s99j4OtNaaDIhVyr7uGugDhmp;VALUE=URI:https://cdn.acme.com/logo.png",
+      "TEL;TYPE=support:+445555555555"
+    ],
+    "goals": ["aries-oca+lang.en"]
+  },
+  "e": { "issuer": { "n": "...", "s": "...", "o": "I2I" } }
+}
+```
+
+Key differences from Extended Brand:
+- Uses `vcard` array (RFC 6350 property lines) instead of scalar `brandName`/`brandLogo`
+- Edge is `issuer` with `I2I` operator (not `certification`)
+- LOGO HASH parameter is Blake3-256 SAID of raw image bytes
+- Brand detection: schema SAID check via `BRAND_SCHEMA_SAIDS` (definitive), then heuristic fallback
+- `BRAND_SCHEMA_SAIDS` = union of BrandOwner + ExtendedBrand SAIDs
+
+### Logo Hash Verification (Sprint 79)
+
+- `common/common/vvp/logo_hash.py`: `fetch_validate_hash()` fetches logo, computes Blake3-256 SAID, verifies against credential HASH
+- SAID format: "E" + 43 base64url chars (Blake3-256 → base64url → prepend "E")
+- Content-type allowlist: `image/png`, `image/jpeg`, `image/webp`, `image/gif` (SVG excluded — script injection risk)
+- HASH downgrade detection: if credential LOGO has HASH but card claim omits it, verification fails
+- Logo proxy (sip-verify): always fetches → verifies → caches locally → serves via `/logo/{said}`
+- Never passes raw external URLs in SIP headers to handsets
 
 ### Edge Rules (Semantic Validation)
 

@@ -38,8 +38,31 @@ from ..config import (
 from .identity_parser import parse_identity_header, IdentityParseError
 from .vvp_identity import decode_vvp_identity, VVPIdentityDecodeError
 from .client import get_verifier_client, VerifyResult
+from .logo_cache import LogoCache, LogoCacheResult
 
 log = logging.getLogger(__name__)
+
+# Lazy-initialized logo cache
+_logo_cache: Optional[LogoCache] = None
+
+
+def get_logo_cache() -> LogoCache:
+    """Get or create the global logo cache."""
+    global _logo_cache
+    if _logo_cache is None:
+        from ..config import (
+            VVP_LOGO_CACHE_DIR,
+            VVP_LOGO_CACHE_MAX_MB,
+            VVP_LOGO_CACHE_TTL_HOURS,
+            VVP_LOGO_BASE_URL,
+        )
+        _logo_cache = LogoCache(
+            cache_dir=VVP_LOGO_CACHE_DIR,
+            max_mb=VVP_LOGO_CACHE_MAX_MB,
+            ttl_hours=VVP_LOGO_CACHE_TTL_HOURS,
+            base_url=VVP_LOGO_BASE_URL,
+        )
+    return _logo_cache
 
 # Lazy-initialized persistent HTTP session for monitor
 _monitor_session: Optional[httpx.AsyncClient] = None
@@ -120,6 +143,10 @@ async def _capture_event(
             response_vvp_headers["X-VVP-Vetter-Status"] = response.vetter_status
         if response.warning_reason:
             response_vvp_headers["X-VVP-Warning-Reason"] = response.warning_reason
+        if response.logo_verified is not None:
+            response_vvp_headers["X-VVP-Brand-Logo-Verified"] = "true" if response.logo_verified else "false"
+        if response.logo_reason:
+            response_vvp_headers["X-VVP-Brand-Logo-Reason"] = response.logo_reason
 
     event_data = {
         "service": "VERIFICATION",
@@ -319,6 +346,27 @@ async def handle_verify_invite(request: SIPRequest) -> Optional[SIPResponse]:
     # Sprint 60: Brand derived ONLY from verified dossier evidence.
     # No fallback to incoming SIP headers.
 
+    # Sprint 79: Always proxy logos via local cache — never pass raw external URLs.
+    brand_logo_url = result.brand_logo_url
+    logo_verified = False
+    logo_reason = None
+
+    if brand_logo_url:
+        try:
+            cache = get_logo_cache()
+            logo_result = await cache.get_or_fetch(
+                logo_url=brand_logo_url,
+                expected_said=result.brand_logo_hash,
+            )
+            brand_logo_url = logo_result.local_url
+            logo_verified = logo_result.verified
+            if not logo_verified and result.brand_logo_hash is None:
+                logo_reason = "no-hash"
+        except Exception as e:
+            log.warning(f"Logo proxy failed for call_id={request.call_id}: {e}")
+            brand_logo_url = get_logo_cache().unknown_url
+            logo_reason = "fetch-error"
+
     # Build 302 redirect with VVP headers
     response = build_302_redirect(
         request,
@@ -327,12 +375,17 @@ async def handle_verify_invite(request: SIPRequest) -> Optional[SIPResponse]:
         vvp_passport=request.p_vvp_passport,  # Pass through
         vvp_status=result.status,
         brand_name=result.brand_name,
-        brand_logo_url=result.brand_logo_url,
+        brand_logo_url=brand_logo_url,
         caller_id=result.caller_id,
         error_code=result.error_code if result.status == "INVALID" else None,
         vetter_status=result.vetter_status,  # Sprint 62
         warning_reason=result.warning_reason,  # Sprint 75: vetter scope mismatch
     )
+
+    # Sprint 79: Set logo verification fields on response
+    if brand_logo_url:
+        response.logo_verified = logo_verified
+        response.logo_reason = logo_reason
 
     warning_suffix = f", warning={result.warning_reason}" if result.warning_reason else ""
     log.info(

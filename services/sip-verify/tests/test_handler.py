@@ -74,7 +74,10 @@ class TestHandleVerifyInvite:
             assert response.status_code == 302
             assert response.vvp_status == "VALID"
             assert response.brand_name == "ACME Corporation"
-            assert response.brand_logo_url == "https://cdn.acme.com/logo.png"
+            # Sprint 79: Logo is always proxied via local cache
+            assert response.brand_logo_url is not None
+            # Verify logo_verified field is set
+            assert response.logo_verified is not None
 
     @pytest.mark.asyncio
     async def test_missing_headers_returns_none(self):
