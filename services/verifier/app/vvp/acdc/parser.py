@@ -132,15 +132,8 @@ def parse_acdc(data: Dict[str, Any], allow_variants: bool = True) -> ACDC:
 def validate_acdc_said(acdc: ACDC, raw_data: Dict[str, Any]) -> None:
     """Validate ACDC's self-addressing identifier.
 
-    Canonicalization Process (per KERI/CESR spec):
-    1. Replace 'd' field with placeholder of same length (##############...)
-    2. Serialize to KERI canonical JSON:
-       - Deterministic key ordering: v, d, i, s, a, e, r
-       - No whitespace between elements
-       - UTF-8 encoded
-    3. Compute Blake3-256 hash of canonical bytes
-    4. CESR-encode hash with 'E' prefix (44 chars total)
-    5. Compare computed SAID to 'd' field value
+    Uses compute_acdc_said() to compute the expected SAID and compares
+    it against the 'd' field value.
 
     Args:
         acdc: Parsed ACDC object.
@@ -149,10 +142,6 @@ def validate_acdc_said(acdc: ACDC, raw_data: Dict[str, Any]) -> None:
     Raises:
         ACDCSAIDMismatch: If computed SAID != d field.
     """
-    # Import KERI canonicalization (avoid circular imports)
-    from ..keri.keri_canonical import canonical_serialize
-    from ..keri.kel_parser import _cesr_encode
-
     if not acdc.said:
         return  # No SAID to validate
 
@@ -160,38 +149,11 @@ def validate_acdc_said(acdc: ACDC, raw_data: Dict[str, Any]) -> None:
     if acdc.said.startswith("#") or "_" * 10 in acdc.said:
         return
 
-    # Create canonical form with placeholder
-    data_copy = dict(raw_data)
-
-    # Placeholder must match expected SAID length (44 chars for Blake3-256)
-    placeholder_length = len(acdc.said)
-    if placeholder_length < 44:
-        placeholder_length = 44
-
-    # Use the same derivation code as the actual SAID
-    code = acdc.said[0] if acdc.said else "E"
-    placeholder = code + "#" * (placeholder_length - 1)
-    data_copy["d"] = placeholder
-
-    # Serialize canonically using KERI field ordering
     try:
-        canonical_bytes = _acdc_canonical_serialize(data_copy)
+        computed_said = compute_acdc_said(raw_data, said_field="d")
     except Exception as e:
-        raise ACDCSAIDMismatch(f"Failed to canonicalize ACDC: {e}")
+        raise ACDCSAIDMismatch(f"Failed to compute ACDC SAID: {e}")
 
-    # Compute Blake3-256 hash
-    try:
-        import blake3
-        digest = blake3.blake3(canonical_bytes).digest()
-    except ImportError:
-        # Fall back to SHA256 in test mode
-        import hashlib
-        digest = hashlib.sha256(canonical_bytes).digest()
-
-    # CESR-encode with derivation code
-    computed_said = _cesr_encode(digest, code="E")
-
-    # Compare
     if acdc.said != computed_said:
         raise ACDCSAIDMismatch(
             f"ACDC SAID mismatch: has {acdc.said[:20]}... "
@@ -202,8 +164,11 @@ def validate_acdc_said(acdc: ACDC, raw_data: Dict[str, Any]) -> None:
 def _acdc_canonical_serialize(data: Dict[str, Any]) -> bytes:
     """Serialize ACDC to canonical form for SAID computation.
 
-    ACDC field ordering (per KERI/ACDC spec):
-    v, d, i, s, a, e, r
+    ACDC field ordering (per keripy SerderACDC v1.0 FieldDom):
+    v, d, u, i, ri, s, a, A, e, r
+
+    Where u (UUID), ri (registry ID), A (aggregate) are optional.
+    Extra fields beyond the standard set are appended at the end.
 
     Args:
         data: ACDC dictionary.
@@ -211,8 +176,9 @@ def _acdc_canonical_serialize(data: Dict[str, Any]) -> bytes:
     Returns:
         Canonical JSON bytes.
     """
-    # ACDC canonical field order
-    acdc_field_order = ["v", "d", "i", "s", "a", "e", "r"]
+    # ACDC canonical field order from keripy/src/keri/core/serdering.py
+    # SerderACDC.Fields[Protos.acdc][Vrsn_1_0][None].alls
+    acdc_field_order = ["v", "d", "u", "i", "ri", "s", "a", "A", "e", "r"]
 
     # Build ordered output
     ordered = {}
@@ -232,8 +198,15 @@ def _acdc_canonical_serialize(data: Dict[str, Any]) -> bytes:
 def compute_acdc_said(acdc_data: Dict[str, Any], said_field: str = "d") -> str:
     """Compute SAID for an ACDC credential using ACDC canonical field ordering.
 
-    IMPORTANT: This function uses ACDC-specific field ordering (v, d, i, s, a, e, r),
-    which is DIFFERENT from KEL event field ordering.
+    Matches keripy's makify algorithm:
+    1. Replace SAID field with '#' * 44 placeholder
+    2. Dummy the version string to determine serialized size
+    3. Rebuild version string with correct size
+    4. Serialize canonically and hash with Blake3-256
+
+    IMPORTANT: This function uses ACDC-specific field ordering
+    (v, d, u, i, ri, s, a, A, e, r), which is DIFFERENT from KEL event
+    field ordering.
 
     DO NOT use this for:
     - KEL events (use keri.kel_parser.compute_kel_event_said instead)
@@ -255,11 +228,28 @@ def compute_acdc_said(acdc_data: Dict[str, Any], said_field: str = "d") -> str:
     """
     import base64
     import hashlib
+    import re
+
+    # keripy uses '#' as Dummy placeholder (must not be valid Base64)
+    SAID_PLACEHOLDER = "#" * 44
 
     # Create copy with placeholder SAID
     data_copy = dict(acdc_data)
-    placeholder = "E" + "_" * 43  # Blake3-256 placeholder
-    data_copy[said_field] = placeholder
+    data_copy[said_field] = SAID_PLACEHOLDER
+
+    # Update version string with correct serialized size (matches keripy makify)
+    if "v" in data_copy:
+        vs = data_copy["v"]
+        # Parse version string: ACDC10JSON000196_ or similar
+        match = re.match(r"^([A-Z]{4})(\d)(\d)([A-Z]+)([0-9a-f]{6})(_?)$", vs)
+        if match:
+            proto, major, minor, kind, _old_size, term = match.groups()
+            # Dummy the version string to same span for size computation
+            data_copy["v"] = "#" * len(vs)
+            raw = _acdc_canonical_serialize(data_copy)
+            size = len(raw)
+            # Rebuild version string with correct size
+            data_copy["v"] = f"{proto}{major}{minor}{kind}{size:06x}{term}"
 
     # Serialize using ACDC canonical field ordering
     canonical_bytes = _acdc_canonical_serialize(data_copy)
@@ -272,8 +262,18 @@ def compute_acdc_said(acdc_data: Dict[str, Any], said_field: str = "d") -> str:
         digest = hashlib.sha256(canonical_bytes).digest()
 
     # CESR encode with 'E' derivation code
-    encoded = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
-    return "E" + encoded
+    # Must match keripy's Matter._infil() encoding:
+    # 1. Compute pad size: ps = (3 - (len(raw) % 3)) % 3
+    # 2. Prepad with ps zero bytes
+    # 3. Base64url encode
+    # 4. Skip first ps characters
+    # 5. Prepend code
+    rs = len(digest)
+    ps = (3 - (rs % 3)) % 3  # For 32 bytes: ps = 1
+    prepadded = bytes([0] * ps) + digest
+    b64 = base64.urlsafe_b64encode(prepadded).decode("ascii")
+    trimmed = b64[ps:].rstrip("=")
+    return "E" + trimmed
 
 
 def parse_acdc_from_dossier(

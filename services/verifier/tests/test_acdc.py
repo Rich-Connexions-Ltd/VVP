@@ -1984,7 +1984,7 @@ class TestValidateACDCSaidCoverage:
             "app.vvp.acdc.parser._acdc_canonical_serialize",
             side_effect=ValueError("serialize error")
         ):
-            with pytest.raises(ACDCSAIDMismatch, match="Failed to canonicalize"):
+            with pytest.raises(ACDCSAIDMismatch, match="Failed to compute ACDC SAID"):
                 validate_acdc_said(acdc, {"d": acdc.said})
 
     def test_validate_said_blake3_mismatch(self):
@@ -2009,26 +2009,18 @@ class TestValidateACDCSaidCoverage:
 
     def test_validate_said_valid_blake3_hash(self):
         """Valid SAID passes validation with blake3."""
-        from app.vvp.acdc.parser import validate_acdc_said, _acdc_canonical_serialize
-        from app.vvp.keri.kel_parser import _cesr_encode
+        from app.vvp.acdc.parser import validate_acdc_said, compute_acdc_said
 
         # Create test data
         raw_data = {
             "v": "ACDC10JSON00011c_",
-            "d": "",  # Will be set to placeholder
+            "d": "",  # Will be computed
             "i": "D" + "A" * 43,
             "a": {"test": "value"},
         }
 
-        # Compute actual SAID
-        import blake3
-        placeholder = "E" + "#" * 43
-        raw_data["d"] = placeholder
-        canonical = _acdc_canonical_serialize(raw_data)
-        digest = blake3.blake3(canonical).digest()
-        correct_said = _cesr_encode(digest, code="E")
-
-        # Now set raw_data with correct SAID
+        # Compute correct SAID using the canonical function
+        correct_said = compute_acdc_said(raw_data)
         raw_data["d"] = correct_said
 
         # Create mock ACDC
