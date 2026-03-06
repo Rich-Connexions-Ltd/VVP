@@ -129,6 +129,21 @@ These MCP tools provide authoritative KERI/ACDC/vLEI documentation and should be
 
 MCP Server URL: `https://www.vlei.wiki/mcp`
 
+- `vvp` - Local VVP protocol analysis tools (17 tools):
+  - `vvp_jwt_parse` / `vvp_jwt_validate` - Parse and validate JWT/PASSporT tokens
+  - `vvp_identity_parse` - Parse VVP-Identity headers
+  - `vvp_cesr_parse` / `vvp_cesr_detect` - Parse and detect CESR streams
+  - `vvp_said_compute` / `vvp_said_validate` / `vvp_said_inject` - SAID operations
+  - `vvp_acdc_parse` / `vvp_acdc_type` - Parse ACDC credentials and detect types
+  - `vvp_dossier_parse` / `vvp_dossier_validate` / `vvp_dossier_fetch` - Dossier operations
+  - `vvp_graph_build` - Build credential graphs
+  - `vvp_kel_parse` / `vvp_kel_validate` - Parse and validate Key Event Logs
+  - `vvp_verify_chain` - Full verification chain (JWT → dossier → graph)
+
+These tools call the same adapter layer as the `vvp` CLI. Use them for programmatic analysis of protocol data structures. See `.claude/skills/vvp-tools/SKILL.md` for usage patterns or invoke `/vvp-tools`.
+
+MCP Server: Local stdio via `scripts/run-mcp-server.sh`
+
 ## Docker Environment
 
 Docker Desktop is installed at `/Applications/Docker.app`. When running Docker commands from Claude Code, use the full path or set PATH:

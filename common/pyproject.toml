@@ -14,9 +14,14 @@ cli = [
     "pyyaml>=6.0",
     "vvp-verifier",  # Required for parsing functions
 ]
+mcp = [
+    "fastmcp>=2.0.0",
+    "vvp-verifier",  # Required for parsing functions
+]
 
 [project.scripts]
 vvp = "common.vvp.cli.main:app"
+vvp-mcp = "common.vvp.mcp.server:main"
 
 [build-system]
 requires = ["setuptools>=65.0"]

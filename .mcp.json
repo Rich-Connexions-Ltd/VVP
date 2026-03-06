@@ -3,6 +3,11 @@
     "vlei_KERI_knowledge_base": {
       "type": "sse",
       "url": "https://www.vlei.wiki/mcp"
+    },
+    "vvp": {
+      "type": "stdio",
+      "command": "/Users/andrewbale/Azure/VVP/scripts/run-mcp-server.sh",
+      "args": []
     }
   }
 }
