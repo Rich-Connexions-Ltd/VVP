@@ -15,6 +15,7 @@ Run: python -m common.vvp.mcp.server
 Or via wrapper: ./scripts/run-mcp-server.sh
 """
 
+import importlib
 import json
 from typing import Annotated, Any, Optional
 
@@ -51,6 +52,35 @@ def _get_adapters():
                 f"Original error: {e}"
             ) from e
     return _adapters
+
+
+@mcp.tool()
+def vvp_reload() -> dict[str, Any]:
+    """Reload the VVP schema registry and adapter modules to pick up source file changes.
+
+    Call this after editing registry.py or other common modules to avoid restarting Claude Code.
+    """
+    global _adapters
+    reloaded: list[str] = []
+
+    # Reload the schema registry (most common change target)
+    import common.vvp.schema.registry as registry_mod
+    importlib.reload(registry_mod)
+    reloaded.append("common.vvp.schema.registry")
+
+    # Clear cached adapters so next tool call re-imports
+    _adapters = None
+    reloaded.append("adapters cache cleared")
+
+    # Verify the reload by reading current state
+    from common.vvp.schema.registry import KNOWN_SCHEMA_SAIDS, SCHEMA_REGISTRY_VERSION
+    schema_counts = {k: len(v) for k, v in KNOWN_SCHEMA_SAIDS.items()}
+
+    return {
+        "reloaded": reloaded,
+        "registry_version": SCHEMA_REGISTRY_VERSION,
+        "schema_counts": schema_counts,
+    }
 
 
 def _dataclass_to_dict(obj: Any) -> Any:
