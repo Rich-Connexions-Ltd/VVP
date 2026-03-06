@@ -2152,12 +2152,20 @@ async def ui_browse_said(
             [acdc for acdc, _, _ in parsed_acdcs if acdc is not None]
         )
 
+        # Convert cached revocation status to graph CredentialStatus for node display
+        from app.vvp.acdc.graph import CredentialStatus as GraphCredentialStatus
+        graph_revocation: dict[str, GraphCredentialStatus] = {}
+        for said, rev_info in revocation_cache.items():
+            status_str = rev_info.get("status", "")
+            if status_str in ("ACTIVE", "REVOKED"):
+                graph_revocation[said] = GraphCredentialStatus(status_str)
+
         # Build credential graph with deep vLEI chain resolution
         credential_resolver = get_credential_resolver()
         graph = await build_credential_graph_with_resolution(
             dossier_acdcs=dossier_acdcs,
             trusted_roots=set(TRUSTED_ROOT_AIDS),
-            revocation_status=None,
+            revocation_status=graph_revocation or None,
             issuer_identities=sync_identities,
             credential_resolver=credential_resolver,
             resolve_chain=True,
@@ -2457,12 +2465,20 @@ async def ui_jwt_explore(
             [acdc for acdc, _, _ in parsed_acdcs if acdc is not None]
         )
 
+        # Convert cached revocation status to graph CredentialStatus for node display
+        from app.vvp.acdc.graph import CredentialStatus as GraphCredentialStatus
+        graph_revocation: dict[str, GraphCredentialStatus] = {}
+        for said, rev_info in revocation_cache.items():
+            status_str = rev_info.get("status", "")
+            if status_str in ("ACTIVE", "REVOKED"):
+                graph_revocation[said] = GraphCredentialStatus(status_str)
+
         # Build credential graph with deep vLEI chain resolution
         credential_resolver = get_credential_resolver()
         graph = await build_credential_graph_with_resolution(
             dossier_acdcs=dossier_acdcs,
             trusted_roots=set(TRUSTED_ROOT_AIDS),
-            revocation_status=None,
+            revocation_status=graph_revocation or None,
             issuer_identities=sync_identities,
             credential_resolver=credential_resolver,
             resolve_chain=True,
@@ -2774,13 +2790,21 @@ async def ui_simple_verify(
             [acdc for acdc, _, _ in parsed_acdcs if acdc is not None]
         )
 
+        # Convert revocation cache to graph CredentialStatus for node display
+        from app.vvp.acdc.graph import CredentialStatus as GraphCredentialStatus
+        graph_revocation: dict[str, GraphCredentialStatus] = {}
+        for said, rev_info in revocation_cache.items():
+            status_str = rev_info.get("status", "")
+            if status_str in ("ACTIVE", "REVOKED"):
+                graph_revocation[said] = GraphCredentialStatus(status_str)
+
         # Build credential graph with deep vLEI chain resolution
         # This fetches QVI credentials via e.qvi edges to reach GLEIF root
         credential_resolver = get_credential_resolver()
         graph = await build_credential_graph_with_resolution(
             dossier_acdcs=dossier_acdcs,
             trusted_roots=set(TRUSTED_ROOT_AIDS),
-            revocation_status=None,
+            revocation_status=graph_revocation or None,
             issuer_identities=sync_identities,
             credential_resolver=credential_resolver,
             resolve_chain=True,
