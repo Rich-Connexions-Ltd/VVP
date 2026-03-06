@@ -61,7 +61,7 @@
                   "name": "party_authorized",
                   "status": "INVALID",
                   "reasons_contain": [
-                    "No APE credential"
+                    "No APE or Brand credential"
                   ]
                 }
               },

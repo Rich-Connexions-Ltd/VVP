@@ -251,7 +251,7 @@ class TestVerifyPartyAuthorization:
 
         assert claim.status == ClaimStatus.INVALID
         assert matched_ape is None
-        assert any("No APE credential" in r for r in claim.reasons)
+        assert any("No APE or Brand credential" in r for r in claim.reasons)
 
     def test_party_authorized_issuee_mismatch(self):
         """APE issuee doesn't match signer -> INVALID."""

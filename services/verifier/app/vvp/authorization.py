@@ -348,14 +348,25 @@ def verify_party_authorization(
         return _verify_delegation_chain(ctx, matching_des, claim)
 
     # Case A: No delegation (or no matching DEs) - OP must be issuee of APE
+    # Also accept Brand credentials (ExtendedBrand/BrandOwner) as APE equivalent:
+    # the Brand credential's issuee is the originating party in VVP dossiers
+    # that use Brand+TNAlloc instead of a dedicated APE credential.
+    if not ape_credentials:
+        brand_credentials = [
+            acdc for acdc in ctx.dossier_acdcs.values()
+            if acdc.credential_type in ("ExtendedBrand", "BrandOwner")
+        ]
+        if brand_credentials:
+            ape_credentials = brand_credentials
+
     if not ape_credentials:
         claim.fail(
             ClaimStatus.INVALID,
-            "No APE credential found in dossier"
+            "No APE or Brand credential found in dossier"
         )
         return claim, None
 
-    # Check if any APE has issuee matching the signer
+    # Check if any APE/Brand has issuee matching the signer
     for ape in ape_credentials:
         issuee = _get_issuee(ape)
         if issuee == ctx.pss_signer_aid:
