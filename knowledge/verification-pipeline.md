@@ -143,7 +143,8 @@ For each credential in the chain:
 **Strategy** (ordered by priority):
 1. **Inline TEL** (fast path): Check for TEL events in the dossier stream itself
 2. **OOBI Resolution**: Use credential's `ri` (Registry ID) to construct OOBI URL
-3. **Witness Pool**: Query configured witness pool
+3. **Issuer TEL Source** (Sprint 80): Query `VVP_TEL_ISSUER_URL` for CESR-encoded TEL events. Verifies credential binding (`i` field match) and sequence consistency (iss=0, rev=1). Only active when `VVP_TEL_ISSUER_URL` is configured. Falls through to witnesses on error/unknown.
+4. **Witness Pool**: Query configured witness pool
 
 **TEL Event Types**:
 | Event | Meaning | Status |

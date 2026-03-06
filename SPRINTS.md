@@ -69,6 +69,7 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 77 | PBX Portal Migration | IN PROGRESS | Sprint 71 |
 | 78 | Verifier SIP Call Performance | COMPLETE | Sprint 51, 76 |
 | 79 | Provenant Brand Schema & Logo Integrity | COMPLETE | Sprint 58, 78 |
+| 80 | TEL Publication to Witnesses | COMPLETE | Sprint 74b |
 
 ---
 
@@ -5984,3 +5985,54 @@ services/verifier/tests/test_brand.py                                # Update: P
 - [ ] All existing sip-verify tests pass
 - [ ] New tests for logo hash computation, cache, and verification
 - [ ] E2E VVP call flow delivers verified logo through proxy
+
+---
+
+## Sprint 80: TEL Publication to Witnesses (COMPLETE)
+
+**Status:** COMPLETE
+**Goal:** Enable the verifier to resolve credential revocation status by querying TEL data from the Issuer service, eliminating UNKNOWN/INDETERMINATE revocation status.
+
+### Deliverables
+
+- [x] KERI Agent TEL endpoint (`GET /tels/credential/{said}`) — CESR-encoded iss+rev events from LMDB
+- [x] Issuer TEL proxy endpoint (`GET /tels/credential/{said}`) — raw byte passthrough to KERI Agent
+- [x] Verifier TEL client Issuer source (`_query_issuer_tel()`) — configurable via `VVP_TEL_ISSUER_URL`
+- [x] Shared SAID validation utility (`common/common/vvp/said_validation.py`)
+- [x] HTTPS enforcement with `VVP_ALLOW_HTTP` opt-in for development
+- [x] Rate limiting on Issuer TEL endpoint (SlowAPI 60/min/IP)
+- [x] `asyncio.to_thread()` for non-blocking LMDB reads
+- [x] Documentation updates (api-reference, deployment, verification-pipeline, service CLAUDE.md files)
+
+### Key Files
+
+```
+common/common/vvp/said_validation.py                    # Shared SAID regex validation
+services/keri-agent/app/api/tel.py                       # KERI Agent TEL endpoint
+services/keri-agent/tests/test_tel_api.py                # 7 tests
+services/issuer/app/api/tel.py                           # Issuer TEL proxy
+services/issuer/tests/test_tel_proxy.py                  # 7 tests
+services/verifier/app/vvp/keri/tel_client.py             # Issuer TEL source method
+services/verifier/app/core/config.py                     # VVP_TEL_ISSUER_URL config
+services/verifier/tests/test_tel_issuer_source.py        # 14 tests
+```
+
+### Technical Notes
+
+- **Issuer as TEL Facade**: Single public API surface. Issuer proxies raw CESR bytes from KERI Agent with zero parsing/transformation.
+- **SAID verification**: TEL `i` field binding check + sequence consistency (iss=sn0, rev=sn1).
+- **Zero keripy in verifier**: Verifier remains keripy-free. SAID tamper detection without full KEL anchor verification (Known Debt).
+- **7 review rounds** (5 plan + 2 code), 73 findings (55 ADDRESSED, 18 WONTFIX Known Debt).
+- 1950 tests pass (7 keri-agent + 7 issuer + 1936 verifier).
+
+### Dependencies
+
+- Sprint 74b (TEL Events in Dossiers) — KERI Agent TEL infrastructure
+
+### Exit Criteria
+
+- [x] Verifier can query TEL data via Issuer endpoint
+- [x] Revocation status resolves to VALID (not UNKNOWN/INDETERMINATE) for issued credentials
+- [x] CESR binary passthrough (no JSON intermediary)
+- [x] All existing tests pass (1950 total)
+- [x] Documentation updated

@@ -477,6 +477,41 @@ TEL_CLIENT_TIMEOUT_SECONDS: float = float(
     os.getenv("VVP_TEL_CLIENT_TIMEOUT", "10.0")
 )
 
+# Sprint 80: Issuer TEL source URL for revocation checking
+# When set, the verifier queries this URL for TEL events before falling back to witnesses.
+# Production: https://vvp-issuer.rcnx.io
+# If unset or empty, the Issuer TEL source is skipped (backward compatible).
+_raw_tel_issuer_url: str = os.getenv("VVP_TEL_ISSUER_URL", "")
+
+# Allow HTTP for TEL Issuer URL (local dev only — HTTPS required by default)
+TEL_ALLOW_HTTP: bool = os.getenv("VVP_ALLOW_HTTP", "false").lower() == "true"
+
+
+def _validate_tel_issuer_url(url: str) -> str:
+    """Validate and return TEL Issuer URL, or empty string if invalid."""
+    if not url:
+        return ""
+    from urllib.parse import urlparse
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            _config_log.warning(f"VVP_TEL_ISSUER_URL has invalid scheme: {parsed.scheme}")
+            return ""
+        if parsed.scheme == "http" and not TEL_ALLOW_HTTP:
+            _config_log.warning("VVP_TEL_ISSUER_URL uses HTTP but VVP_ALLOW_HTTP is not set — disabling Issuer TEL source")
+            return ""
+        if not parsed.netloc:
+            _config_log.warning("VVP_TEL_ISSUER_URL has no host")
+            return ""
+        _config_log.info(f"TEL Issuer source configured: {url}")
+        return url
+    except Exception as e:
+        _config_log.warning(f"VVP_TEL_ISSUER_URL validation failed: {e}")
+        return ""
+
+
+TEL_ISSUER_URL: str = _validate_tel_issuer_url(_raw_tel_issuer_url)
+
 # Enable GLEIF witness discovery
 # When True (default): Attempt to discover GLEIF witnesses on first use
 # When False: Only use configured Provenant witnesses

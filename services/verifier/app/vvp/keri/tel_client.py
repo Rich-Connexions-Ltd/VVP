@@ -21,7 +21,8 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
-from app.core.config import TEL_CLIENT_TIMEOUT_SECONDS
+from app.core.config import TEL_CLIENT_TIMEOUT_SECONDS, TEL_ISSUER_URL
+from common.vvp.said_validation import is_valid_said
 
 log = logging.getLogger(__name__)
 
@@ -244,6 +245,15 @@ class TELClient:
                 self._cache[cache_key] = result
                 return result
 
+        # Try Issuer TEL endpoint (Sprint 80)
+        if TEL_ISSUER_URL:
+            log.info(f"  trying_issuer_tel: {TEL_ISSUER_URL[:50]}...")
+            result = await self._query_issuer_tel(credential_said, registry_said)
+            log.info(f"  issuer_tel_result: status={result.status.value} error={result.error}")
+            if result.status not in (CredentialStatus.ERROR, CredentialStatus.UNKNOWN):
+                self._cache[cache_key] = result
+                return result
+
         # Try known witnesses (with GLEIF discovery) — parallel first-success
         witness_urls = await self._get_witness_urls_async()
         log.info(f"  trying_witnesses: count={len(witness_urls)} (parallel)")
@@ -280,6 +290,119 @@ class TELClient:
             error="No TEL data found from any source",
             source="none"
         )
+
+    async def _query_issuer_tel(
+        self,
+        credential_said: str,
+        registry_said: Optional[str],
+    ) -> RevocationResult:
+        """Query the Issuer TEL endpoint for CESR TEL events.
+
+        Sprint 80: Uses VVP_TEL_ISSUER_URL to fetch TEL events, then verifies
+        SAID integrity and credential binding before trusting the status.
+        """
+        try:
+            url = f"{TEL_ISSUER_URL.rstrip('/')}/tels/credential/{credential_said}"
+            from common.vvp.http_client import get_shared_client
+            client = await get_shared_client()
+
+            resp = await client.get(url, timeout=self.timeout)
+            log.info(f"    issuer_response: status={resp.status_code} len={len(resp.content)}")
+
+            if resp.status_code == 404:
+                return RevocationResult(
+                    status=CredentialStatus.UNKNOWN,
+                    credential_said=credential_said,
+                    registry_said=registry_said,
+                    issuance_event=None,
+                    revocation_event=None,
+                    error="Credential not found on Issuer",
+                    source="issuer",
+                )
+
+            if resp.status_code != 200:
+                return RevocationResult(
+                    status=CredentialStatus.ERROR,
+                    credential_said=credential_said,
+                    registry_said=registry_said,
+                    issuance_event=None,
+                    revocation_event=None,
+                    error=f"Issuer returned HTTP {resp.status_code}",
+                    source="issuer",
+                )
+
+            # Parse CESR TEL events from the response
+            response_text = resp.content.decode("utf-8", errors="replace")
+            result = self._parse_tel_response(
+                credential_said, registry_said, response_text, "issuer"
+            )
+
+            # Verify TEL event integrity
+            if result.status in (CredentialStatus.ACTIVE, CredentialStatus.REVOKED):
+                if not self._verify_tel_integrity(result, credential_said):
+                    log.warning(f"    issuer_tel_integrity_failed: cred={credential_said[:16]}...")
+                    return RevocationResult(
+                        status=CredentialStatus.ERROR,
+                        credential_said=credential_said,
+                        registry_said=registry_said,
+                        issuance_event=None,
+                        revocation_event=None,
+                        error="TEL integrity verification failed",
+                        source="issuer",
+                    )
+
+            return result
+
+        except Exception as e:
+            log.info(f"    issuer_tel_error: {type(e).__name__}: {e}")
+            return RevocationResult(
+                status=CredentialStatus.ERROR,
+                credential_said=credential_said,
+                registry_said=registry_said,
+                issuance_event=None,
+                revocation_event=None,
+                error=f"Issuer TEL query failed: {e}",
+                source="issuer",
+            )
+
+    def _verify_tel_integrity(
+        self,
+        result: RevocationResult,
+        expected_credential_said: str,
+    ) -> bool:
+        """Verify TEL event integrity: credential binding and sequence consistency.
+
+        Checks:
+        1. Credential binding: TEL event `i` field matches queried credential_said
+        2. Sequence consistency: iss event has s=0, rev event (if present) has s=1
+        """
+        if result.issuance_event:
+            # Check credential binding (i field == credential SAID per KERI TEL spec)
+            if result.issuance_event.credential_said != expected_credential_said:
+                log.warning(
+                    f"TEL binding mismatch: event i={result.issuance_event.credential_said[:16]}... "
+                    f"!= expected={expected_credential_said[:16]}..."
+                )
+                return False
+            # Check sequence (iss must be sn=0)
+            if result.issuance_event.sequence != 0:
+                log.warning(f"TEL sequence error: iss event has s={result.issuance_event.sequence}, expected 0")
+                return False
+
+        if result.revocation_event:
+            # Check credential binding
+            if result.revocation_event.credential_said != expected_credential_said:
+                log.warning(
+                    f"TEL binding mismatch: rev event i={result.revocation_event.credential_said[:16]}... "
+                    f"!= expected={expected_credential_said[:16]}..."
+                )
+                return False
+            # Check sequence (rev must be sn=1)
+            if result.revocation_event.sequence != 1:
+                log.warning(f"TEL sequence error: rev event has s={result.revocation_event.sequence}, expected 1")
+                return False
+
+        return True
 
     async def _query_via_oobi(
         self,

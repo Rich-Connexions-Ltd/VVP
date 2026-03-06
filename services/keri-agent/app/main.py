@@ -91,12 +91,13 @@ app.add_middleware(BearerTokenMiddleware)
 # API Routers
 # -----------------------------------------------------------------------------
 
-from app.api import health, identity, registry, credential, dossier, vvp, bootstrap, seeds, admin  # noqa: E402
+from app.api import health, identity, registry, credential, dossier, tel, vvp, bootstrap, seeds, admin  # noqa: E402
 
 app.include_router(health.router)
 app.include_router(identity.router)
 app.include_router(registry.router)
 app.include_router(credential.router)
+app.include_router(tel.router)
 app.include_router(dossier.router)
 app.include_router(vvp.router)
 app.include_router(bootstrap.router)

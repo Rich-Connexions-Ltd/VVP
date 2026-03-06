@@ -13,7 +13,7 @@ from starlette.middleware.authentication import AuthenticationMiddleware
 
 from common.vvp.core.logging import configure_logging
 from app.middleware.pbx_cors import PbxCorsMiddleware
-from app.api import admin, auth, credential, dashboard, dossier, health, identity, organization, org_api_key, pbx, registry, schema, session, tn, user, vetter_certification, vvp
+from app.api import admin, auth, credential, dashboard, dossier, health, identity, organization, org_api_key, pbx, registry, schema, session, tel, tn, user, vetter_certification, vvp
 from app.auth.api_key import APIKeyBackend, get_api_key_store
 from app.auth.session import get_session_store
 from app.config import (
@@ -407,6 +407,7 @@ app.include_router(registry.router)
 app.include_router(schema.router)
 app.include_router(schema.schemas_compat_router)  # Sprint 67: /schemas/authorized alias
 app.include_router(credential.router)
+app.include_router(tel.router)  # Sprint 80: Public TEL facade (auth-exempt)
 app.include_router(dossier.router)
 app.include_router(vvp.router)
 app.include_router(tn.router)  # Sprint 42: TN mapping for SIP redirect

@@ -461,6 +461,14 @@ Internal endpoint for SIP Redirect service. Authenticates via API key (not sessi
 
 When found via OSP delegation, the response contains the **owner org's** data (organization_id, identity_name, dossier_said) since the signing identity and dossier belong to the accountable party.
 
+### TEL (Transaction Event Log) — Sprint 80
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/tels/credential/{credential_said}` | Get CESR-encoded TEL events for a credential (public facade) |
+
+Thin proxy to KERI Agent's `/tels/credential/{said}`. Returns raw CESR bytes unchanged. Auth-exempt (TEL data is public per KERI spec). SAID validated (400 on invalid). Returns 503 with `Retry-After: 30` on KERI Agent unavailable. `Cache-Control: no-store`.
+
 ### Schemas (`/schema`, `/schemas`)
 
 | Method | Path | Purpose |
@@ -605,6 +613,14 @@ Base URL: `http://keri-agent.internal:8002` (internal only)
 |--------|------|---------|
 | `GET` | `/healthz` | Readiness probe (KERI managers initialized) |
 | `GET` | `/bootstrap/status` | Mock vLEI bootstrap status |
+
+### TEL (Transaction Event Log) — Sprint 80
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/tels/credential/{credential_said}` | Get CESR-encoded TEL events for a credential (Internal Only) |
+
+Returns concatenated CESR: `iss` event (sn=0) + `rev` event (sn=1, if revoked). Content-Type: `application/cesr`. SAID validated (400 on invalid format, 404 on not found). LMDB reads via `asyncio.to_thread()`. `Cache-Control: no-store`.
 
 ### Admin
 

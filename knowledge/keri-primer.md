@@ -32,6 +32,36 @@ PASSporT.kid (OOBI URL)
 
 ---
 
+## Dossier (Verifiable Dossier)
+
+A dossier is an ACDC that references an arbitrarily rich collection of signed evidence and is issued by the party that assembles it. It is defined by the [ToIP Verifiable Dossiers specification](https://trustoverip.github.io/kswg-dossier-specification/) (v0.6 Draft, author: Daniel Hardman / Provenant).
+
+### Key Distinction from Credentials
+A credential asserts attributes about a specific subject (issuee). A dossier has **no issuee** — only an issuer (the "Evidence Curator"). It functions like a **notarized affidavit** rather than a passport: the issuer attests to the composition and integrity of the evidence collection itself.
+
+### Purpose
+Dossiers solve the problem of **verifiable evidence aggregation** — assembling diverse pieces of evidence into a cryptographically secure, tamper-evident container. Rather than generating proofs just-in-time in response to verifier queries, dossiers are **pre-curated** for efficient, repeated proof presentation.
+
+### How It Works
+- Built on ACDC (format), KERI (key management), and CESR (serialization)
+- The `edges` attribute links to evidence items (other ACDCs or wrapped non-ACDC artifacts)
+- Forms a verifiable **data graph** (DAG) of evidence
+- Lifecycle: **curation** (assembly + signing) → **citation** (referencing in protocols) → **verification** (validation algorithm)
+
+### Dossier vs Other ACDCs
+
+| Feature | Dossier | ACDC Credential | Bespoke ACDC |
+|---------|---------|-----------------|--------------|
+| Primary Role | Evidence Compilation | Assertion of Entitlement | Just-in-Time Proof |
+| Recipient | No specific issuee | Specific issuee | Specific issuee |
+| Analogy | Affidavit / Case File | License / Passport | Custom-Generated Report |
+| Creation Time | In advance of use | In advance of use | In response to a query |
+
+### In VVP
+In VVP, a dossier is a DAG of ACDCs that proves a caller's identity, brand, and telephone number authorization. The dossier issuer (the VVP Issuer service) curates credentials from the vLEI trust chain and assembles them into a single verifiable container cited in the VVP-Identity header.
+
+---
+
 ## ACDC (Authentic Chained Data Containers)
 
 ACDCs are self-describing, cryptographically bound credentials. A **dossier** is a DAG of ACDCs that proves a caller's rights.

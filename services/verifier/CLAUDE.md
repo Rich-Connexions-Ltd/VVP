@@ -128,6 +128,13 @@ Used when verification cannot produce a definitive VALID/INVALID result:
 ```
 62 test files covering all components. See `knowledge/test-patterns.md` for details.
 
+## Configuration (Sprint 80)
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `VVP_TEL_ISSUER_URL` | *(empty)* | Issuer TEL facade URL for revocation checks. HTTPS required unless `VVP_ALLOW_HTTP=true`. |
+| `VVP_ALLOW_HTTP` | `false` | Allow HTTP for TEL Issuer URL (dev only) |
+
 ## Known Workarounds
 See `Documentation/DOSSIER_WORKAROUNDS.md` for:
 - Provenant demo schema SAIDs added to registry

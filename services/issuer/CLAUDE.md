@@ -50,6 +50,7 @@ The Issuer manages the full lifecycle of VVP credentials: organization managemen
 | `tn.py` | `/tn` | mappings CRUD + lookup + test-lookup (7 endpoints) |
 | `vvp.py` | `/vvp` | `POST /vvp/create` (1 endpoint) |
 | `vetter_certification.py` | `/` | CRUD + `/organizations/{org_id}/constraints` + `/users/me/constraints` (6 endpoints) |
+| `tel.py` | `/tels` | `GET /tels/credential/{said}` — Public TEL facade (Sprint 80, auth-exempt) |
 | `pbx.py` | `/pbx` | config CRUD, deploy to PBX VM, dialplan preview (4 endpoints) |
 | `admin.py` | `/admin` | auth reload, status, users, config, settings, benchmarks (20 endpoints) |
 
@@ -84,7 +85,7 @@ System admins bypass all org role checks. Combined access functions: `check_cred
 ### Auth-Exempt Paths
 
 Configured in `app/config.py:get_auth_exempt_paths()`:
-- Always exempt: `/livez`, `/healthz`, `/readyz`, `/version`, `/auth/*`, `/auth/oauth/*`
+- Always exempt: `/livez`, `/healthz`, `/readyz`, `/version`, `/tels/`, `/auth/*`, `/auth/oauth/*`
 - When `VVP_UI_AUTH_ENABLED=false` (default): all `/ui/*` pages, `/login`, `/profile`, legacy redirects, `/ui/walkthrough`
 
 ## Multi-Tenancy (Sprint 41+, Sprint 67)

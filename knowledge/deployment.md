@@ -333,6 +333,12 @@ az vm run-command invoke --resource-group VVP --name vvp-pbx \
 | `VVP_ENFORCE_VETTER_CONSTRAINTS` | false | Enforce ECC/jurisdiction constraints |
 | `VVP_OPERATOR_VIOLATION_SEVERITY` | INDETERMINATE | Severity for vetter violations |
 
+#### TEL Issuer Source (Sprint 80)
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `VVP_TEL_ISSUER_URL` | *(empty)* | Issuer TEL facade URL (e.g., `https://vvp-issuer.rcnx.io`). When set, verifier queries this URL for CESR TEL events before falling back to witnesses. HTTPS required unless `VVP_ALLOW_HTTP=true`. Validated at startup — invalid URL disables TEL source with warning. |
+| `VVP_ALLOW_HTTP` | `false` | Allow HTTP (non-HTTPS) for TEL Issuer URL. Dev/test only. |
+
 #### Revocation
 | Variable | Default | Purpose |
 |----------|---------|---------|

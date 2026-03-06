@@ -1,5 +1,44 @@
 # VVP Verifier Change Log
 
+## Sprint 80: TEL Publication to Witnesses
+
+**Date:** 2026-03-06
+**Status:** In Progress (code review pending)
+
+### Summary
+
+Enables the verifier to resolve credential revocation status by querying TEL data from the Issuer service. keripy witnesses are KEL-only (no TEL endpoints), so all witness TEL queries returned 404, causing credentials to show INDETERMINATE. The Issuer now serves as a public TEL facade proxying to the KERI Agent's LMDB-stored TEL data, with SAID verification and credential binding checks.
+
+### Key Changes
+
+- **Shared SAID validation**: `common/common/vvp/said_validation.py` — `is_valid_said()` regex matcher used by all three services.
+- **KERI Agent TEL endpoint**: `GET /tels/credential/{said}` returns concatenated CESR (iss + optional rev) via `asyncio.to_thread()` LMDB reads.
+- **Issuer TEL facade**: `GET /tels/credential/{said}` — raw byte proxy to KERI Agent. Auth-exempt (TEL data is public per KERI spec). 503 with `Retry-After: 30` on agent unavailable.
+- **Verifier Issuer TEL source**: `_query_issuer_tel()` queries Issuer, parses CESR events, verifies integrity (credential binding `i` field + sequence consistency iss=0/rev=1). Integrated into `check_revocation()` between OOBI and witness steps.
+- **Config**: `VVP_TEL_ISSUER_URL` with startup validation (HTTPS required unless `VVP_ALLOW_HTTP=true`). Deploy.yml updated.
+- **Tests**: 29 new tests (7 keri-agent + 7 issuer + 15 verifier). 1950 total pass.
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `common/common/vvp/said_validation.py` | New: Shared SAID validation utility |
+| `services/keri-agent/app/api/tel.py` | New: Internal TEL CESR endpoint |
+| `services/keri-agent/app/main.py` | Register TEL router |
+| `services/keri-agent/tests/test_tel_api.py` | New: 7 tests |
+| `services/issuer/app/api/tel.py` | New: Public TEL facade |
+| `services/issuer/app/main.py` | Register TEL router |
+| `services/issuer/app/config.py` | Add `/tels/` to AUTH_EXEMPT_PATHS |
+| `services/issuer/app/keri_client.py` | Add `get_credential_tel_cesr()` |
+| `services/issuer/tests/test_tel_proxy.py` | New: 7 tests |
+| `services/verifier/app/core/config.py` | TEL_ISSUER_URL config + validation |
+| `services/verifier/app/vvp/keri/tel_client.py` | Issuer TEL source + integrity checks |
+| `services/verifier/tests/test_tel_issuer_source.py` | New: 15 tests |
+| `.github/workflows/deploy.yml` | VVP_TEL_ISSUER_URL env var |
+| `knowledge/api-reference.md` | Document TEL endpoints |
+| `knowledge/deployment.md` | TEL config env vars |
+| `knowledge/verification-pipeline.md` | Issuer TEL source in Phase 9 |
+
 ## Sprint 79: Provenant Brand Schema & Logo Integrity
 
 **Date:** 2026-03-06

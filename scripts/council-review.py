@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 """Council of Experts review system for VVP pair programming workflow.
 
-Submits plans/code to up to 8 focused expert reviewers in parallel across
-3 platforms (Anthropic, Google, OpenAI/Codex), then consolidates their
-findings into a single unified REVIEW file. Council composition, models,
-and phase assignments are configured in council-config.json.
+Submits plans/code to up to 8 focused expert reviewers using two platforms:
+  - Codex CLI (account auth, no API key needed) — primary for most roles
+  - Google Gemini (single API key) — primary for performance/cost/UX roles
+
+Council composition, models, and phase assignments are configured in
+council-config.json.
 
 Usage:
     ./scripts/council-review.py plan <sprint> "<title>"
     ./scripts/council-review.py code <sprint> "<title>"
 
 Requires environment variables:
-    ANTHROPIC_API_KEY  — Claude models (Security, Test Quality, Domain Expert, Consolidator)
-    GOOGLE_API_KEY     — Gemini models (Performance, UX, Cost Modeller)
-    OPENAI_API_KEY     — OpenAI/Codex models (Documentation, Simplicity)
+    GOOGLE_API_KEY  — Gemini models (fallback for Codex roles, primary for Gemini roles)
+    (Codex platform members authenticate via stored credentials — run 'codex login' once)
 """
 
 import json
@@ -22,6 +23,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -62,6 +64,47 @@ def redact_secrets(text: str) -> str:
     return text
 
 # ---------------------------------------------------------------------------
+# Environment — source API keys from ~/.zprofile if not already in env
+# ---------------------------------------------------------------------------
+
+
+def ensure_api_keys_from_profile():
+    """Source API keys from ~/.zprofile if they're missing from the environment.
+
+    Claude Code's Bash tool doesn't run a login shell, so keys exported in
+    ~/.zprofile are not automatically available. This function parses simple
+    export lines to fill in missing keys.
+    """
+    zprofile = Path.home() / ".zprofile"
+    if not zprofile.exists():
+        return
+
+    needed = {"GOOGLE_API_KEY"}
+    missing = {k for k in needed if not os.environ.get(k)}
+    if not missing:
+        return
+
+    try:
+        for line in zprofile.read_text().splitlines():
+            line = line.strip()
+            if not line.startswith("export "):
+                continue
+            # Parse: export KEY="value" or export KEY=value
+            rest = line[len("export "):]
+            if "=" not in rest:
+                continue
+            key, _, value = rest.partition("=")
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key in missing and value:
+                os.environ[key] = value
+                missing.discard(key)
+                print(f"  [env] Sourced {key} from ~/.zprofile", file=sys.stderr)
+    except Exception as e:
+        print(f"  [env] Warning: could not parse ~/.zprofile: {e}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
@@ -88,6 +131,7 @@ def validate_api_keys(config: dict, active_members: list[dict]) -> dict[str, str
 
     Primary keys are required (script exits if missing). Fallback keys are
     optional — collected if available so they can be used when a primary fails.
+    Codex platform members have no api_key_env (they use account auth).
     """
     required = set()
     optional = set()
@@ -98,9 +142,14 @@ def validate_api_keys(config: dict, active_members: list[dict]) -> dict[str, str
         fallback = member.get("fallback")
         if fallback and fallback.get("api_key_env"):
             optional.add(fallback["api_key_env"])
-    required.add(config["council"]["consolidator"]["api_key_env"])
-    consolidator_fb = config["council"]["consolidator"].get("fallback")
-    if consolidator_fb:
+
+    # Consolidator
+    consolidator = config["council"]["consolidator"]
+    cons_env = consolidator.get("api_key_env")
+    if cons_env:
+        required.add(cons_env)
+    consolidator_fb = consolidator.get("fallback")
+    if consolidator_fb and consolidator_fb.get("api_key_env"):
         optional.add(consolidator_fb["api_key_env"])
 
     keys = {}
@@ -127,75 +176,8 @@ def validate_api_keys(config: dict, active_members: list[dict]) -> dict[str, str
 
 
 # ---------------------------------------------------------------------------
-# API Clients (raw HTTP via httpx for Anthropic/OpenAI, SDK for Google)
+# API Clients
 # ---------------------------------------------------------------------------
-
-
-def call_anthropic(
-    model: str, system: str, user_content: str,
-    max_tokens: int, temperature: float, api_key: str, timeout: float,
-) -> str:
-    """Call Anthropic Messages API via httpx."""
-    import httpx
-
-    resp = httpx.post(
-        "https://api.anthropic.com/v1/messages",
-        headers={
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        },
-        json={
-            "model": model,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "system": system,
-            "messages": [{"role": "user", "content": user_content}],
-        },
-        timeout=timeout,
-    )
-    try:
-        resp.raise_for_status()
-    except Exception as e:
-        # Re-raise without the original request object to avoid leaking the API key
-        # that was present in the x-api-key request header.
-        raise RuntimeError(f"Anthropic API error: {e.response.status_code} {e.response.reason_phrase}") from None
-    data = resp.json()
-    return data["content"][0]["text"]
-
-
-def call_openai(
-    model: str, system: str, user_content: str,
-    max_tokens: int, temperature: float, api_key: str, timeout: float,
-) -> str:
-    """Call OpenAI Chat Completions API via httpx."""
-    import httpx
-
-    resp = httpx.post(
-        "https://api.openai.com/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": model,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user_content},
-            ],
-        },
-        timeout=timeout,
-    )
-    try:
-        resp.raise_for_status()
-    except Exception as e:
-        # Re-raise without the original request object to avoid leaking the Bearer token
-        # that was present in the Authorization request header.
-        raise RuntimeError(f"OpenAI API error: {e.response.status_code} {e.response.reason_phrase}") from None
-    data = resp.json()
-    return data["choices"][0]["message"]["content"]
 
 
 def call_google(
@@ -219,27 +201,52 @@ def call_google(
 
 def call_codex(
     system: str, user_content: str, timeout: float,
+    review_mode: bool = False,
 ) -> str:
-    """Call Codex CLI via subprocess (codex exec --full-auto).
+    """Call Codex CLI using account auth (stored in ~/.codex/auth.json).
 
-    Codex authenticates via its own stored credentials (run 'codex' once to
-    authenticate). No API key required in the environment.
+    When review_mode=True, uses `codex review` with a custom prompt (better
+    for code reviews). Otherwise uses `codex exec --full-auto` for plan reviews.
+
+    Prompts are written to a temp file rather than piped via stdin to avoid
+    shell escaping issues and improve reliability.
     """
     combined_prompt = f"{system}\n\n---\n\n{user_content}"
+
+    # Write prompt to temp file — avoids stdin pipe buffering issues
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
+        f.write(combined_prompt)
+        prompt_file = f.name
+
     try:
-        # Pass prompt via stdin, not as a CLI argument. Command-line arguments
-        # are visible to other processes via `ps aux`, which would expose the
-        # full review context (potentially including API keys in the materials).
-        result = subprocess.run(
-            ["codex", "exec", "--full-auto"],
-            input=combined_prompt,
-            capture_output=True, text=True, timeout=timeout,
-        )
+        if review_mode:
+            # codex review reads from stdin when prompt is "-"
+            cmd = ["codex", "review", "--uncommitted", "-"]
+            result = subprocess.run(
+                cmd,
+                input=combined_prompt,
+                capture_output=True, text=True, timeout=timeout,
+            )
+        else:
+            # codex exec reads prompt from file via stdin
+            cmd = ["codex", "exec", "--full-auto"]
+            result = subprocess.run(
+                cmd,
+                input=combined_prompt,
+                capture_output=True, text=True, timeout=timeout,
+            )
     except FileNotFoundError:
         raise RuntimeError("Codex CLI not found. Install: npm install -g @openai/codex")
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"Codex timed out after {timeout:.0f}s")
+    finally:
+        try:
+            os.unlink(prompt_file)
+        except OSError:
+            pass
+
     if result.returncode != 0:
         # Log to stderr only (local-only), not included in review artifacts.
-        # stderr/stdout may contain prompt material — never embed in review files.
         stderr_first_line = (result.stderr or "").split("\n")[0][:120]
         print(f"  [debug] Codex stderr: {stderr_first_line}", file=sys.stderr)
         raise RuntimeError(f"Codex exited {result.returncode} (see stderr for details)")
@@ -252,19 +259,16 @@ def call_codex(
 def call_model(
     platform: str, model: str, system: str, user_content: str,
     max_tokens: int, temperature: float, api_key: str, timeout: float,
+    review_mode: bool = False,
 ) -> str:
     """Dispatch to the appropriate platform API."""
-    if platform == "anthropic":
-        return call_anthropic(model, system, user_content, max_tokens, temperature, api_key, timeout)
-    elif platform == "openai":
-        return call_openai(model, system, user_content, max_tokens, temperature, api_key, timeout)
-    elif platform == "google":
+    if platform == "google":
         # Google SDK doesn't separate system/user — concatenate
         combined = f"{system}\n\n---\n\n{user_content}"
         return call_google(model, combined, max_tokens, temperature, api_key, timeout)
     elif platform == "codex":
         # Codex CLI — uses its own auth, ignores model/api_key params
-        return call_codex(system, user_content, timeout)
+        return call_codex(system, user_content, timeout, review_mode=review_mode)
     else:
         raise ValueError(f"Unknown platform: {platform}")
 
@@ -668,12 +672,17 @@ For each required change, provide ALL of the following:
 # Council Execution
 # ---------------------------------------------------------------------------
 
+# Track Codex call ordering for stagger delays
+_codex_call_index = 0
+_codex_call_lock = None  # Initialized in main when threading
+
 
 def _call_member(
     platform: str, model: str, api_key_env: str,
     system_prompt: str, user_prompt: str,
     max_tokens: int, temperature: float,
     api_keys: dict, timeout: float,
+    review_mode: bool = False,
 ) -> str:
     """Make a single API call for a council member."""
     # codex platform: no api_key needed; other platforms: look up from api_keys dict
@@ -687,6 +696,7 @@ def _call_member(
         temperature=temperature,
         api_key=api_key,
         timeout=timeout,
+        review_mode=review_mode,
     )
 
 
@@ -695,8 +705,12 @@ def run_council_member(
     sprint: str, title: str, round_num: int, review_type: str,
     timeout: float,
     knowledge_context: str | None = None,
+    codex_stagger: float = 0,
+    retry_delay: float = 5,
 ) -> tuple[str, str, float]:
-    """Run a single council member with automatic fallback. Returns (role, review_text, elapsed_seconds)."""
+    """Run a single council member with retry + fallback. Returns (role, review_text, elapsed_seconds)."""
+    global _codex_call_index, _codex_call_lock
+
     role = member["role"]
     start = time.monotonic()
 
@@ -705,60 +719,82 @@ def run_council_member(
         knowledge_context=knowledge_context,
     )
 
-    # Try primary model
-    try:
-        review = _call_member(
-            member["platform"], member["model"], member["api_key_env"],
-            system_prompt, user_prompt,
-            member["max_tokens"], member["temperature"],
-            api_keys, timeout,
-        )
-        elapsed = time.monotonic() - start
-        return role, review, elapsed
+    review_mode = (review_type == "code")
 
-    except Exception as primary_err:
-        # Log detailed error to stderr (local-only). Never embed raw error text
-        # in review artifacts — it may contain prompt material or API keys.
-        primary_type = type(primary_err).__name__
-        print(f"  [debug] {member['label']} primary error: {primary_type}: {primary_err}", file=sys.stderr)
-        fallback = member.get("fallback")
+    # Stagger Codex calls to avoid local resource contention
+    if member["platform"] == "codex" and codex_stagger > 0 and _codex_call_lock:
+        import threading
+        with _codex_call_lock:
+            idx = _codex_call_index
+            _codex_call_index += 1
+        delay = idx * codex_stagger
+        if delay > 0:
+            print(f"    {member['label']:25s} stagger {delay:.0f}s...", file=sys.stderr)
+            time.sleep(delay)
 
-        # Try fallback model if configured and its API key is available
-        fb_key_env = fallback.get("api_key_env") if fallback else None
-        fb_available = fallback and (fallback.get("platform") == "codex" or fb_key_env in api_keys)
-        if fb_available:
-            fb_platform = fallback["platform"]
-            fb_model = fallback["model"]
-            print(
-                f"  WARNING: {member['label']} primary failed ({member['platform']}/{member['model']}), "
-                f"trying fallback ({fb_platform}/{fb_model})...",
-                file=sys.stderr,
+    # Try primary model (with one retry)
+    primary_err = None
+    for attempt in range(2):
+        try:
+            review = _call_member(
+                member["platform"], member["model"], member["api_key_env"],
+                system_prompt, user_prompt,
+                member["max_tokens"], member["temperature"],
+                api_keys, timeout,
+                review_mode=review_mode,
             )
-            try:
-                review = _call_member(
-                    fb_platform, fb_model, fallback.get("api_key_env"),
-                    system_prompt, user_prompt,
-                    member["max_tokens"], member["temperature"],
-                    api_keys, timeout,
-                )
-                elapsed = time.monotonic() - start
-                return role, review, elapsed
-            except Exception as fb_err:
-                fb_type = type(fb_err).__name__
-                print(f"  [debug] {member['label']} fallback error: {fb_type}: {fb_err}", file=sys.stderr)
-                opaque_msg = f"{primary_type} (primary) / {fb_type} (fallback) — check console output for details"
-        else:
-            opaque_msg = f"{primary_type} — check console output for details"
+            elapsed = time.monotonic() - start
+            return role, review, elapsed
 
-        elapsed = time.monotonic() - start
-        print(f"  WARNING: {member['label']} failed ({elapsed:.1f}s) — see debug output above", file=sys.stderr)
-        placeholder = (
-            f"### {role} Review: Sprint {sprint} (R{round_num})\n\n"
-            f"**Status:** UNAVAILABLE\n"
-            f"**Error:** [Error: API response hidden for security. Check logs for details.] ({opaque_msg})\n\n"
-            f"This expert was unable to complete their review."
+        except Exception as err:
+            primary_err = err
+            primary_type = type(err).__name__
+            if attempt == 0:
+                print(f"  [debug] {member['label']} attempt 1 failed ({primary_type}), retrying in {retry_delay}s...", file=sys.stderr)
+                time.sleep(retry_delay)
+            else:
+                print(f"  [debug] {member['label']} attempt 2 failed ({primary_type}): {err}", file=sys.stderr)
+
+    # Try fallback model if configured and its API key is available
+    fallback = member.get("fallback")
+    fb_key_env = fallback.get("api_key_env") if fallback else None
+    fb_available = fallback and (fallback.get("platform") == "codex" or fb_key_env in api_keys)
+    primary_type = type(primary_err).__name__
+
+    if fb_available:
+        fb_platform = fallback["platform"]
+        fb_model = fallback["model"]
+        print(
+            f"  WARNING: {member['label']} primary failed ({member['platform']}/{member['model']}), "
+            f"trying fallback ({fb_platform}/{fb_model})...",
+            file=sys.stderr,
         )
-        return role, placeholder, elapsed
+        try:
+            review = _call_member(
+                fb_platform, fb_model, fallback.get("api_key_env"),
+                system_prompt, user_prompt,
+                member["max_tokens"], member["temperature"],
+                api_keys, timeout,
+                review_mode=review_mode,
+            )
+            elapsed = time.monotonic() - start
+            return role, review, elapsed
+        except Exception as fb_err:
+            fb_type = type(fb_err).__name__
+            print(f"  [debug] {member['label']} fallback error: {fb_type}: {fb_err}", file=sys.stderr)
+            opaque_msg = f"{primary_type} (primary) / {fb_type} (fallback) — check console output for details"
+    else:
+        opaque_msg = f"{primary_type} — check console output for details"
+
+    elapsed = time.monotonic() - start
+    print(f"  WARNING: {member['label']} failed ({elapsed:.1f}s) — see debug output above", file=sys.stderr)
+    placeholder = (
+        f"### {role} Review: Sprint {sprint} (R{round_num})\n\n"
+        f"**Status:** UNAVAILABLE\n"
+        f"**Error:** [Error: API response hidden for security. Check logs for details.] ({opaque_msg})\n\n"
+        f"This expert was unable to complete their review."
+    )
+    return role, placeholder, elapsed
 
 
 def run_consolidator(
@@ -772,6 +808,7 @@ def run_consolidator(
     """Run the consolidator with automatic fallback to produce the final unified review."""
     consolidator = config["council"]["consolidator"]
     timeout = config["council"].get("consolidator_timeout_seconds", 90)
+    retry_delay = config["council"].get("retry_delay_seconds", 5)
 
     system_prompt, user_prompt = build_consolidator_prompt(
         council_reviews, sprint, title, round_num, review_type, member_labels,
@@ -779,49 +816,64 @@ def run_consolidator(
         escalation_note=escalation_note,
     )
 
-    # Try primary
-    try:
-        return call_model(
-            platform=consolidator["platform"],
-            model=consolidator["model"],
-            system=system_prompt,
-            user_content=user_prompt,
-            max_tokens=consolidator["max_tokens"],
-            temperature=consolidator["temperature"],
-            api_key=api_keys[consolidator["api_key_env"]],
-            timeout=timeout,
-        )
-    except Exception as primary_err:
-        fallback = consolidator.get("fallback")
-        fb_key_env = fallback.get("api_key_env") if fallback else None
-        fb_available = fallback and (fallback.get("platform") == "codex" or fb_key_env in api_keys)
-        if fb_available:
-            fb_platform = fallback["platform"]
-            fb_model = fallback["model"]
-            print(
-                f"  WARNING: Consolidator primary failed ({consolidator['platform']}/{consolidator['model']}), "
-                f"trying fallback ({fb_platform}/{fb_model})...",
-                file=sys.stderr,
-            )
-            try:
-                return call_model(
-                    platform=fb_platform,
-                    model=fb_model,
-                    system=system_prompt,
-                    user_content=user_prompt,
-                    max_tokens=consolidator["max_tokens"],
-                    temperature=consolidator["temperature"],
-                    api_key=api_keys[fallback["api_key_env"]],
-                    timeout=timeout,
-                )
-            except Exception as fb_err:
-                # Log to stderr only — may contain prompt material
-                print(f"  [debug] Consolidator fallback error: {type(fb_err).__name__}: {fb_err}", file=sys.stderr)
-                print(f"  WARNING: Consolidator fallback also failed ({type(fb_err).__name__}) — see debug output", file=sys.stderr)
+    # Try primary (with one retry)
+    primary_err = None
+    platform = consolidator["platform"]
+    api_key_env = consolidator.get("api_key_env")
+    api_key = None if platform == "codex" else api_keys.get(api_key_env, "")
 
-        print(f"  [debug] Consolidator primary error: {type(primary_err).__name__}: {primary_err}", file=sys.stderr)
-        print(f"  WARNING: Consolidator failed ({type(primary_err).__name__}) — using fallback consolidation", file=sys.stderr)
-        return fallback_consolidation(council_reviews, sprint, title, round_num, review_type)
+    for attempt in range(2):
+        try:
+            return call_model(
+                platform=platform,
+                model=consolidator["model"],
+                system=system_prompt,
+                user_content=user_prompt,
+                max_tokens=consolidator["max_tokens"],
+                temperature=consolidator["temperature"],
+                api_key=api_key,
+                timeout=timeout,
+            )
+        except Exception as err:
+            primary_err = err
+            if attempt == 0:
+                print(f"  [debug] Consolidator attempt 1 failed ({type(err).__name__}), retrying...", file=sys.stderr)
+                time.sleep(retry_delay)
+            else:
+                print(f"  [debug] Consolidator attempt 2 failed: {err}", file=sys.stderr)
+
+    # Try fallback
+    fallback = consolidator.get("fallback")
+    fb_key_env = fallback.get("api_key_env") if fallback else None
+    fb_available = fallback and (fallback.get("platform") == "codex" or fb_key_env in api_keys)
+    if fb_available:
+        fb_platform = fallback["platform"]
+        fb_model = fallback["model"]
+        fb_api_key = None if fb_platform == "codex" else api_keys.get(fb_key_env, "")
+        print(
+            f"  WARNING: Consolidator primary failed ({platform}/{consolidator['model']}), "
+            f"trying fallback ({fb_platform}/{fb_model})...",
+            file=sys.stderr,
+        )
+        try:
+            return call_model(
+                platform=fb_platform,
+                model=fb_model,
+                system=system_prompt,
+                user_content=user_prompt,
+                max_tokens=consolidator["max_tokens"],
+                temperature=consolidator["temperature"],
+                api_key=fb_api_key,
+                timeout=timeout,
+            )
+        except Exception as fb_err:
+            # Log to stderr only — may contain prompt material
+            print(f"  [debug] Consolidator fallback error: {type(fb_err).__name__}: {fb_err}", file=sys.stderr)
+            print(f"  WARNING: Consolidator fallback also failed ({type(fb_err).__name__}) — see debug output", file=sys.stderr)
+
+    print(f"  [debug] Consolidator primary error: {type(primary_err).__name__}: {primary_err}", file=sys.stderr)
+    print(f"  WARNING: Consolidator failed ({type(primary_err).__name__}) — using fallback consolidation", file=sys.stderr)
+    return fallback_consolidation(council_reviews, sprint, title, round_num, review_type)
 
 
 def fallback_consolidation(
@@ -1107,6 +1159,8 @@ def print_header(
 
 
 def main():
+    global _codex_call_index, _codex_call_lock
+
     # Strip flags before parsing positional args
     allow_external = "--allow-external-code-review" in sys.argv
     positional = [a for a in sys.argv[1:] if not a.startswith("--")]
@@ -1125,11 +1179,9 @@ def main():
         print('  ./scripts/council-review.py --allow-external-code-review plan 77 "Credential Revocation"')
         print('  ./scripts/council-review.py --allow-external-code-review code 77 "Credential Revocation"')
         print()
-        print("Required environment variables:")
-        print("  ANTHROPIC_API_KEY  — Claude models")
-        print("  GOOGLE_API_KEY     — Gemini models")
-        print("  OPENAI_API_KEY     — OpenAI models (if used by any member)")
-        print("  (Codex platform members authenticate via 'codex' CLI automatically)")
+        print("Platforms:")
+        print("  Codex CLI  — Account auth via ~/.codex/auth.json (run 'codex login' once)")
+        print("  Google     — Requires GOOGLE_API_KEY environment variable")
         sys.exit(1)
 
     review_type = positional[0]
@@ -1139,6 +1191,9 @@ def main():
     if review_type not in ("plan", "code"):
         print(f"ERROR: review_type must be 'plan' or 'code', got '{review_type}'", file=sys.stderr)
         sys.exit(1)
+
+    # Source API keys from ~/.zprofile if not in environment
+    ensure_api_keys_from_profile()
 
     repo_root = Path(subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
@@ -1198,8 +1253,6 @@ def main():
     print()
 
     # Prepare council output directory — validate path stays inside repo root.
-    # A crafted config with output_dir="../" or output_dir="/" could otherwise
-    # trigger arbitrary filesystem deletion via shutil.rmtree.
     output_dir_value = config["council"].get("output_dir", "council")
     council_dir = (repo_root / output_dir_value).resolve()
     repo_root_resolved = repo_root.resolve()
@@ -1236,6 +1289,15 @@ def main():
                 knowledge_context = "\n\n".join(sections)
                 print(f"  Domain knowledge: {len(knowledge_context):,} chars ({len(sections)} files)")
 
+    # Codex stagger config
+    codex_stagger = config["council"].get("codex_stagger_seconds", 2)
+    retry_delay = config["council"].get("retry_delay_seconds", 5)
+
+    # Initialize Codex stagger lock
+    import threading
+    _codex_call_index = 0
+    _codex_call_lock = threading.Lock()
+
     # Run council in parallel
     parallel_timeout = config["council"].get("parallel_timeout_seconds", 60)
 
@@ -1250,6 +1312,8 @@ def main():
                 sprint, title, round_num, review_type,
                 parallel_timeout,
                 knowledge_context=knowledge_context,
+                codex_stagger=codex_stagger,
+                retry_delay=retry_delay,
             ): member
             for member in active_members
         }
@@ -1257,7 +1321,7 @@ def main():
         for future in as_completed(futures):
             member = futures[future]
             try:
-                role, review_text, elapsed = future.result(timeout=parallel_timeout + 10)
+                role, review_text, elapsed = future.result(timeout=parallel_timeout + 30)
                 council_reviews[role] = review_text
 
                 # Write individual review file
@@ -1310,7 +1374,7 @@ def main():
         )
 
     # Run consolidator
-    print(f"  Running consolidator ({config['council']['consolidator']['model']})...")
+    print(f"  Running consolidator ({config['council']['consolidator']['platform']}/{config['council']['consolidator']['model']})...")
     start = time.monotonic()
     consolidated = run_consolidator(
         config, council_reviews, member_labels,
@@ -1355,7 +1419,7 @@ def main():
             print(f'  Next: ./scripts/archive-plan.sh {sprint} "{title}"')
     else:
         print(f"  Next: Address findings in FINDINGS_Sprint{sprint}.md, then re-run:")
-        print(f'        ./scripts/council-review.py {review_type} {sprint} "{title}"')
+        print(f'        ./scripts/council-review.py --allow-external-code-review {review_type} {sprint} "{title}"')
 
 
 if __name__ == "__main__":

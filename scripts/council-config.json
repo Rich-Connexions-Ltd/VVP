@@ -1,25 +1,23 @@
 {
-  "version": 4,
+  "version": 5,
   "council": {
-    "parallel_timeout_seconds": 120,
-    "consolidator_timeout_seconds": 120,
+    "parallel_timeout_seconds": 180,
+    "consolidator_timeout_seconds": 180,
     "max_plan_rounds": 5,
     "max_code_rounds": 6,
     "convergence_warning_at": 3,
     "output_dir": "council",
+    "codex_stagger_seconds": 2,
+    "retry_delay_seconds": 5,
     "members": [
       {
         "role": "security",
         "label": "Security Expert",
         "phases": ["plan", "code"],
-        "platform": "anthropic",
-        "model": "claude-sonnet-4-6",
-        "api_key_env": "ANTHROPIC_API_KEY",
-        "fallback": {
-          "platform": "codex",
-          "model": "codex",
-          "api_key_env": null
-        },
+        "platform": "codex",
+        "model": "codex",
+        "api_key_env": null,
+        "fallback": null,
         "max_tokens": 2048,
         "temperature": 0.2,
         "lens": "You are a security-focused code reviewer. Focus EXCLUSIVELY on: authentication and authorization flaws, cryptographic correctness (key management, signature verification, SAID computation), injection vulnerabilities (SQL, command, header), trust boundary violations, secret leakage (API keys, tokens in logs or responses), insecure defaults, and OWASP Top 10 applicability. Additionally, for any change involving web frontends or cross-origin requests, you MUST explicitly evaluate: (1) CORS configuration — origin validation, path scoping (prefix vs allowlist), Vary: Origin header, Access-Control-Allow-Credentials setting; (2) Content Security Policy — script-src, style-src (no unsafe-inline), connect-src restrictions, img-src; (3) credential/secret storage — localStorage (insecure) vs sessionStorage (tab-scoped) vs in-memory vs httpOnly cookies, and justify the choice; (4) transport security — HTTPS enforcement, HSTS headers, no plaintext fallback for credential-bearing requests; (5) cache poisoning — Vary headers on credentialed/origin-dependent responses, Cache-Control for sensitive endpoints. Be PROACTIVE: identify security controls that are ABSENT from the plan but should be present given the nature of the change. Do not wait for controls to be proposed before flagging their absence. Ignore code style, performance, documentation quality, and UX concerns — those are handled by other reviewers."
@@ -48,9 +46,9 @@
         "model": "gemini-2.5-pro",
         "api_key_env": "GOOGLE_API_KEY",
         "fallback": {
-          "platform": "anthropic",
-          "model": "claude-sonnet-4-6",
-          "api_key_env": "ANTHROPIC_API_KEY"
+          "platform": "codex",
+          "model": "codex",
+          "api_key_env": null
         },
         "max_tokens": 2048,
         "temperature": 0.2,
@@ -108,13 +106,13 @@
         "role": "testing",
         "label": "Test Quality Expert",
         "phases": ["code"],
-        "platform": "anthropic",
-        "model": "claude-sonnet-4-6",
-        "api_key_env": "ANTHROPIC_API_KEY",
+        "platform": "codex",
+        "model": "codex",
+        "api_key_env": null,
         "fallback": {
-          "platform": "codex",
-          "model": "codex",
-          "api_key_env": null
+          "platform": "google",
+          "model": "gemini-2.5-flash",
+          "api_key_env": "GOOGLE_API_KEY"
         },
         "max_tokens": 2048,
         "temperature": 0.2,
@@ -124,9 +122,9 @@
         "role": "domain",
         "label": "Domain Expert (KERI/ACDC/vLEI)",
         "phases": ["plan", "code"],
-        "platform": "anthropic",
-        "model": "claude-sonnet-4-6",
-        "api_key_env": "ANTHROPIC_API_KEY",
+        "platform": "codex",
+        "model": "codex",
+        "api_key_env": null,
         "fallback": {
           "platform": "google",
           "model": "gemini-2.5-pro",
@@ -134,13 +132,13 @@
         },
         "max_tokens": 3072,
         "temperature": 0.2,
-        "lens": "You are a domain expert in KERI (Key Event Receipt Infrastructure), ACDC (Authentic Chained Data Containers), vLEI (verifiable Legal Entity Identifiers), and VVP (Verified Voice Protocol). Focus EXCLUSIVELY on: correctness of credential chain structures (edge operators like I2I and NI2I, issuer-holder-verifier relationships), SAID computation algorithms and their application, delegation rules and trust hierarchy correctness, schema governance (correct SAIDs, field definitions, required vs optional attributes), TEL (Transaction Event Log) usage for credential status, CESR encoding correctness, key management and rotation event handling, OOBI resolution and witness receipt distribution, PASSporT JWT structure compliance, and dossier assembly correctness. Reference the domain context pack provided. Ignore general code quality, security (unless cryptographically specific to KERI), performance, documentation formatting, and UX — those are handled by other reviewers."
+        "lens": "You are a domain expert in KERI (Key Event Receipt Infrastructure), ACDC (Authentic Chained Data Containers), vLEI (verifiable Legal Entity Identifiers), and VVP (Verified Voice Protocol). Focus EXCLUSIVELY on: correctness of credential chain structures (edge operators like I2I and NI2I, issuer-holder-verifier relationships), SAID computation algorithms and their application, delegation rules and trust hierarchy correctness, schema governance (correct SAIDs, field definitions, required vs optional attributes), TEL (Transaction Event Log) usage for credential status, CESR encoding correctness, key management and rotation event handling, OOBI resolution and witness receipt distribution, PASSporT JWT structure compliance, and dossier assembly correctness. A dossier is an ACDC issued by the party assembling evidence (the 'Evidence Curator'), with NO issuee — it functions as a cryptographically verifiable affidavit attesting to the integrity of a pre-curated evidence collection (not a credential about a subject). Dossiers form verifiable DAGs of evidence via their edges attribute, with a lifecycle of curation (assembly+signing), citation (referencing in protocols like VVP-Identity headers), and verification. See ToIP Verifiable Dossiers spec v0.6 (trustoverip.github.io/kswg-dossier-specification). Reference the domain context pack provided. Ignore general code quality, security (unless cryptographically specific to KERI), performance, documentation formatting, and UX — those are handled by other reviewers."
       }
     ],
     "consolidator": {
-      "platform": "anthropic",
-      "model": "claude-sonnet-4-6",
-      "api_key_env": "ANTHROPIC_API_KEY",
+      "platform": "codex",
+      "model": "codex",
+      "api_key_env": null,
       "fallback": {
         "platform": "google",
         "model": "gemini-2.5-pro",

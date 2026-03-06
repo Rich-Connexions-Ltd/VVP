@@ -523,6 +523,20 @@ class KeriAgentClient:
                 return None
             raise
 
+    async def get_credential_tel_cesr(self, credential_said: str) -> bytes | None:
+        """Get CESR-encoded TEL events (iss + optional rev) for a credential.
+
+        Sprint 80: Uses the canonical /tels/credential/{said} endpoint which
+        returns concatenated iss + rev events. For the public TEL facade proxy.
+        Returns None if credential not found (404).
+        """
+        try:
+            return await self._get_bytes(f"/tels/credential/{credential_said}")
+        except HTTPException as e:
+            if e.status_code == 404:
+                return None
+            raise
+
     async def delete_credential(self, said: str) -> None:
         """Delete a credential by SAID. Raises HTTPException on error."""
         await self._delete(f"/credentials/{said}")

@@ -360,7 +360,8 @@ jobs:
             --set-env-vars \
               "GIT_SHA=${{ github.sha }}" \
               "GITHUB_REPOSITORY=${{ github.repository }}" \
-              "VVP_LOCAL_WITNESS_URLS=https://vvp-witness1.rcnx.io,https://vvp-witness2.rcnx.io,https://vvp-witness3.rcnx.io"
+              "VVP_LOCAL_WITNESS_URLS=https://vvp-witness1.rcnx.io,https://vvp-witness2.rcnx.io,https://vvp-witness3.rcnx.io" \
+              "VVP_TEL_ISSUER_URL=https://vvp-issuer.rcnx.io"
 
       - name: Verify deployed version
         run: |
