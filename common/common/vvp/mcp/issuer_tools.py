@@ -163,6 +163,50 @@ def register_issuer_tools(mcp: FastMCP) -> None:
             kw["base_url"] = base_url
         return issuer_request("POST", f"/admin/publish-identity/{name}", **kw)
 
+    @mcp.tool()
+    def vvp_issuer_identity_delete(
+        aid: Annotated[str, "AID (autonomous identifier) to delete"],
+        base_url: Annotated[str, "Issuer base URL override"] = "",
+    ) -> dict[str, Any]:
+        """Delete a KERI identity by AID. Requires issuer:admin role."""
+        kw: dict[str, Any] = {}
+        if base_url:
+            kw["base_url"] = base_url
+        return issuer_request("DELETE", f"/identity/{aid}", **kw)
+
+    @mcp.tool()
+    def vvp_issuer_identity_bulk_cleanup(
+        organization_id: Annotated[str, "Filter by org UUID (optional)"] = "",
+        name_pattern: Annotated[str, "Filter by name pattern (optional)"] = "",
+        metadata_type: Annotated[str, "Filter by metadata type e.g. 'system' or 'org' (optional)"] = "",
+        cascade_credentials: Annotated[str, "Also delete credentials: 'true' or 'false' (default: false)"] = "false",
+        force: Annotated[str, "Force delete even if blocked: 'true' or 'false' (default: false)"] = "false",
+        dry_run: Annotated[str, "Preview only: 'true' or 'false' (default: false)"] = "false",
+        base_url: Annotated[str, "Issuer base URL override"] = "",
+    ) -> dict[str, Any]:
+        """Bulk delete identities by org, name pattern, or metadata. Admin only. Supports dry_run."""
+        kw: dict[str, Any] = {}
+        if base_url:
+            kw["base_url"] = base_url
+
+        body: dict[str, Any] = {}
+        if organization_id:
+            body["organization_id"] = organization_id
+        if name_pattern:
+            body["name_pattern"] = name_pattern
+        if metadata_type:
+            body["metadata_type"] = metadata_type
+        if cascade_credentials.lower() == "true":
+            body["cascade_credentials"] = True
+        if force.lower() == "true":
+            body["force"] = True
+        if dry_run.lower() == "true":
+            body["dry_run"] = True
+
+        return issuer_request(
+            "POST", "/admin/cleanup/identities", json_body=body, **kw
+        )
+
     # ── Credentials ──────────────────────────────────────────────────
 
     @mcp.tool(annotations={"readOnlyHint": True})
@@ -262,11 +306,49 @@ def register_issuer_tools(mcp: FastMCP) -> None:
         said: Annotated[str, "Credential SAID to revoke"],
         base_url: Annotated[str, "Issuer base URL override"] = "",
     ) -> dict[str, Any]:
-        """Revoke a credential by SAID."""
+        """Revoke a credential by SAID (marks as revoked in TEL, still exists)."""
         kw: dict[str, Any] = {}
         if base_url:
             kw["base_url"] = base_url
         return issuer_request("POST", f"/credential/{said}/revoke", **kw)
+
+    @mcp.tool()
+    def vvp_issuer_credential_delete(
+        said: Annotated[str, "Credential SAID to delete"],
+        base_url: Annotated[str, "Issuer base URL override"] = "",
+    ) -> dict[str, Any]:
+        """Delete a credential from local storage. Requires org:administrator or issuer:admin role."""
+        kw: dict[str, Any] = {}
+        if base_url:
+            kw["base_url"] = base_url
+        return issuer_request("DELETE", f"/credential/{said}", **kw)
+
+    @mcp.tool()
+    def vvp_issuer_credential_bulk_cleanup(
+        organization_id: Annotated[str, "Filter by org UUID (optional)"] = "",
+        schema_said: Annotated[str, "Filter by schema SAID (optional)"] = "",
+        before: Annotated[str, "Delete creds created before this ISO datetime (optional)"] = "",
+        dry_run: Annotated[str, "Preview only, no deletion: 'true' or 'false' (default: false)"] = "false",
+        base_url: Annotated[str, "Issuer base URL override"] = "",
+    ) -> dict[str, Any]:
+        """Bulk delete credentials by org, schema, or date. Admin only. Supports dry_run."""
+        kw: dict[str, Any] = {}
+        if base_url:
+            kw["base_url"] = base_url
+
+        body: dict[str, Any] = {}
+        if organization_id:
+            body["organization_id"] = organization_id
+        if schema_said:
+            body["schema_said"] = schema_said
+        if before:
+            body["before"] = before
+        if dry_run.lower() == "true":
+            body["dry_run"] = True
+
+        return issuer_request(
+            "POST", "/admin/cleanup/credentials", json_body=body, **kw
+        )
 
     # ── Dossiers ─────────────────────────────────────────────────────
 

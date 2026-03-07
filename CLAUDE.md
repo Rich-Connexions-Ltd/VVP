@@ -129,7 +129,7 @@ These MCP tools provide authoritative KERI/ACDC/vLEI documentation and should be
 
 MCP Server URL: `https://www.vlei.wiki/mcp`
 
-- `vvp` - Local VVP protocol and issuer management tools (47 tools):
+- `vvp` - Local VVP protocol and issuer management tools (51 tools):
   - **Protocol analysis** (18 tools):
     - `vvp_jwt_parse` / `vvp_jwt_validate` - Parse and validate JWT/PASSporT tokens
     - `vvp_identity_parse` - Parse VVP-Identity headers
@@ -140,12 +140,12 @@ MCP Server URL: `https://www.vlei.wiki/mcp`
     - `vvp_graph_build` - Build credential graphs
     - `vvp_kel_parse` / `vvp_kel_validate` - Parse and validate Key Event Logs
     - `vvp_verify_chain` - Full verification chain (JWT → dossier → graph)
-  - **Issuer management** (29 tools) — calls the Issuer HTTP API:
+  - **Issuer management** (33 tools) — calls the Issuer HTTP API:
     - `vvp_issuer_health` / `vvp_issuer_status` - Service health and status
     - `vvp_issuer_org_list` / `vvp_issuer_org_get` / `vvp_issuer_org_create` / `vvp_issuer_org_update` - Organization CRUD
     - `vvp_issuer_org_constraints` - Vetter constraint visibility
-    - `vvp_issuer_identity_list` / `vvp_issuer_identity_create` / `vvp_issuer_identity_publish` - KERI identity management
-    - `vvp_issuer_credential_list` / `vvp_issuer_credential_get` / `vvp_issuer_credential_issue` / `vvp_issuer_credential_revoke` - Credential CRUD
+    - `vvp_issuer_identity_list` / `vvp_issuer_identity_create` / `vvp_issuer_identity_publish` / `vvp_issuer_identity_delete` / `vvp_issuer_identity_bulk_cleanup` - KERI identity management
+    - `vvp_issuer_credential_list` / `vvp_issuer_credential_get` / `vvp_issuer_credential_issue` / `vvp_issuer_credential_revoke` / `vvp_issuer_credential_delete` / `vvp_issuer_credential_bulk_cleanup` - Credential CRUD
     - `vvp_issuer_dossier_list` / `vvp_issuer_dossier_readiness` / `vvp_issuer_dossier_create` - Dossier management
     - `vvp_issuer_tn_list` / `vvp_issuer_tn_create` / `vvp_issuer_tn_update` / `vvp_issuer_tn_delete` / `vvp_issuer_tn_lookup` - TN mapping management
     - `vvp_issuer_vvp_create` / `vvp_issuer_vvp_create_for_tn` - VVP attestation creation
