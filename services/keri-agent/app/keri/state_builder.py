@@ -213,6 +213,12 @@ class KeriStateBuilder:
         from app.keri.registry import get_registry_manager
 
         seed_store = get_seed_store()
+
+        # Clean orphan registry seeds (identity deleted but registry seed remains)
+        orphan_count = seed_store.delete_orphan_registry_seeds()
+        if orphan_count > 0:
+            log.info(f"Cleaned {orphan_count} orphan registry seed(s) before rebuild")
+
         registry_seeds = seed_store.get_all_registry_seeds()
 
         if not registry_seeds:

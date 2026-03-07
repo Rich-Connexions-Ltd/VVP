@@ -312,12 +312,21 @@ class SeedStore:
             return count > 0
 
     def delete_identity_seed(self, name: str) -> bool:
-        """Delete an identity seed by name and its associated rotation seeds.
+        """Delete an identity seed by name and its associated rotation/registry seeds.
 
         Returns True if the identity seed was found and deleted.
         """
         with _get_db_session() as db:
-            # Delete rotation seeds first (FK by identity_name)
+            # Delete registry seeds (identity_name FK)
+            reg_count = (
+                db.query(KeriRegistrySeed)
+                .filter(KeriRegistrySeed.identity_name == name)
+                .delete()
+            )
+            if reg_count > 0:
+                log.info(f"Deleted {reg_count} registry seed(s) for identity: {name}")
+
+            # Delete rotation seeds (identity_name FK)
             rot_count = (
                 db.query(KeriRotationSeed)
                 .filter(KeriRotationSeed.identity_name == name)
@@ -336,10 +345,9 @@ class SeedStore:
             return count > 0
 
     def delete_identity_seed_by_aid(self, aid: str) -> bool:
-        """Delete an identity seed by AID (expected_aid) and its rotation seeds.
+        """Delete an identity seed by AID (expected_aid) and its associated seeds.
 
-        Looks up the identity name from the seed record, then deletes
-        both the identity seed and associated rotation seeds.
+        Cascades to registry seeds and rotation seeds.
         Returns True if the identity seed was found and deleted.
         """
         with _get_db_session() as db:
@@ -353,7 +361,16 @@ class SeedStore:
 
             name = seed.name
 
-            # Delete rotation seeds first
+            # Delete registry seeds
+            reg_count = (
+                db.query(KeriRegistrySeed)
+                .filter(KeriRegistrySeed.identity_name == name)
+                .delete()
+            )
+            if reg_count > 0:
+                log.info(f"Deleted {reg_count} registry seed(s) for identity: {name}")
+
+            # Delete rotation seeds
             rot_count = (
                 db.query(KeriRotationSeed)
                 .filter(KeriRotationSeed.identity_name == name)
@@ -381,11 +398,20 @@ class SeedStore:
             return count
 
     def delete_identity_seeds_bulk(self, names: list[str]) -> int:
-        """Delete multiple identity seeds and their rotation seeds. Returns identity count deleted."""
+        """Delete multiple identity seeds and their registry/rotation seeds. Returns identity count deleted."""
         if not names:
             return 0
         with _get_db_session() as db:
-            # Delete rotation seeds first
+            # Delete registry seeds first
+            reg_count = (
+                db.query(KeriRegistrySeed)
+                .filter(KeriRegistrySeed.identity_name.in_(names))
+                .delete(synchronize_session="fetch")
+            )
+            if reg_count > 0:
+                log.info(f"Bulk deleted {reg_count} registry seed(s)")
+
+            # Delete rotation seeds
             rot_count = (
                 db.query(KeriRotationSeed)
                 .filter(KeriRotationSeed.identity_name.in_(names))
@@ -401,6 +427,36 @@ class SeedStore:
             )
             if count > 0:
                 log.info(f"Bulk deleted {count} identity seed(s)")
+            return count
+
+    def delete_orphan_registry_seeds(self) -> int:
+        """Delete registry seeds whose identity_name has no matching identity seed.
+
+        Returns count of orphan registry seeds deleted.
+        """
+        with _get_db_session() as db:
+            identity_names = {
+                row[0] for row in db.query(KeriIdentitySeed.name).all()
+            }
+            orphans = (
+                db.query(KeriRegistrySeed)
+                .filter(~KeriRegistrySeed.identity_name.in_(identity_names) if identity_names
+                        else KeriRegistrySeed.id > 0)
+                .all()
+            )
+            if not orphans:
+                return 0
+
+            orphan_names = [o.name for o in orphans]
+            count = (
+                db.query(KeriRegistrySeed)
+                .filter(KeriRegistrySeed.name.in_(orphan_names))
+                .delete(synchronize_session="fetch")
+            )
+            log.info(
+                f"Deleted {count} orphan registry seed(s): "
+                f"{', '.join(orphan_names[:5])}{'...' if len(orphan_names) > 5 else ''}"
+            )
             return count
 
     # -- Query Helpers --
