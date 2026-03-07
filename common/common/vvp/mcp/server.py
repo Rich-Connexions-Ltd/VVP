@@ -72,6 +72,14 @@ def vvp_reload() -> dict[str, Any]:
     _adapters = None
     reloaded.append("adapters cache cleared")
 
+    # Reload issuer client (issuer_tools closures re-bind via module reload)
+    import common.vvp.mcp.issuer_client as issuer_client_mod
+    importlib.reload(issuer_client_mod)
+    # Re-bind in issuer_tools' namespace so existing closures see updated code
+    import common.vvp.mcp.issuer_tools as issuer_tools_mod
+    issuer_tools_mod.issuer_request = issuer_client_mod.issuer_request
+    reloaded.append("common.vvp.mcp.issuer_client")
+
     # Verify the reload by reading current state
     from common.vvp.schema.registry import KNOWN_SCHEMA_SAIDS, SCHEMA_REGISTRY_VERSION
     schema_counts = {k: len(v) for k, v in KNOWN_SCHEMA_SAIDS.items()}
