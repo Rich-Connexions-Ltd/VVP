@@ -78,6 +78,7 @@ def issuer_request(
     params: dict[str, Any] | None = None,
     api_key: str | None = None,
     base_url: str | None = None,
+    admin: bool = False,
     timeout: float = 30.0,
 ) -> dict[str, Any]:
     """Make an authenticated request to the issuer API.
@@ -89,13 +90,15 @@ def issuer_request(
         params: Query parameters.
         api_key: Override API key (default: from env/config).
         base_url: Override base URL (default: from env).
+        admin: Force admin key selection (for paths that need admin
+            auth but don't match _ADMIN_PATHS, e.g. /credential with org_id).
         timeout: Request timeout in seconds.
 
     Returns:
         Response as dict with 'status_code', 'ok', and 'data' keys.
     """
     url = (base_url or _base_url()).rstrip("/") + path
-    key = api_key or _find_api_key(path)
+    key = api_key or _find_api_key(path if not admin else "/admin/")
 
     headers: dict[str, str] = {}
     if key:

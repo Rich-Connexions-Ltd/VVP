@@ -182,6 +182,7 @@ def register_issuer_tools(mcp: FastMCP) -> None:
             params["schema_said"] = schema_said
         if org_id:
             params["org_id"] = org_id
+            kw["admin"] = True
         return issuer_request("GET", "/credential", params=params, **kw)
 
     @mcp.tool(annotations={"readOnlyHint": True})
@@ -204,6 +205,7 @@ def register_issuer_tools(mcp: FastMCP) -> None:
         }
         if org_id:
             params["org_id"] = org_id
+            kw["admin"] = True
         return issuer_request("GET", "/credential", params=params, **kw)
 
     @mcp.tool(annotations={"readOnlyHint": True})
