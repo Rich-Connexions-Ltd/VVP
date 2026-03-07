@@ -16,6 +16,7 @@ cli = [
 ]
 mcp = [
     "fastmcp>=2.0.0",
+    "httpx>=0.27.0",  # Required for issuer API calls
     "vvp-verifier",  # Required for parsing functions
 ]
 

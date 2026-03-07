@@ -129,18 +129,31 @@ These MCP tools provide authoritative KERI/ACDC/vLEI documentation and should be
 
 MCP Server URL: `https://www.vlei.wiki/mcp`
 
-- `vvp` - Local VVP protocol analysis tools (17 tools):
-  - `vvp_jwt_parse` / `vvp_jwt_validate` - Parse and validate JWT/PASSporT tokens
-  - `vvp_identity_parse` - Parse VVP-Identity headers
-  - `vvp_cesr_parse` / `vvp_cesr_detect` - Parse and detect CESR streams
-  - `vvp_said_compute` / `vvp_said_validate` / `vvp_said_inject` - SAID operations
-  - `vvp_acdc_parse` / `vvp_acdc_type` - Parse ACDC credentials and detect types
-  - `vvp_dossier_parse` / `vvp_dossier_validate` / `vvp_dossier_fetch` - Dossier operations
-  - `vvp_graph_build` - Build credential graphs
-  - `vvp_kel_parse` / `vvp_kel_validate` - Parse and validate Key Event Logs
-  - `vvp_verify_chain` - Full verification chain (JWT → dossier → graph)
+- `vvp` - Local VVP protocol and issuer management tools (47 tools):
+  - **Protocol analysis** (18 tools):
+    - `vvp_jwt_parse` / `vvp_jwt_validate` - Parse and validate JWT/PASSporT tokens
+    - `vvp_identity_parse` - Parse VVP-Identity headers
+    - `vvp_cesr_parse` / `vvp_cesr_detect` - Parse and detect CESR streams
+    - `vvp_said_compute` / `vvp_said_validate` / `vvp_said_inject` - SAID operations
+    - `vvp_acdc_parse` / `vvp_acdc_type` - Parse ACDC credentials and detect types
+    - `vvp_dossier_parse` / `vvp_dossier_validate` / `vvp_dossier_fetch` - Dossier operations
+    - `vvp_graph_build` - Build credential graphs
+    - `vvp_kel_parse` / `vvp_kel_validate` - Parse and validate Key Event Logs
+    - `vvp_verify_chain` - Full verification chain (JWT → dossier → graph)
+  - **Issuer management** (29 tools) — calls the Issuer HTTP API:
+    - `vvp_issuer_health` / `vvp_issuer_status` - Service health and status
+    - `vvp_issuer_org_list` / `vvp_issuer_org_get` / `vvp_issuer_org_create` / `vvp_issuer_org_update` - Organization CRUD
+    - `vvp_issuer_org_constraints` - Vetter constraint visibility
+    - `vvp_issuer_identity_list` / `vvp_issuer_identity_create` / `vvp_issuer_identity_publish` - KERI identity management
+    - `vvp_issuer_credential_list` / `vvp_issuer_credential_get` / `vvp_issuer_credential_issue` / `vvp_issuer_credential_revoke` - Credential CRUD
+    - `vvp_issuer_dossier_list` / `vvp_issuer_dossier_readiness` / `vvp_issuer_dossier_create` - Dossier management
+    - `vvp_issuer_tn_list` / `vvp_issuer_tn_create` / `vvp_issuer_tn_update` / `vvp_issuer_tn_delete` / `vvp_issuer_tn_lookup` - TN mapping management
+    - `vvp_issuer_vvp_create` / `vvp_issuer_vvp_create_for_tn` - VVP attestation creation
+    - `vvp_issuer_schema_list` / `vvp_issuer_vetter_list` - Schema and vetter queries
+    - `vvp_issuer_api_key_list` / `vvp_issuer_api_key_create` - API key management
+    - `vvp_issuer_admin_reinitialize` - Trust anchor re-initialization
 
-These tools call the same adapter layer as the `vvp` CLI. Use them for programmatic analysis of protocol data structures. See `.claude/skills/vvp-tools/SKILL.md` for usage patterns or invoke `/vvp-tools`.
+Protocol tools call the verifier adapter layer. Issuer tools make HTTP calls to a running issuer instance (configured via `VVP_ISSUER_URL` env var, default `http://localhost:8001`). API keys auto-resolve from `scripts/.e2e-config` (admin key for `/admin/` and `/organizations` paths, test key for everything else). See `.claude/skills/vvp-tools/SKILL.md` for usage patterns or invoke `/vvp-tools`.
 
 MCP Server: Local stdio via `scripts/run-mcp-server.sh`
 

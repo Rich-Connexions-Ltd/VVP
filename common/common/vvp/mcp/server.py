@@ -1032,6 +1032,15 @@ async def vvp_verify_chain(
     }
 
 
+# ── Issuer Management Tools ──────────────────────────────────────────
+# These tools call the issuer HTTP API (not the adapter layer).
+# They require a running issuer instance.
+
+from common.vvp.mcp.issuer_tools import register_issuer_tools
+
+register_issuer_tools(mcp)
+
+
 def main():
     """Entry point for the VVP MCP server."""
     mcp.run()
