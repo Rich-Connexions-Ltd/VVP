@@ -389,7 +389,12 @@ async def validate_signing_constraints(
     Results are cached by (dossier_said, ecc_code) since the constraint
     outcome is deterministic for a given dossier + calling country code.
     Cache is invalidated on dossier revocation or enforcement toggle.
+
+    On cache miss, evaluation runs as a background task so the signing
+    path is not blocked by KERI Agent calls. First call returns empty
+    violations; subsequent calls return cached results.
     """
+    import asyncio
     from app.vvp.constraint_cache import get_constraint_cache
 
     # Extract ECC from orig_tn for cache key
@@ -400,11 +405,36 @@ async def validate_signing_constraints(
     if cached is not None:
         return cached
 
-    # Cache miss — full evaluation
-    results = await _evaluate_signing_constraints(orig_tn, dossier_said, ecc_code)
+    # Cache miss — fire-and-forget background evaluation.
+    # Return empty violations immediately so the signing path is not blocked.
+    log.info(f"Constraint cache miss, starting background evaluation: {dossier_said[:16]}... ecc={ecc_code}")
+    asyncio.create_task(
+        _background_evaluate_constraints(cache, orig_tn, dossier_said, ecc_code)
+    )
+    return []
 
-    cache.put(dossier_said, ecc_code, results)
-    return results
+
+async def _background_evaluate_constraints(
+    cache,
+    orig_tn: str,
+    dossier_said: str,
+    ecc_code: str,
+) -> None:
+    """Background task: evaluate constraints and populate cache.
+
+    Errors are logged but never propagated — the signing path has already
+    returned empty violations to the caller.
+    """
+    try:
+        results = await _evaluate_signing_constraints(orig_tn, dossier_said, ecc_code)
+        cache.put(dossier_said, ecc_code, results)
+        violations = [r for r in results if not r.is_authorized]
+        log.info(
+            f"Background constraint evaluation complete: {len(results)} checks, "
+            f"{len(violations)} violations, {dossier_said[:16]}..."
+        )
+    except Exception as e:
+        log.warning(f"Background constraint evaluation failed: {e}")
 
 
 async def _evaluate_signing_constraints(
