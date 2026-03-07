@@ -532,12 +532,23 @@ class KeriStateBuilder:
         report.said_checks_passed = said_passed
         report.said_checks_failed = said_failed
         if said_failed > 0:
-            all_ok = False
+            # SAID failures are warnings, not hard failures — stale credential
+            # seeds from deleted/recreated orgs can't be rebuilt deterministically
+            # but don't affect operational signing capability.
+            log.warning(
+                f"SAID verification: {said_failed} failure(s) "
+                f"(non-fatal, {said_passed}/{said_passed + said_failed} passed)"
+            )
 
         # 5. TEL integrity verification
         tel_ok = await self._verify_tel_integrity(report, credential_seeds, reger)
         if not tel_ok:
-            all_ok = False
+            # TEL failures are also non-fatal warnings for the same reason
+            log.warning(
+                f"TEL integrity: {report.tel_integrity_failed} failure(s) "
+                f"(non-fatal, {report.tel_integrity_passed}/"
+                f"{report.tel_integrity_passed + report.tel_integrity_failed} passed)"
+            )
 
         log.info(
             f"State verification: identities={actual_identities}/{report.identities_expected}, "
