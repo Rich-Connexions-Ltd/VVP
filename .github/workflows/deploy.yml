@@ -1049,6 +1049,23 @@ jobs:
             sleep 10
           done
 
+      - name: Wait for KERI Agent to settle
+        run: |
+          # After deploy, the KERI Agent rebuilds state from PostgreSQL seeds and
+          # publishes identities to witnesses. Integration tests that hit the KERI
+          # Agent during this window cause 30s+ queuing for any concurrent signing
+          # calls. Wait for /readyz to confirm the agent is fully settled.
+          echo "Waiting for KERI Agent to finish startup (readyz)..."
+          for i in {1..18}; do
+            READYZ=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$VVP_ISSUER_URL/readyz" || echo "000")
+            echo "KERI Agent readyz attempt $i/18: $READYZ"
+            if [ "$READYZ" = "200" ]; then
+              echo "KERI Agent fully ready — safe to run integration tests"
+              break
+            fi
+            sleep 10
+          done
+
       - name: Bootstrap test org (self-healing)
         id: bootstrap
         env:
