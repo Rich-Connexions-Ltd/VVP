@@ -193,9 +193,9 @@ ADMIN_ENDPOINT_ENABLED: bool = os.getenv("ADMIN_ENDPOINT_ENABLED", "true").lower
 SERVICE_PORT: int = int(os.getenv("VVP_ISSUER_PORT", "8001"))
 
 # Sprint 62: Vetter constraint enforcement (issuer-side toggle)
-# When false (default): log warnings for constraint violations, proceed normally
+# When true (default): reject signing requests with 403 for constraint violations
+# When false: log warnings for constraint violations, proceed normally
 #   → allows admin to deliberately create mis-vetted credential chains for testing
-# When true: reject requests with 403 for constraint violations
 # The verifier always evaluates constraints regardless of this setting.
 # Toggleable at runtime via PUT /admin/settings/vetter-enforcement
 ENFORCE_VETTER_CONSTRAINTS: bool = os.getenv(

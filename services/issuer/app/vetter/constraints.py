@@ -386,6 +386,34 @@ async def validate_signing_constraints(
 ) -> list[ConstraintCheckResult]:
     """Signing-time: resolve dossier credential chain, check ALL constraints.
 
+    Results are cached by (dossier_said, ecc_code) since the constraint
+    outcome is deterministic for a given dossier + calling country code.
+    Cache is invalidated on dossier revocation or enforcement toggle.
+    """
+    from app.vvp.constraint_cache import get_constraint_cache
+
+    # Extract ECC from orig_tn for cache key
+    ecc_code = extract_ecc_from_tn(orig_tn) or "unknown"
+    cache = get_constraint_cache()
+
+    cached = cache.get(dossier_said, ecc_code)
+    if cached is not None:
+        return cached
+
+    # Cache miss — full evaluation
+    results = await _evaluate_signing_constraints(orig_tn, dossier_said, ecc_code)
+
+    cache.put(dossier_said, ecc_code, results)
+    return results
+
+
+async def _evaluate_signing_constraints(
+    orig_tn: str,
+    dossier_said: str,
+    ecc_code: str,
+) -> list[ConstraintCheckResult]:
+    """Full constraint evaluation (uncached path).
+
     Walks the dossier to find all credentials with certification edges,
     then validates each one. Also checks orig_tn ECC against each TN
     credential's VetterCert.

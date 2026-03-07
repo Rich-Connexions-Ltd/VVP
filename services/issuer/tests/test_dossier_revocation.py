@@ -131,7 +131,7 @@ class TestCacheMiss:
 
     @pytest.mark.asyncio
     async def test_cache_populated_after_first_call(self):
-        """After first call, cache should contain the dossier entry."""
+        """After first call + background task, cache should contain the dossier entry."""
         from app.vvp.dossier_service import (
             check_dossier_revocation,
             get_issuer_dossier_cache,
@@ -152,6 +152,8 @@ class TestCacheMiss:
                 dossier_url=DOSSIER_URL,
                 dossier_said=DOSSIER_SAID,
             )
+            # Let background task complete (patches must stay active)
+            await asyncio.sleep(0.05)
 
         cache = get_issuer_dossier_cache()
         cached = await cache.get(DOSSIER_URL)
@@ -183,6 +185,8 @@ class TestCacheMiss:
                 dossier_url=DOSSIER_URL,
                 dossier_said="ESAID_root",
             )
+            # Let background task complete (patches must stay active)
+            await asyncio.sleep(0.05)
 
         assert trust == TrustDecision.TRUSTED
         cache = get_issuer_dossier_cache()
@@ -299,7 +303,7 @@ class TestChainResolutionFailure:
 
     @pytest.mark.asyncio
     async def test_builder_error_returns_trusted(self):
-        """If DossierBuilder raises, should return TRUSTED with warning."""
+        """If DossierBuilder raises in background, should still return TRUSTED."""
         from app.vvp.dossier_service import check_dossier_revocation
 
         failing_builder = AsyncMock()
@@ -320,10 +324,12 @@ class TestChainResolutionFailure:
                 dossier_url=DOSSIER_URL,
                 dossier_said=DOSSIER_SAID,
             )
+            # Let background task run and fail gracefully
+            await asyncio.sleep(0.05)
 
         assert trust == TrustDecision.TRUSTED
         assert warning is not None
-        assert "failed" in warning.lower()
+        assert "background" in warning.lower()
 
 
 class TestBuildCacheEntry:

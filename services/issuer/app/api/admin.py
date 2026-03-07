@@ -516,6 +516,11 @@ async def set_vetter_enforcement(
     from app.config import set_enforce_vetter_constraints
 
     set_enforce_vetter_constraints(enabled)
+
+    # Clear constraint cache — enforcement mode change may alter outcomes
+    from app.vvp.constraint_cache import get_constraint_cache
+    get_constraint_cache().clear()
+
     audit = get_audit_logger()
 
     audit.log_access(

@@ -4,6 +4,10 @@ Before signing a PASSporT, checks whether any credential in the
 dossier chain has been revoked. Policy: unknown status = TRUSTED
 (allow call to proceed); REVOKED = UNTRUSTED (reject signing).
 
+On cache miss the chain resolution runs as a background task so the
+first call returns TRUSTED immediately — the revocation status is
+populated asynchronously for subsequent calls.
+
 The issuer is simpler than the verifier:
 - It doesn't need to *fetch* dossiers over HTTP (it created them)
 - On cache miss it uses its own DossierBuilder to resolve the chain
@@ -12,6 +16,7 @@ The issuer is simpler than the verifier:
 Sprint 68c: Migrated from direct app.keri.* access to KeriAgentClient.
 """
 
+import asyncio
 import logging
 import time
 from typing import Optional, Tuple
@@ -45,14 +50,17 @@ def get_issuer_dossier_cache() -> DossierCache:
             ttl_seconds=DOSSIER_CACHE_TTL_SECONDS,
             max_entries=DOSSIER_CACHE_MAX_ENTRIES,
         )
-        # Register attestation cache invalidation on dossier SAID revocation
+        # Register cache invalidation callbacks on dossier SAID revocation
         try:
             from app.vvp.attestation_cache import get_attestation_cache
+            from app.vvp.constraint_cache import get_constraint_cache
             attest_cache = get_attestation_cache()
+            constraint_cache = get_constraint_cache()
             _cache.on_invalidate_said(attest_cache.invalidate_by_dossier_said)
-            log.info("Attestation cache invalidation callback registered with DossierCache")
+            _cache.on_invalidate_said(constraint_cache.invalidate_by_dossier_said)
+            log.info("Attestation + constraint cache invalidation callbacks registered with DossierCache")
         except Exception as e:
-            log.warning(f"Failed to register attestation cache callback: {e} — TTL-only invalidation active")
+            log.warning(f"Failed to register cache callbacks: {e} — TTL-only invalidation active")
     return _cache
 
 
@@ -97,28 +105,38 @@ async def check_dossier_revocation(
             return TrustDecision.TRUSTED, "Revocation status still pending"
         return TrustDecision.TRUSTED, None
 
-    # Cache miss — resolve chain from local credentials and populate cache
-    log.info(f"Dossier cache miss, resolving chain: {dossier_said[:16]}...")
-    try:
-        cached_dossier, chain_info = await _build_cache_entry(dossier_said)
-    except KeriAgentUnavailableError:
-        raise  # Propagate agent outage as 503
-    except Exception as e:
-        log.warning(f"Failed to resolve dossier chain for revocation: {e}")
-        return TrustDecision.TRUSTED, f"Chain resolution failed: {e}"
-
-    # Store in cache with auto-start background revocation check
-    await cache.put(
-        url=dossier_url,
-        dossier=cached_dossier,
-        chain_info=chain_info,
-    )
-
-    log.info(
-        f"Dossier cached with {len(cached_dossier.contained_saids)} SAIDs, "
-        f"background revocation started: {dossier_url[:50]}..."
+    # Cache miss — fire-and-forget background chain resolution.
+    # Return TRUSTED immediately so the signing path is not blocked.
+    log.info(f"Dossier cache miss, starting background resolution: {dossier_said[:16]}...")
+    asyncio.create_task(
+        _background_populate_cache(cache, dossier_url, dossier_said)
     )
     return TrustDecision.TRUSTED, "First request - revocation check started in background"
+
+
+async def _background_populate_cache(
+    cache: DossierCache,
+    dossier_url: str,
+    dossier_said: str,
+) -> None:
+    """Background task: resolve credential chain and populate DossierCache.
+
+    Errors are logged but never propagated — the signing path has already
+    returned TRUSTED to the caller.
+    """
+    try:
+        cached_dossier, chain_info = await _build_cache_entry(dossier_said)
+        await cache.put(
+            url=dossier_url,
+            dossier=cached_dossier,
+            chain_info=chain_info,
+        )
+        log.info(
+            f"Background dossier cache populated: {len(cached_dossier.contained_saids)} SAIDs, "
+            f"{dossier_url[:50]}..."
+        )
+    except Exception as e:
+        log.warning(f"Background dossier chain resolution failed: {e}")
 
 
 async def _build_cache_entry(
