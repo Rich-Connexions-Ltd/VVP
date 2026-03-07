@@ -126,8 +126,9 @@ async def create_vvp_attestation(
             dossier_url = cached.dossier_url
             card = cached.card
         else:
-            # Cache miss — full computation path
-            # Get identity info via KERI Agent
+            # Cache miss — minimal blocking path.
+            # Only resolve identity AID (1 KERI Agent call).
+            # Brand extraction runs in background to avoid KERI Agent contention.
             async with timer.aphase("identity_resolve"):
                 identity = await client.get_identity(body.identity_name)
             if identity is None:
@@ -143,33 +144,27 @@ async def create_vvp_attestation(
             issuer_oobi = build_issuer_oobi(identity.aid, witness_url)
             dossier_url = build_dossier_url(body.dossier_said, issuer_base_url)
 
-            # Sprint 58: Extract brand attributes for vCard card claim.
+            # First call: no card (brand extraction deferred to background).
+            # Subsequent calls will have the card from the attestation cache.
             card = None
-            try:
-                from app.dossier.builder import get_dossier_builder
 
-                async with timer.aphase("brand_extraction"):
-                    builder = await get_dossier_builder()
-                    content = await builder.build(body.dossier_said, include_tel=False)
-
-                    for said in content.credential_saids:
-                        cred_info = await client.get_credential(said)
-                        if cred_info and cred_info.attributes:
-                            card = build_card_claim(cred_info.attributes)
-                            if card is not None:
-                                log.debug(f"Card claim from credential {said[:16]}...")
-                                break
-            except Exception as e:
-                log.warning(f"Failed to extract card claim from credentials: {e}")
-
-            # Store in attestation cache for next call
+            # Store minimal entry in attestation cache now (no card yet)
             attest_cache.put(
                 identity_name=body.identity_name,
                 dossier_said=body.dossier_said,
                 identity_aid=identity.aid,
                 issuer_oobi=issuer_oobi,
                 dossier_url=dossier_url,
-                card=card,
+                card=None,
+            )
+
+            # Background: extract brand card and update cache entry
+            import asyncio
+            asyncio.create_task(
+                _background_extract_brand(
+                    attest_cache, client, body.identity_name,
+                    body.dossier_said, identity.aid, issuer_oobi, dossier_url,
+                )
             )
 
         # Revocation check runs on every request (fast — DossierCache hit on repeat calls)
@@ -395,3 +390,49 @@ async def create_vvp_attestation_from_tn(
         f"create-for-tn: tn={tn}, identity={identity_name}, dossier={dossier_said[:16]}..."
     )
     return result
+
+
+async def _background_extract_brand(
+    attest_cache,
+    client,
+    identity_name: str,
+    dossier_said: str,
+    identity_aid: str,
+    issuer_oobi: str,
+    dossier_url: str,
+) -> None:
+    """Background task: extract brand card from dossier credentials and update cache.
+
+    The first signing call proceeds without brand data (card=None).
+    This populates the attestation cache with the card for subsequent calls.
+    """
+    try:
+        from app.dossier.builder import get_dossier_builder
+
+        builder = await get_dossier_builder()
+        content = await builder.build(dossier_said, include_tel=False)
+
+        card = None
+        for said in content.credential_saids:
+            cred_info = await client.get_credential(said)
+            if cred_info and cred_info.attributes:
+                card = build_card_claim(cred_info.attributes)
+                if card is not None:
+                    log.info(f"Background brand extraction: card from credential {said[:16]}...")
+                    break
+
+        if card is not None:
+            # Update the cache entry with the card
+            attest_cache.put(
+                identity_name=identity_name,
+                dossier_said=dossier_said,
+                identity_aid=identity_aid,
+                issuer_oobi=issuer_oobi,
+                dossier_url=dossier_url,
+                card=card,
+            )
+            log.info(f"Background brand extraction complete: {identity_name}")
+        else:
+            log.info(f"Background brand extraction: no card found for {dossier_said[:16]}...")
+    except Exception as e:
+        log.warning(f"Background brand extraction failed: {e}")
