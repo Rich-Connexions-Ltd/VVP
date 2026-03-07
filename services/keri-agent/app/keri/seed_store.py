@@ -459,6 +459,42 @@ class SeedStore:
             )
             return count
 
+    def delete_orphan_credential_seeds(self) -> int:
+        """Delete credential seeds whose issuer identity has no matching identity seed.
+
+        Returns count of orphan credential seeds deleted.
+        """
+        with _get_db_session() as db:
+            identity_names = {
+                row[0] for row in db.query(KeriIdentitySeed.name).all()
+            }
+            if not identity_names:
+                # No identities at all — all credential seeds are orphans
+                count = db.query(KeriCredentialSeed).delete()
+                if count > 0:
+                    log.info(f"Deleted {count} orphan credential seed(s) (no identity seeds exist)")
+                return count
+
+            orphans = (
+                db.query(KeriCredentialSeed)
+                .filter(~KeriCredentialSeed.issuer_identity_name.in_(identity_names))
+                .all()
+            )
+            if not orphans:
+                return 0
+
+            orphan_saids = [o.expected_said for o in orphans]
+            count = (
+                db.query(KeriCredentialSeed)
+                .filter(KeriCredentialSeed.expected_said.in_(orphan_saids))
+                .delete(synchronize_session="fetch")
+            )
+            log.info(
+                f"Deleted {count} orphan credential seed(s): "
+                f"{', '.join(s[:16] for s in orphan_saids[:5])}{'...' if len(orphan_saids) > 5 else ''}"
+            )
+            return count
+
     # -- Query Helpers --
 
     def get_credential_seeds_by_issuer(self, identity_name: str) -> list[KeriCredentialSeed]:

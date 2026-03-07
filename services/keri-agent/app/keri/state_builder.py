@@ -311,6 +311,12 @@ class KeriStateBuilder:
         from app.schema.store import has_embedded_schema
 
         seed_store = get_seed_store()
+
+        # Clean orphan credential seeds (issuer identity deleted)
+        orphan_cred_count = seed_store.delete_orphan_credential_seeds()
+        if orphan_cred_count > 0:
+            log.info(f"Cleaned {orphan_cred_count} orphan credential seed(s) before rebuild")
+
         credential_seeds = seed_store.get_all_credential_seeds()
 
         if not credential_seeds:
