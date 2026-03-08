@@ -47,7 +47,7 @@
         <action application="set" data="effective_caller_id_name=VVP Brand Assure"/>
         <action application="set" data="sip_redirect_context=redirected"/>
         <action application="log" data="INFO [VVP] Routing to signing: +441923311002 → +44192331$1 via Brand Assure"/>
-        <action application="bridge" data="[sip_h_X-VVP-API-Key=k5mqC9VPJ0DeYtZ3Yp-ziAP93AL7gPXdwyT9HRjXvtE,origination_caller_id_number=+441923311002]sofia/external/${loopback_dest_tn}@127.0.0.1:5070"/>
+        <action application="bridge" data="[sip_h_X-VVP-API-Key=ez9vrV6OZ12SFw2wGULjJMvnUeTMrpXr4SJ9fivuKvI,origination_caller_id_number=+441923311002]sofia/external/${loopback_dest_tn}@127.0.0.1:5070"/>
       </condition>
     </extension>
 
@@ -67,7 +67,7 @@
         <action application="set" data="effective_caller_id_name=VVP Deutsche Vetters"/>
         <action application="set" data="sip_redirect_context=redirected"/>
         <action application="log" data="INFO [VVP] Routing to signing: +441923311003 → +44192331$1 via Deutsche Vetters"/>
-        <action application="bridge" data="[sip_h_X-VVP-API-Key=8rTg-pQZHuOTUtrgYk5eJBppPKmmY32As8mwW32z2Hs,origination_caller_id_number=+441923311003]sofia/external/${loopback_dest_tn}@127.0.0.1:5070"/>
+        <action application="bridge" data="[sip_h_X-VVP-API-Key=ez9vrV6OZ12SFw2wGULjJMvnUeTMrpXr4SJ9fivuKvI,origination_caller_id_number=+441923311003]sofia/external/${loopback_dest_tn}@127.0.0.1:5070"/>
       </condition>
     </extension>
 
@@ -97,7 +97,7 @@
         <!-- Route through signing service with org API key + correct From TN -->
         <!-- API key and caller ID must be in bridge [endpoint vars] to appear in B-leg INVITE -->
         <action application="log" data="INFO [VVP] Routing to signing service: ${loopback_dest_tn}"/>
-        <action application="bridge" data="[sip_h_X-VVP-API-Key=KyGs1suZJR0dQAL0kymkhSvSeJQo4Dh11eWE6YrQXTs,origination_caller_id_number=+441923311000]sofia/external/${loopback_dest_tn}@127.0.0.1:5070"/>
+        <action application="bridge" data="[sip_h_X-VVP-API-Key=ez9vrV6OZ12SFw2wGULjJMvnUeTMrpXr4SJ9fivuKvI,origination_caller_id_number=+441923311000]sofia/external/${loopback_dest_tn}@127.0.0.1:5070"/>
       </condition>
     </extension>
 

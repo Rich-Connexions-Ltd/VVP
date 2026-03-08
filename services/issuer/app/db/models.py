@@ -170,6 +170,7 @@ class OrgAPIKey(Base):
     id = Column(String(36), primary_key=True)  # UUID
     name = Column(String(255), nullable=False)
     key_hash = Column(String(255), nullable=False)  # bcrypt hash
+    key_prefix = Column(String(8), nullable=True, index=True)  # First 8 chars for O(1) lookup
     organization_id = Column(
         String(36), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
     )

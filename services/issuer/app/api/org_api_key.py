@@ -168,6 +168,7 @@ async def create_org_api_key(
         id=key_id,
         name=body.name,
         key_hash=hashed_key,
+        key_prefix=raw_key[:8],
         organization_id=org_id,
         revoked=False,
     )

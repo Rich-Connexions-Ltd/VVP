@@ -186,3 +186,5 @@ def init_database() -> None:
     run_sprint71(engine)
     from app.db.migrations.sprint73_sessions import run_migrations as run_sprint73
     run_sprint73(engine)
+    from app.db.migrations.api_key_prefix import run_migrations as run_api_key_prefix
+    run_api_key_prefix(engine)

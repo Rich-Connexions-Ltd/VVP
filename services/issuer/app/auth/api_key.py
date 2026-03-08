@@ -299,8 +299,15 @@ def verify_org_api_key(raw_key: str) -> tuple[Principal | None, str | None]:
 
     try:
         with get_db_session() as db:
-            # Get all non-revoked org API keys
-            keys = db.query(OrgAPIKey).all()
+            # Fast path: filter by key_prefix for O(1) lookup instead of O(n) bcrypt
+            prefix = raw_key[:8]
+            keys = db.query(OrgAPIKey).filter(OrgAPIKey.key_prefix == prefix).all()
+
+            # Slow path fallback: keys without prefix (pre-migration)
+            if not keys:
+                keys = db.query(OrgAPIKey).filter(OrgAPIKey.key_prefix.is_(None)).all()
+                if keys:
+                    log.debug(f"Prefix lookup miss, falling back to {len(keys)} legacy keys")
 
             for key in keys:
                 try:
@@ -317,6 +324,12 @@ def verify_org_api_key(raw_key: str) -> tuple[Principal | None, str | None]:
 
                         # Build roles from join table
                         roles = {r.role for r in key.roles}
+
+                        # Backfill prefix if missing (auto-migration on first use)
+                        if key.key_prefix is None:
+                            key.key_prefix = prefix
+                            db.commit()
+                            log.info(f"Backfilled key_prefix for key {key.id}")
 
                         return Principal(
                             key_id=f"org_key:{key.id}",
