@@ -729,6 +729,12 @@ async def verify_vvp(
     if timer:
         timer.start("total")
 
+    # Sprint 83: Take an immutable snapshot of trusted roots at request entry.
+    # This snapshot is carried through all phases and cache operations so that
+    # concurrent admin mutations cannot affect an in-flight verification.
+    from app.core.config import get_trusted_roots_snapshot as _get_trusted_roots_snapshot
+    _trusted_roots_snapshot: frozenset[str] = await _get_trusted_roots_snapshot()
+
     passport_claim = ClaimBuilder("passport_verified")
     dossier_claim = ClaimBuilder("dossier_verified")
 
@@ -882,7 +888,9 @@ async def verify_vvp(
         if _passport_kid:
             from app.vvp.verification_cache import get_verification_cache
             _ver_cache = get_verification_cache()
-            _cached_verification = await _ver_cache.get(vvp_identity.evd, _passport_kid)
+            _cached_verification = await _ver_cache.get(
+                vvp_identity.evd, _passport_kid, trusted_roots=_trusted_roots_snapshot
+            )
             if _cached_verification is not None:
                 _verification_cache_hit = True
                 log.info(
@@ -1053,7 +1061,6 @@ async def verify_vvp(
 
     if dag is not None and not _verification_cache_hit:
         from app.core.config import (
-            TRUSTED_ROOT_AIDS,
             SCHEMA_VALIDATION_STRICT,
             EXTERNAL_SAID_RESOLUTION_ENABLED,
             EXTERNAL_SAID_RESOLUTION_TIMEOUT,
@@ -1135,7 +1142,7 @@ async def verify_vvp(
                 # §6.3.3-6: Schema validation strictness controlled by config
                 result = await validate_credential_chain(
                     acdc=leaf_acdc,
-                    trusted_roots=TRUSTED_ROOT_AIDS,
+                    trusted_roots=_trusted_roots_snapshot,
                     dossier_acdcs=dossier_acdcs,
                     pss_signer_aid=pss_signer_aid,
                     validate_schemas=SCHEMA_VALIDATION_STRICT,
@@ -1374,7 +1381,7 @@ async def verify_vvp(
         )
 
         _ver_cache_inst = _get_ver_cache()
-        await _ver_cache_inst.put(_cached_entry)
+        await _ver_cache_inst.put(_cached_entry, trusted_roots=_trusted_roots_snapshot)
 
         # Enqueue background revocation re-check for ongoing freshness
         _rev_checker_inst = _get_rev_checker()

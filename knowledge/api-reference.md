@@ -23,6 +23,41 @@ Base URL: `https://vvp-verifier.wittytree-2a937ccd.uksouth.azurecontainerapps.io
 | `POST` | `/admin/cache/clear` | Clear dossier/revocation/schema cache |
 | `POST` | `/admin/witnesses/discover` | Trigger GLEIF witness discovery |
 
+### Trusted Roots Admin Endpoints (Sprint 83 — runtime-mutable, gated by `VVP_ADMIN_TOKEN`)
+
+All mutation endpoints return `503` when `VVP_ADMIN_TOKEN` is not configured (fail-closed). Read endpoint returns `401` when token is set but missing/wrong. Rate limited to one mutation per 30 seconds.
+
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| `GET` | `/admin/trusted-roots` | Token (when configured) | List current trusted root AIDs with metadata |
+| `POST` | `/admin/trusted-roots/add` | Token required | Add a trusted root AID at runtime |
+| `POST` | `/admin/trusted-roots/remove` | Token required | Remove a trusted root AID at runtime |
+| `POST` | `/admin/trusted-roots/replace` | Token required | Replace entire trusted roots set atomically |
+
+**Request bodies:**
+- `POST /add`: `{"aid": "<AID>"}` — AID must match `^[A-Z0-9][A-Za-z0-9_-]{43}$`
+- `POST /remove`: `{"aid": "<AID>"}` — returns 404 if not found
+- `POST /replace`: `{"aids": ["<AID>", ...]}` — empty list sets fail-closed mode
+
+**Response schema** (all endpoints):
+```json
+{
+  "trusted_roots": ["<AID>", ...],
+  "count": 1,
+  "env_source": "VVP_TRUSTED_ROOT_AIDS",
+  "known_roots": {"<AID>": "GLEIF Root (vLEI chain)"},
+  "empty_set_active": false,
+  "_scope": "single-instance only — changes are not propagated to other replicas",
+  "_mutation_warning": "Changes are in-memory and apply to this instance only..."
+}
+```
+
+**Security model:**
+- Changes are **in-memory only** and apply to the current instance only
+- Verification cache is cleared automatically after every mutation
+- `_TrustedRootsStore` provides asyncio-safe snapshot isolation: each verification request reads an immutable `frozenset` snapshot at request start
+- To persist changes: update `VVP_TRUSTED_ROOT_AIDS` env var and restart all instances
+
 ### UI Pages
 
 | Method | Path | Purpose |

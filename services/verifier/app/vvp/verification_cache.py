@@ -77,18 +77,18 @@ class CachedDossierVerification:
 # Config Fingerprint
 # =============================================================================
 
-def compute_config_fingerprint() -> str:
+def compute_config_fingerprint(trusted_roots: Optional[FrozenSet[str]] = None) -> str:
     """Compute a deterministic hash of all validation-affecting config values.
 
-    Cached after first computation since config values are set at import time
-    from environment variables and never change at runtime.
+    Sprint 83: trusted_roots should be passed explicitly from a request-scoped
+    snapshot for security-critical verification paths. Falls back to
+    get_trusted_roots_current() for non-critical display and test paths.
+    All other config inputs are included so fingerprint changes on any config mutation.
     """
-    global _cached_config_fingerprint
-    if _cached_config_fingerprint is not None:
-        return _cached_config_fingerprint
-
+    if trusted_roots is None:
+        from app.core.config import get_trusted_roots_current
+        trusted_roots = get_trusted_roots_current()
     from app.core.config import (
-        TRUSTED_ROOT_AIDS,
         VVP_OPERATOR_VIOLATION_SEVERITY,
         EXTERNAL_SAID_RESOLUTION_ENABLED,
         SCHEMA_VALIDATION_STRICT,
@@ -97,19 +97,33 @@ def compute_config_fingerprint() -> str:
     )
 
     parts = [
-        f"roots={','.join(sorted(TRUSTED_ROOT_AIDS))}",
+        f"roots={','.join(sorted(trusted_roots))}",
         f"operator_severity={VVP_OPERATOR_VIOLATION_SEVERITY}",
         f"external_said={EXTERNAL_SAID_RESOLUTION_ENABLED}",
         f"schema_strict={SCHEMA_VALIDATION_STRICT}",
         f"tier2_kel={TIER2_KEL_RESOLUTION_ENABLED}",
         f"said_max_depth={EXTERNAL_SAID_MAX_DEPTH}",
     ]
-    fingerprint_str = "|".join(parts)
-    _cached_config_fingerprint = hashlib.sha256(fingerprint_str.encode()).hexdigest()[:16]
-    return _cached_config_fingerprint
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
 
 
-_cached_config_fingerprint: Optional[str] = None
+def invalidate_trusted_roots_cache() -> None:
+    """Clear the verification cache after a trusted-roots mutation.
+
+    Must be called after every add/remove/replace operation on trusted roots.
+    The verification cache entries are keyed by config_fingerprint which now
+    includes the trusted_roots snapshot, so clearing is sufficient.
+    """
+    import asyncio
+
+    cache = get_verification_cache()
+    # Schedule async clear from sync context if event loop is running
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(cache.clear())
+    except RuntimeError:
+        # No running loop (e.g., in tests); create a new one
+        asyncio.run(cache.clear())
 
 
 # =============================================================================
@@ -163,9 +177,14 @@ class VerificationResultCache:
         self._metrics = VerificationCacheMetrics()
 
     async def get(
-        self, dossier_url: str, passport_kid: str
+        self, dossier_url: str, passport_kid: str,
+        trusted_roots: Optional[FrozenSet[str]] = None,
     ) -> Optional[CachedDossierVerification]:
-        """Retrieve cached verification result. Returns deep-copied mutable fields."""
+        """Retrieve cached verification result. Returns deep-copied mutable fields.
+
+        trusted_roots: the request-scoped snapshot. Used to compute the expected
+        config fingerprint. If None, fingerprint check is skipped (backwards compat).
+        """
         key: CacheKey = (dossier_url, passport_kid)
 
         async with self._lock:
@@ -185,8 +204,10 @@ class VerificationResultCache:
                 self._metrics.misses += 1
                 return None
 
-            # Config fingerprint check
-            current_fp = compute_config_fingerprint()
+            # Config fingerprint check (Sprint 83: request-scoped trusted_roots)
+            # Always compute the expected fingerprint — trusted_roots defaults to
+            # get_trusted_roots_current() when None (see compute_config_fingerprint).
+            current_fp = compute_config_fingerprint(trusted_roots)
             if entry.config_fingerprint != current_fp:
                 log.info(
                     f"Config fingerprint mismatch for {dossier_url[:50]}... "
@@ -233,12 +254,23 @@ class VerificationResultCache:
             )
             return result
 
-    async def put(self, result: CachedDossierVerification) -> None:
-        """Store verification result. Key derived from result fields."""
+    async def put(
+        self, result: CachedDossierVerification,
+        trusted_roots: Optional[FrozenSet[str]] = None,
+    ) -> None:
+        """Store verification result. Key derived from result fields.
+
+        trusted_roots: the request-scoped snapshot used during this verification.
+        If None, fingerprint is computed from global config (backwards compat).
+        """
         key: CacheKey = (result.dossier_url, result.passport_kid)
 
-        # Set config fingerprint at put time
-        result.config_fingerprint = compute_config_fingerprint()
+        # Set config fingerprint at put time using request-scoped trusted_roots
+        if trusted_roots is not None:
+            result.config_fingerprint = compute_config_fingerprint(trusted_roots)
+        else:
+            from app.core.config import get_trusted_roots_current
+            result.config_fingerprint = compute_config_fingerprint(get_trusted_roots_current())
         result.cache_version = CACHE_VERSION
 
         async with self._lock:

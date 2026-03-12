@@ -18,7 +18,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from app.core.config import TRUSTED_ROOT_AIDS
+from app.core.config import get_trusted_roots_current as _get_trusted_roots_current
 from common.vvp.models import ACDC, ACDCChainResult
 from app.vvp.gleif import lookup_lei
 
@@ -1577,7 +1577,7 @@ def build_credential_card_vm(
     issuer = IssuerInfo(
         aid=issuer_aid,
         aid_short=_truncate_aid(issuer_aid),
-        is_trusted_root=issuer_aid in TRUSTED_ROOT_AIDS,
+        is_trusted_root=issuer_aid in _get_trusted_roots_current(),
         display_name=issuer_identity.legal_name if issuer_identity else None,
         lei=lei,
         gleif_legal_name=gleif_legal_name,

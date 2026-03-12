@@ -124,6 +124,56 @@
     </div>
 </details>
 
+<!-- Trusted Roots Management -->
+<style>
+.banner { padding: 0.6rem 1rem; border-radius: 4px; margin-bottom: 0.75rem; font-size: 0.9rem; }
+.banner-warning { background: #fff3cd; border: 1px solid #ffc107; color: #856404; }
+.banner-danger  { background: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; }
+.roots-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; margin-top: 0.5rem; }
+.roots-table th, .roots-table td { padding: 0.4rem 0.6rem; text-align: left; border-bottom: 1px solid #ddd; }
+.roots-table th { background: #f5f5f5; font-weight: 600; }
+</style>
+<details class="config-section" open id="trusted-roots-section">
+    <summary>
+        <span class="section-title">Trusted Roots</span>
+        <span class="badge badge-root" id="trusted-roots-count">Loading...</span>
+    </summary>
+
+    <div id="trusted-roots-in-memory-banner" style="display:none;"
+         class="banner banner-warning" role="alert">
+        &#9888; In-memory changes only — changes apply to this instance and are lost on restart.
+        Set <code>VVP_TRUSTED_ROOT_AIDS</code> and restart all replicas to persist.
+    </div>
+
+    <div id="trusted-roots-empty-banner" style="display:none;"
+         class="banner banner-danger" role="alert">
+        &#128683; No trusted roots configured — verifier is in <strong>fail-closed mode</strong>.
+        All credential chain validation will fail.
+    </div>
+
+    <table class="roots-table" id="trusted-roots-table">
+        <thead>
+            <tr>
+                <th>AID</th>
+                <th>Label</th>
+                <th style="width:6rem">Action</th>
+            </tr>
+        </thead>
+        <tbody id="trusted-roots-tbody">
+            <tr><td colspan="3">Loading...</td></tr>
+        </tbody>
+    </table>
+
+    <div class="admin-controls" style="margin-top:1rem;">
+        <input type="text" id="new-root-aid" placeholder="New AID (e.g. EDP1vH...)" style="width:32rem;font-family:monospace;" />
+        <button onclick="addTrustedRoot()" class="small">Add Root</button>
+    </div>
+
+    <p style="margin-top:0.75rem;font-size:0.85rem;color:#666;">
+        Mutations require <code>VVP_ADMIN_TOKEN</code> to be set. You will be prompted for the token.
+    </p>
+</details>
+
 <!-- Cache Configuration & Metrics -->
 <details class="config-section">
     <summary>
@@ -414,7 +464,120 @@ function formatBytes(bytes) {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
+// ---- Trusted Roots ----
+let _adminToken = null;  // Held in JS memory only, never persisted
+
+function _getAdminToken() {
+    if (!_adminToken) {
+        _adminToken = window.prompt('Enter VVP_ADMIN_TOKEN:');
+    }
+    return _adminToken;
+}
+
+function _authHeaders() {
+    const tok = _getAdminToken();
+    if (!tok) return null;
+    return { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok };
+}
+
+async function loadTrustedRoots() {
+    try {
+        const headers = {};
+        const resp = await fetch('/admin/trusted-roots', { headers });
+        if (resp.status === 401) {
+            // Prompt for token on 401
+            _adminToken = null;
+            const hdrs = _authHeaders();
+            if (!hdrs) return;
+            const resp2 = await fetch('/admin/trusted-roots', { headers: hdrs });
+            if (!resp2.ok) {
+                showToast('Failed to load trusted roots: ' + resp2.status, 'error');
+                return;
+            }
+            renderTrustedRoots(await resp2.json());
+            return;
+        }
+        if (!resp.ok) { showToast('Failed to load trusted roots: ' + resp.status, 'error'); return; }
+        renderTrustedRoots(await resp.json());
+    } catch (err) {
+        showToast('Failed to load trusted roots: ' + err.message, 'error');
+    }
+}
+
+function renderTrustedRoots(data) {
+    const roots = data.trusted_roots || [];
+    const labels = data.known_roots || {};
+    const countBadge = document.getElementById('trusted-roots-count');
+    countBadge.textContent = roots.length + ' root' + (roots.length !== 1 ? 's' : '');
+
+    // Banners
+    const memBanner = document.getElementById('trusted-roots-in-memory-banner');
+    const emptyBanner = document.getElementById('trusted-roots-empty-banner');
+    if (data._mutation_warning) { memBanner.style.display = ''; }
+    emptyBanner.style.display = data.empty_set_active ? '' : 'none';
+
+    const tbody = document.getElementById('trusted-roots-tbody');
+    if (roots.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="3" style="color:#c00;">No trusted roots configured</td></tr>';
+        return;
+    }
+    tbody.innerHTML = roots.map(aid => {
+        const label = labels[aid] || '—';
+        const short = aid.length > 20 ? aid.slice(0, 16) + '…' + aid.slice(-4) : aid;
+        return `<tr>
+            <td><code title="${aid}">${short}</code></td>
+            <td>${label}</td>
+            <td><button class="small secondary" onclick="removeTrustedRoot('${aid}')">Remove</button></td>
+        </tr>`;
+    }).join('');
+}
+
+async function addTrustedRoot() {
+    const aid = document.getElementById('new-root-aid').value.trim();
+    if (!aid) { showToast('Enter an AID first', 'warning'); return; }
+    const hdrs = _authHeaders();
+    if (!hdrs) return;
+    try {
+        const resp = await fetch('/admin/trusted-roots/add', {
+            method: 'POST', headers: hdrs, body: JSON.stringify({ aid })
+        });
+        const data = await resp.json();
+        if (resp.status === 401) { _adminToken = null; showToast('Token rejected — try again', 'error'); return; }
+        if (resp.status === 503) { showToast(data.detail || 'Service unavailable', 'error'); return; }
+        if (!resp.ok) { showToast(data.detail || 'Failed', 'error'); return; }
+        document.getElementById('new-root-aid').value = '';
+        document.getElementById('trusted-roots-in-memory-banner').style.display = '';
+        renderTrustedRoots(data);
+        showToast('Trusted root added', 'success');
+    } catch (err) {
+        showToast('Failed to add root: ' + err.message, 'error');
+    }
+}
+
+async function removeTrustedRoot(aid) {
+    if (!confirm('Remove trusted root?\n\n' + aid)) return;
+    const hdrs = _authHeaders();
+    if (!hdrs) return;
+    try {
+        const resp = await fetch('/admin/trusted-roots/remove', {
+            method: 'POST', headers: hdrs, body: JSON.stringify({ aid })
+        });
+        const data = await resp.json();
+        if (resp.status === 401) { _adminToken = null; showToast('Token rejected — try again', 'error'); return; }
+        if (resp.status === 503) { showToast(data.detail || 'Service unavailable', 'error'); return; }
+        if (!resp.ok) { showToast(data.detail || 'Failed', 'error'); return; }
+        document.getElementById('trusted-roots-in-memory-banner').style.display = '';
+        renderTrustedRoots(data);
+        showToast('Trusted root removed', 'success');
+    } catch (err) {
+        showToast('Failed to remove root: ' + err.message, 'error');
+    }
+}
+
 // Load data on page load
-document.addEventListener('DOMContentLoaded', loadAdminData);
+document.addEventListener('DOMContentLoaded', () => {
+    loadAdminData();
+    loadTrustedRoots();
+});
 </script>
 {% endblock %}

@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Form, Request, HTTPException
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -129,21 +129,33 @@ def create_landing(request: Request):
     return templates.TemplateResponse("create_landing.html", {"request": request})
 
 
-@app.get("/ui/admin")
-def ui_admin(request: Request):
+@app.get("/admin/ui")
+def admin_ui(request: Request):
     """Serve the admin dashboard page.
 
-    Gated by ADMIN_ENDPOINT_ENABLED - returns 404 if disabled.
+    Sprint 83: New canonical path. /ui/admin redirects here for backwards compat.
+    Gated by ADMIN_ENDPOINT_ENABLED.
     """
     from app.core.config import ADMIN_ENDPOINT_ENABLED
+    from fastapi.responses import HTMLResponse, Response
 
     if not ADMIN_ENDPOINT_ENABLED:
-        return templates.TemplateResponse(
-            "404.html",
-            {"request": request},
-            status_code=404
-        )
-    return templates.TemplateResponse("admin.html", {"request": request})
+        return templates.TemplateResponse("404.html", {"request": request}, status_code=404)
+    response = templates.TemplateResponse("admin.html", {"request": request})
+    response.headers["Cache-Control"] = "no-store, no-cache"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'self'; connect-src 'self'; style-src 'self'"
+    )
+    return response
+
+
+@app.get("/ui/admin")
+def ui_admin(request: Request):
+    """Redirect to canonical /admin/ui path (backwards compatibility)."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/admin/ui", status_code=302)
 
 
 @app.get("/healthz")
@@ -244,10 +256,11 @@ def version():
 
 
 @app.get("/admin")
-def admin():
+async def admin(request: Request):
     """Return all configurable items for operator visibility.
 
-    Gated by ADMIN_ENDPOINT_ENABLED (default: True for dev, False for prod).
+    Gated by ADMIN_ENDPOINT_ENABLED. Sprint 83: includes trusted_roots section.
+    Requires bearer token when VVP_ADMIN_TOKEN is set.
     """
     from app.core.config import (
         MAX_IAT_DRIFT_SECONDS,
@@ -260,21 +273,31 @@ def admin():
         DOSSIER_MAX_SIZE_BYTES,
         TIER2_KEL_RESOLUTION_ENABLED,
         ADMIN_ENDPOINT_ENABLED,
+        ADMIN_TOKEN,
         DOSSIER_CACHE_TTL_SECONDS,
         DOSSIER_CACHE_MAX_ENTRIES,
         VVP_VERIFICATION_CACHE_ENABLED,
+        get_trusted_roots_current,
     )
     from app.vvp.keri.tel_client import TELClient, get_tel_client
     from app.vvp.keri.witness_pool import get_witness_pool
     from app.vvp.dossier.cache import get_dossier_cache
 
     if not ADMIN_ENDPOINT_ENABLED:
-        return JSONResponse(
+        return _admin_security_headers(JSONResponse(
             status_code=404,
             content={"detail": "Admin endpoint disabled"}
-        )
+        ))
+    origin = request.headers.get("origin")
+    if origin and origin.rstrip("/") != str(request.base_url).rstrip("/"):
+        return _admin_security_headers(JSONResponse(status_code=403, content={"detail": "Cross-origin admin access not allowed"}))
+    if ADMIN_TOKEN is not None:
+        auth = request.headers.get("Authorization", "")
+        if not auth.startswith("Bearer ") or auth[7:] != ADMIN_TOKEN:
+            return _admin_security_headers(JSONResponse(status_code=401, content={"detail": "Unauthorized"}))
 
-    return {
+    trusted_roots = get_trusted_roots_current()
+    return _admin_security_headers(JSONResponse(content={
         "normative": {
             "max_iat_drift_seconds": MAX_IAT_DRIFT_SECONDS,
             "allowed_algorithms": list(ALLOWED_ALGORITHMS),
@@ -307,12 +330,17 @@ def admin():
             "dossier_cache_ttl_seconds": DOSSIER_CACHE_TTL_SECONDS,
             "dossier_cache_max_entries": DOSSIER_CACHE_MAX_ENTRIES,
         },
+        "trusted_roots": _build_trusted_roots_response(trusted_roots),
+        "cache_config": {
+            "dossier_cache_ttl_seconds": DOSSIER_CACHE_TTL_SECONDS,
+            "dossier_cache_max_entries": DOSSIER_CACHE_MAX_ENTRIES,
+        },
         "cache_metrics": {
             "dossier": get_dossier_cache().metrics().to_dict(),
             "revocation": get_tel_client().cache_metrics(),
             "verification": _get_verification_cache_metrics(),
         }
-    }
+    }))
 
 
 def _get_verification_cache_metrics() -> dict:
@@ -332,6 +360,167 @@ def _get_verification_cache_metrics() -> dict:
         "revocation_checks": m.revocation_checks,
         "revocations_found": m.revocations_found,
     }
+
+
+# =============================================================================
+# Sprint 83: Trusted Roots Admin Helpers and Endpoints
+# =============================================================================
+
+_MUTATION_WARNING = (
+    "Changes are in-memory and apply to this instance only. "
+    "Update VVP_TRUSTED_ROOT_AIDS and restart all instances to persist."
+)
+_SCOPE = "single-instance only — changes are not propagated to other replicas"
+_LAST_MUTATION_TS: float = 0.0  # Rate limiting: one mutation per 30s
+_MUTATION_RATE_LIMIT_SECONDS: float = 30.0
+
+
+def _build_trusted_roots_response(roots: frozenset[str], include_mutation_warning: bool = False) -> dict:
+    """Build the canonical trusted-roots response shape."""
+    from app.core.config import KNOWN_ROOT_LABELS
+    empty = len(roots) == 0
+    resp: dict = {
+        "trusted_roots": sorted(roots),
+        "count": len(roots),
+        "env_source": "VVP_TRUSTED_ROOT_AIDS",
+        "known_roots": {aid: KNOWN_ROOT_LABELS[aid] for aid in roots if aid in KNOWN_ROOT_LABELS},
+        "empty_set_active": empty,
+        "_scope": _SCOPE,
+    }
+    if empty:
+        resp["_warning"] = (
+            "No trusted roots configured — verifier is in fail-closed mode. "
+            "All ACDC chain validation will fail."
+        )
+    if include_mutation_warning:
+        resp["_mutation_warning"] = _MUTATION_WARNING
+    return resp
+
+
+def _require_admin(request: Request) -> None:
+    """Enforce ADMIN_ENDPOINT_ENABLED + same-origin CORS for all admin endpoints."""
+    from app.core.config import ADMIN_ENDPOINT_ENABLED
+    if not ADMIN_ENDPOINT_ENABLED:
+        raise HTTPException(status_code=404, detail="Admin endpoint disabled")
+    origin = request.headers.get("origin")
+    if origin:
+        host = str(request.base_url).rstrip("/")
+        if origin.rstrip("/") != host:
+            raise HTTPException(status_code=403, detail="Cross-origin admin access not allowed")
+
+
+def _require_admin_write(request: Request) -> None:
+    """Enforce bearer token auth for mutation endpoints. Fail-closed when no token configured."""
+    from app.core.config import ADMIN_TOKEN
+    _require_admin(request)
+    if ADMIN_TOKEN is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Admin mutations require VVP_ADMIN_TOKEN to be configured",
+        )
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer ") or auth[7:] != ADMIN_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    # Rate limiting: max one mutation per 30 seconds
+    global _LAST_MUTATION_TS
+    import time as _t
+    now = _t.time()
+    if now - _LAST_MUTATION_TS < _MUTATION_RATE_LIMIT_SECONDS:
+        remaining = int(_MUTATION_RATE_LIMIT_SECONDS - (now - _LAST_MUTATION_TS))
+        raise HTTPException(
+            status_code=503,
+            detail=f"Rate limited — wait {remaining}s before next mutation",
+        )
+    _LAST_MUTATION_TS = now
+
+
+def _validate_aid(aid: str) -> bool:
+    """Validate that aid is a syntactically valid KERI identifier prefix."""
+    try:
+        from keripy.core.coring import Prefixer
+        Prefixer(qb64=aid)
+        return True
+    except Exception:
+        pass
+    # Fallback: basic qb64 format check
+    import re
+    return bool(re.match(r'^[A-Z0-9][A-Za-z0-9_-]{43}$', aid))
+
+
+def _admin_security_headers(response: JSONResponse) -> JSONResponse:
+    response.headers["Cache-Control"] = "no-store, no-cache"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
+class TrustedRootRequest(BaseModel):
+    aid: str
+
+
+class TrustedRootReplaceRequest(BaseModel):
+    aids: list[str]
+
+
+@app.get("/admin/trusted-roots")
+async def admin_get_trusted_roots(request: Request):
+    """List current trusted root AIDs. Requires admin auth when VVP_ADMIN_TOKEN set."""
+    from app.core.config import ADMIN_ENDPOINT_ENABLED, ADMIN_TOKEN, get_trusted_roots_current
+    if not ADMIN_ENDPOINT_ENABLED:
+        return _admin_security_headers(JSONResponse(status_code=404, content={"detail": "Admin endpoint disabled"}))
+    origin = request.headers.get("origin")
+    if origin and origin.rstrip("/") != str(request.base_url).rstrip("/"):
+        return _admin_security_headers(JSONResponse(status_code=403, content={"detail": "Cross-origin admin access not allowed"}))
+    if ADMIN_TOKEN is not None:
+        auth = request.headers.get("Authorization", "")
+        if not auth.startswith("Bearer ") or auth[7:] != ADMIN_TOKEN:
+            return _admin_security_headers(JSONResponse(status_code=401, content={"detail": "Unauthorized"}))
+    roots = get_trusted_roots_current()
+    return _admin_security_headers(JSONResponse(content=_build_trusted_roots_response(roots)))
+
+
+@app.post("/admin/trusted-roots/add")
+async def admin_add_trusted_root(req: TrustedRootRequest, request: Request):
+    """Add a trusted root AID at runtime. Requires VVP_ADMIN_TOKEN."""
+    _require_admin_write(request)
+    if not _validate_aid(req.aid):
+        raise HTTPException(status_code=422, detail=f"Invalid AID: not a valid KERI identifier prefix")
+    from app.core.config import _trusted_roots_store
+    from app.vvp.verification_cache import invalidate_trusted_roots_cache
+    new_roots = await _trusted_roots_store.add(req.aid)
+    invalidate_trusted_roots_cache()
+    log.info(f"admin: trusted root added: {req.aid}")
+    return _admin_security_headers(JSONResponse(content=_build_trusted_roots_response(new_roots, include_mutation_warning=True)))
+
+
+@app.post("/admin/trusted-roots/remove")
+async def admin_remove_trusted_root(req: TrustedRootRequest, request: Request):
+    """Remove a trusted root AID at runtime. Requires VVP_ADMIN_TOKEN."""
+    _require_admin_write(request)
+    from app.core.config import _trusted_roots_store
+    from app.vvp.verification_cache import invalidate_trusted_roots_cache
+    try:
+        new_roots = await _trusted_roots_store.remove(req.aid)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="AID not found in trusted roots")
+    invalidate_trusted_roots_cache()
+    log.info(f"admin: trusted root removed: {req.aid}")
+    return _admin_security_headers(JSONResponse(content=_build_trusted_roots_response(new_roots, include_mutation_warning=True)))
+
+
+@app.post("/admin/trusted-roots/replace")
+async def admin_replace_trusted_roots(req: TrustedRootReplaceRequest, request: Request):
+    """Replace entire trusted roots set atomically. Empty list sets fail-closed state. Requires VVP_ADMIN_TOKEN."""
+    _require_admin_write(request)
+    for i, aid in enumerate(req.aids):
+        if not _validate_aid(aid):
+            raise HTTPException(status_code=422, detail=f"Invalid AID at index {i}: not a valid KERI identifier prefix")
+    from app.core.config import _trusted_roots_store
+    from app.vvp.verification_cache import invalidate_trusted_roots_cache
+    new_roots = await _trusted_roots_store.replace(set(req.aids))
+    invalidate_trusted_roots_cache()
+    log.info(f"admin: trusted roots replaced, count={len(new_roots)}")
+    return _admin_security_headers(JSONResponse(content=_build_trusted_roots_response(new_roots, include_mutation_warning=True)))
 
 
 class LogLevelRequest(BaseModel):
@@ -624,7 +813,7 @@ async def credential_graph(req: CredentialGraphRequest):
     - Edges showing credential relationships (vetting, delegation, issued_by)
     - Layer information for hierarchical visualization
     """
-    from app.core.config import TRUSTED_ROOT_AIDS
+    from app.core.config import get_trusted_roots_current
     from app.vvp.acdc import (
         ACDC,
         CredentialStatus,
@@ -665,7 +854,7 @@ async def credential_graph(req: CredentialGraphRequest):
         # Build the graph
         graph = build_credential_graph(
             dossier_acdcs=dossier_acdcs,
-            trusted_roots=set(TRUSTED_ROOT_AIDS),
+            trusted_roots=get_trusted_roots_current(),
             revocation_status=revocation,
         )
 
@@ -978,6 +1167,7 @@ async def ui_fetch_dossier(
             # Build chain_info for background revocation check
             from app.vvp.acdc.graph import build_credential_graph, build_all_credential_chains
             from app.vvp.acdc import parse_acdc, ACDC
+            from app.core.config import get_trusted_roots_current
 
             dossier_acdcs: Dict[str, ACDC] = {}
             for node in nodes:
@@ -999,7 +1189,7 @@ async def ui_fetch_dossier(
             if dossier_acdcs:
                 graph = build_credential_graph(
                     dossier_acdcs=dossier_acdcs,
-                    trusted_roots=set(TRUSTED_ROOT_AIDS),
+                    trusted_roots=get_trusted_roots_current(),
                 )
                 chain_info = build_all_credential_chains(graph)
 
@@ -1367,7 +1557,7 @@ async def ui_credential_graph(
 
     Uses Sprint 21/22 view-model path for enhanced credential display.
     """
-    from app.core.config import TRUSTED_ROOT_AIDS
+    from app.core.config import get_trusted_roots_current
     from app.vvp.acdc import (
         ACDC,
         CredentialStatus,
@@ -1408,7 +1598,7 @@ async def ui_credential_graph(
 
         graph = build_credential_graph(
             dossier_acdcs=dossier_acdcs,
-            trusted_roots=set(TRUSTED_ROOT_AIDS),
+            trusted_roots=get_trusted_roots_current(),
             revocation_status=None,
         )
 
@@ -2036,7 +2226,7 @@ async def ui_browse_said(
     )
     from app.vvp.keri.tel_client import TELClient, CredentialStatus
     from app.vvp.keri import get_credential_resolver
-    from app.core.config import TRUSTED_ROOT_AIDS
+    from app.core.config import get_trusted_roots_current
 
     try:
         # Check cache first
@@ -2080,7 +2270,7 @@ async def ui_browse_said(
             if dossier_acdcs_for_chain:
                 graph_for_chain = build_credential_graph(
                     dossier_acdcs=dossier_acdcs_for_chain,
-                    trusted_roots=set(TRUSTED_ROOT_AIDS),
+                    trusted_roots=get_trusted_roots_current(),
                 )
                 chain_info = build_all_credential_chains(graph_for_chain)
 
@@ -2164,7 +2354,7 @@ async def ui_browse_said(
         credential_resolver = get_credential_resolver()
         graph = await build_credential_graph_with_resolution(
             dossier_acdcs=dossier_acdcs,
-            trusted_roots=set(TRUSTED_ROOT_AIDS),
+            trusted_roots=get_trusted_roots_current(),
             revocation_status=graph_revocation or None,
             issuer_identities=sync_identities,
             credential_resolver=credential_resolver,
@@ -2336,7 +2526,7 @@ async def ui_jwt_explore(
     )
     from app.vvp.keri.tel_client import CredentialStatus
     from app.vvp.keri import get_credential_resolver
-    from app.core.config import TRUSTED_ROOT_AIDS
+    from app.core.config import get_trusted_roots_current
 
     try:
         # Step 1: Parse JWT to extract evd URL
@@ -2409,7 +2599,7 @@ async def ui_jwt_explore(
             if dossier_acdcs_for_chain:
                 graph_for_chain = build_credential_graph(
                     dossier_acdcs=dossier_acdcs_for_chain,
-                    trusted_roots=set(TRUSTED_ROOT_AIDS),
+                    trusted_roots=get_trusted_roots_current(),
                 )
                 chain_info = build_all_credential_chains(graph_for_chain)
 
@@ -2491,7 +2681,7 @@ async def ui_jwt_explore(
         credential_resolver = get_credential_resolver()
         graph = await build_credential_graph_with_resolution(
             dossier_acdcs=dossier_acdcs,
-            trusted_roots=set(TRUSTED_ROOT_AIDS),
+            trusted_roots=get_trusted_roots_current(),
             revocation_status=graph_revocation or None,
             issuer_identities=sync_identities,
             credential_resolver=credential_resolver,
@@ -2700,7 +2890,7 @@ async def ui_simple_verify(
     )
     from app.vvp.keri.tel_client import TELClient, CredentialStatus
     from app.vvp.keri import get_credential_resolver
-    from app.core.config import TRUSTED_ROOT_AIDS
+    from app.core.config import get_trusted_roots_current
 
     try:
         # Step 1: Parse JWT to extract evd URL, kid, and iat
@@ -2831,7 +3021,7 @@ async def ui_simple_verify(
         credential_resolver = get_credential_resolver()
         graph = await build_credential_graph_with_resolution(
             dossier_acdcs=dossier_acdcs,
-            trusted_roots=set(TRUSTED_ROOT_AIDS),
+            trusted_roots=get_trusted_roots_current(),
             revocation_status=graph_revocation or None,
             issuer_identities=sync_identities,
             credential_resolver=credential_resolver,

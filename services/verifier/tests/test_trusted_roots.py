@@ -1,6 +1,8 @@
 """Tests for trusted root AID configuration.
 
 Per VVP §5.1-7 - verifier MUST accept configured root of trust.
+Sprint 83: TRUSTED_ROOT_AIDS constant replaced with _TrustedRootsStore.
+Tests updated to use get_trusted_roots_current() and the store's snapshot.
 """
 
 import os
@@ -8,7 +10,7 @@ import pytest
 
 
 class TestTrustedRootsConfig:
-    """Tests for TRUSTED_ROOT_AIDS configuration."""
+    """Tests for trusted roots configuration (Sprint 83: now via _TrustedRootsStore)."""
 
     def test_default_gleif_root(self):
         """Test that default roots include GLEIF Root AID."""
@@ -20,12 +22,13 @@ class TestTrustedRootsConfig:
         from app.core import config
         importlib.reload(config)
 
+        roots = config.get_trusted_roots_current()
         # GLEIF Root (production) from https://gleif.org/.well-known/keri/oobi/...
-        assert "EDP1vHcw_wc4M__Fj53-cJaBnZZASd-aMTaSyWEQ-PC2" in config.TRUSTED_ROOT_AIDS
+        assert "EDP1vHcw_wc4M__Fj53-cJaBnZZASd-aMTaSyWEQ-PC2" in roots
         # NOTE: EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao is the QVI SCHEMA SAID,
-        # not an issuer AID, so it should NOT be in TRUSTED_ROOT_AIDS.
-        assert "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao" not in config.TRUSTED_ROOT_AIDS
-        assert len(config.TRUSTED_ROOT_AIDS) == 1
+        # not an issuer AID, so it should NOT be in trusted roots.
+        assert "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao" not in roots
+        assert len(roots) == 1
 
     def test_single_custom_root(self):
         """Test single custom root AID from env."""
@@ -35,8 +38,9 @@ class TestTrustedRootsConfig:
         from app.core import config
         importlib.reload(config)
 
-        assert "DTestRoot1234567890123456789012345678901234" in config.TRUSTED_ROOT_AIDS
-        assert len(config.TRUSTED_ROOT_AIDS) == 1
+        roots = config.get_trusted_roots_current()
+        assert "DTestRoot1234567890123456789012345678901234" in roots
+        assert len(roots) == 1
 
         # Cleanup
         os.environ.pop("VVP_TRUSTED_ROOT_AIDS", None)
@@ -49,9 +53,10 @@ class TestTrustedRootsConfig:
         from app.core import config
         importlib.reload(config)
 
-        assert "DRoot1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" in config.TRUSTED_ROOT_AIDS
-        assert "DRoot2_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB" in config.TRUSTED_ROOT_AIDS
-        assert len(config.TRUSTED_ROOT_AIDS) == 2
+        roots = config.get_trusted_roots_current()
+        assert "DRoot1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" in roots
+        assert "DRoot2_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB" in roots
+        assert len(roots) == 2
 
         # Cleanup
         os.environ.pop("VVP_TRUSTED_ROOT_AIDS", None)
@@ -64,9 +69,10 @@ class TestTrustedRootsConfig:
         from app.core import config
         importlib.reload(config)
 
-        assert "DRoot1_AAA" in config.TRUSTED_ROOT_AIDS
-        assert "DRoot2_BBB" in config.TRUSTED_ROOT_AIDS
-        assert "  DRoot1_AAA  " not in config.TRUSTED_ROOT_AIDS
+        roots = config.get_trusted_roots_current()
+        assert "DRoot1_AAA" in roots
+        assert "DRoot2_BBB" in roots
+        assert "  DRoot1_AAA  " not in roots
 
         # Cleanup
         os.environ.pop("VVP_TRUSTED_ROOT_AIDS", None)
@@ -79,8 +85,9 @@ class TestTrustedRootsConfig:
         from app.core import config
         importlib.reload(config)
 
-        assert "" not in config.TRUSTED_ROOT_AIDS
-        assert len(config.TRUSTED_ROOT_AIDS) == 2
+        roots = config.get_trusted_roots_current()
+        assert "" not in roots
+        assert len(roots) == 2
 
         # Cleanup
         os.environ.pop("VVP_TRUSTED_ROOT_AIDS", None)
@@ -93,15 +100,27 @@ class TestTrustedRootsConfig:
         from app.core import config
         importlib.reload(config)
 
+        roots = config.get_trusted_roots_current()
         # Should fall back to GLEIF root AID
-        assert "EDP1vHcw_wc4M__Fj53-cJaBnZZASd-aMTaSyWEQ-PC2" in config.TRUSTED_ROOT_AIDS
-        assert len(config.TRUSTED_ROOT_AIDS) == 1
+        assert "EDP1vHcw_wc4M__Fj53-cJaBnZZASd-aMTaSyWEQ-PC2" in roots
+        assert len(roots) == 1
 
         # Cleanup
         os.environ.pop("VVP_TRUSTED_ROOT_AIDS", None)
 
     def test_roots_is_frozenset(self):
-        """Test that TRUSTED_ROOT_AIDS is a frozenset (immutable)."""
+        """Test that get_trusted_roots_current() returns a frozenset (immutable)."""
         from app.core import config
 
-        assert isinstance(config.TRUSTED_ROOT_AIDS, frozenset)
+        roots = config.get_trusted_roots_current()
+        assert isinstance(roots, frozenset)
+
+    def test_store_snapshot_is_frozenset(self):
+        """Test that _trusted_roots_store.snapshot() returns a frozenset."""
+        import asyncio
+        from app.core import config
+
+        snap = asyncio.get_event_loop().run_until_complete(
+            config._trusted_roots_store.snapshot()
+        )
+        assert isinstance(snap, frozenset)

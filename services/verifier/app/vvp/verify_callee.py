@@ -495,6 +495,10 @@ async def verify_callee_vvp(
     request_id = str(uuid.uuid4())
     errors: List[ErrorDetail] = []
 
+    # Sprint 83: Take an immutable snapshot of trusted roots at request entry.
+    from app.core.config import get_trusted_roots_snapshot as _get_trusted_roots_snapshot
+    _trusted_roots_snapshot: frozenset[str] = await _get_trusted_roots_snapshot()
+
     passport_claim = ClaimBuilder("passport_verified")
     dossier_claim = ClaimBuilder("dossier_verified")
 
@@ -776,7 +780,7 @@ async def verify_callee_vvp(
         for _ev in _cached_verification.dossier_claim_evidence:
             dossier_claim.add_evidence(_ev)
     elif dag is not None and not _verification_cache_hit:
-        from app.core.config import TRUSTED_ROOT_AIDS, SCHEMA_VALIDATION_STRICT
+        from app.core.config import SCHEMA_VALIDATION_STRICT
         from app.vvp.acdc import validate_credential_chain, ACDCChainInvalid
         from app.vvp.verify import _find_leaf_credentials
 
@@ -799,7 +803,7 @@ async def verify_callee_vvp(
             try:
                 result = await validate_credential_chain(
                     acdc=leaf_acdc,
-                    trusted_roots=TRUSTED_ROOT_AIDS,
+                    trusted_roots=_trusted_roots_snapshot,
                     dossier_acdcs=dossier_acdcs,
                     pss_signer_aid=pss_signer_aid,
                     validate_schemas=SCHEMA_VALIDATION_STRICT,

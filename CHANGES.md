@@ -1,5 +1,26 @@
 # VVP Verifier Change Log
 
+## Sprint 83: Runtime-Mutable Trusted Roots Admin — 2026-03-12
+
+**Files changed (monorepo `services/verifier/`):**
+- `app/core/config.py` — Added `_TrustedRootsStore` class, `_trusted_roots_store` singleton, `get_trusted_roots_snapshot()` (async), `get_trusted_roots_current()` (sync), `ADMIN_TOKEN`; removed `TRUSTED_ROOT_AIDS` constant
+- `app/main.py` — Added admin trusted-roots router (`GET /admin/trusted-roots`, `POST /add|remove|replace`); replaced all `TRUSTED_ROOT_AIDS` references with `get_trusted_roots_current()`; added admin UI endpoint
+- `app/vvp/verification_cache.py` — `compute_config_fingerprint()` now takes `Optional[FrozenSet[str]]` (defaults to `get_trusted_roots_current()`); fingerprint check always runs
+- `app/templates/admin.html` — Added Trusted Roots section with live table, add/remove controls, token prompt, in-memory warning banners
+- `tests/test_admin_trusted_roots.py` — 23 new tests covering all admin endpoints, auth, rate limiting, AID validation, store operations
+- `tests/test_trusted_roots.py` — Rewritten to use `get_trusted_roots_current()` and `_TrustedRootsStore` interface
+- `tests/test_credential_viewmodel.py` — Updated to use `get_trusted_roots_current()`
+- `knowledge/api-reference.md` — Documented new trusted-roots admin endpoints
+
+**Files changed (OVC-VVP-Verifier repo):**
+- `app/config.py` — Added `_TrustedRootsStore`, `get_trusted_roots_current()`, `get_trusted_roots_snapshot()`, `ADMIN_TOKEN`, `KNOWN_ROOT_LABELS`; `config_fingerprint()` takes optional `trusted_roots`
+- `app/admin.py` — New file: admin router with fail-closed auth, rate limiting, trusted roots CRUD endpoints
+- `app/main.py` — Registered admin router; added `GET /admin/ui` endpoint
+- `app/templates/admin.html` — New file: admin UI with Jinja2 server-side roots table, JS add/remove, toast notifications
+- `tests/test_admin.py` — New file: 102 tests covering config store, all admin endpoints, auth, rate limiting, UI
+
+**Commit:** `<sha>`
+
 ## Sprint 82: OVC-VVP-Verifier Sync — 2026-03-12
 
 **Files changed (OVC repo — https://github.com/Rich-Connexions-Ltd/OVC-VVP-Verifier):**

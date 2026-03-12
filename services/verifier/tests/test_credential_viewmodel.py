@@ -471,10 +471,11 @@ class TestIssuerInfo:
     def test_trusted_root_detection(self):
         """Trusted root status is determined from config."""
         # Use the actual GLEIF root from config
-        from app.core.config import TRUSTED_ROOT_AIDS
+        from app.core.config import get_trusted_roots_current
+        trusted_roots = get_trusted_roots_current()
 
-        if TRUSTED_ROOT_AIDS:
-            root_aid = next(iter(TRUSTED_ROOT_AIDS))
+        if trusted_roots:
+            root_aid = next(iter(trusted_roots))
             acdc = ACDC(
                 version="",
                 said="E" + "A" * 43,
