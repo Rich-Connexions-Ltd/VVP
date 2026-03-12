@@ -101,7 +101,7 @@
       </condition>
     </extension>
 
-    <!-- VVP Loopback Inbound: calls from verification service with VVP headers -->
+    <!-- VVP Loopback Inbound: calls from OVC-VVP-Verifier (port 5072) with VVP headers -->
     <extension name="vvp-loopback-inbound">
       <condition field="${sofia_profile_name}" expression="^external$"/>
       <condition field="destination_number" expression="^\+?4419233110(\d{2})$">
@@ -224,7 +224,7 @@
   </context>
 
   <!-- Redirected context: handles calls after 302 redirect from signing service -->
-  <!-- Sprint 48: Routes through verification service (5071) before delivering to extension -->
+  <!-- Routes through OVC-VVP-Verifier (5072) before delivering to extension -->
   <context name="redirected">
 
     <!-- VVP Redirect: signing 302 -> verification service -> extension -->
@@ -249,8 +249,8 @@
         <action application="set" data="continue_on_fail=true"/>
         <action application="set" data="bridge_timeout=30"/>
         <action application="set" data="sip_invite_timeout=35"/>
-        <action application="log" data="INFO [VVP] Bridging to verification service at 127.0.0.1:5071"/>
-        <action application="bridge" data="sofia/external/${destination_number}@127.0.0.1:5071"/>
+        <action application="log" data="INFO [VVP] Bridging to OVC-VVP-Verifier at 127.0.0.1:5072"/>
+        <action application="bridge" data="sofia/external/${destination_number}@127.0.0.1:5072"/>
       </condition>
     </extension>
 
