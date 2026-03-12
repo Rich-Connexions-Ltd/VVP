@@ -1,5 +1,26 @@
 # VVP Verifier Change Log
 
+## Sprint 82: OVC-VVP-Verifier Sync — 2026-03-12
+
+**Files changed (OVC repo — https://github.com/Rich-Connexions-Ltd/OVC-VVP-Verifier):**
+- `app/vvp/schema.py` — Added BrandOwner, ExtendedBrand, VetterCert, VetterGov SAIDs; extended TNAlloc with second SAID; `is_brand_schema()` helper
+- `app/vvp/canonical.py` — Added `compute_acdc_said()` with ACDC canonical field ordering matching keripy serialization
+- `app/vvp/acdc.py` — Uses `compute_acdc_said()` for credentials without `t` field; brand credentials treated as display-only leaf nodes
+- `app/vvp/tel.py` — Added `bis` (backerless issuance) to recognized TEL event types
+- `app/vvp/passport.py` — `card` field changed to `Optional[List[str]]` (RFC 6350 vCard array); `call_id` and `cseq` fields added
+- `app/vvp/fetch.py` — New SSRF-safe HTTP fetch layer; HTTPS-only, no proxy injection, 10 MB cap
+- `app/config.py` — Added `ALLOW_HTTP`, `FETCH_MAX_SIZE_BYTES`, `FETCH_TIMEOUT_SECONDS`, `TEL_SOURCE` vars
+- `app/vvp/dossier.py` — `fetch_dossier()` now uses `safe_get()` from fetch.py
+- All 24 Python source files — Copyright updated to "Open Verifiable Calling Alliance"
+- `LICENSE`, `ALGORITHMS.md`, `CHANGES.md` — Updated/created for v0.2.0
+
+**Commits (OVC repo):**
+- `e891f16` — P1 bug fixes
+- `4e77793` — P2 protocol
+- `e568f04` — P3 performance
+- `9260ca6` — Documentation + copyright
+- Tagged **v0.2.0**
+
 ## Sprint 80: TEL Publication to Witnesses
 
 **Date:** 2026-03-06

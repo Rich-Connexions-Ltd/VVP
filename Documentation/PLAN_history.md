@@ -24813,3 +24813,216 @@ None — all architectural questions resolved by R1 review feedback.
 | `knowledge/api-reference.md` | +6 | KERI Agent readyz endpoints |
 | `knowledge/deployment.md` | +10 | Readiness-gated startup sequence |
 
+
+---
+
+# Sprint 82: OVC-VVP-Verifier Sync
+
+_Archived: 2026-03-12_
+
+# Sprint 82: OVC-VVP-Verifier Sync
+
+## Problem Statement
+
+The open-source standalone verifier (OVC-VVP-Verifier) was cut from the monorepo at Sprint 54 (2026-02-10, commit `0bc4347`). Since then, 31 commits across Sprints 58–81 have improved the monorepo verifier with bug fixes, spec-compliance corrections, and performance optimisations. The open-source repo is now materially behind, including critical correctness bugs (ACDC SAID computation, signature verification, revocation fallback).
+
+## Spec References
+
+- §5.1: PASSporT construction — `card`, `call-id`, `cseq` claims
+- §4.1.2: vCard `card` claim — RFC 6350 property string array format
+- §5.4: Revocation status — UNKNOWN must not be treated as REVOKED
+- §3.2: Brand credential — recognised as APE-equivalent for dossier validation
+
+## Current State
+
+OVC repo HEAD: `47b86d8` ("Fix repo references after transfer to Rich-Connexions-Ltd")
+Monorepo sync baseline: `0bc4347` (2026-02-10)
+
+The OVC verifier has the following known defects vs. current monorepo:
+1. ACDC SAID computation doesn't match keripy canonicalization → false verification failures
+2. ACDC signature check fails when issuer AID ≠ signer AID (delegated credentials)
+3. vCard `card` claim uses wrong format (single string vs RFC 6350 array)
+4. Revocation UNKNOWN treated as failure → legitimate calls rejected
+5. Brand credential `u` (nonce) field incorrectly required → brand creds rejected
+6. Missing VVP schemas in schema registry → dossier verifies as INDETERMINATE
+
+## Proposed Solution
+
+### Approach
+
+**Port by file, not by commit.** The OVC repo uses a flat `app/vvp/` layout while the monorepo has evolved deep subdirectories. Rather than git cherry-pick (which would fail due to path differences), we diff each OVC file against its monorepo equivalent and extract the relevant logic, adapting to the flat structure.
+
+Port in priority order: bugs → protocol → performance. Each priority is a logical commit.
+
+### Alternatives Considered
+
+| Alternative | Pros | Cons | Why Rejected |
+|-------------|------|------|--------------|
+| Re-generate OVC from scratch | Clean slate | Loses OVC-specific test patterns, deployment files, ~6 post-release fixes | Wasteful — structural differences are manageable |
+| Git cherry-pick | Automated | Paths differ entirely; every pick would conflict | Not viable |
+| Port by commit | Traceable | 31 commits, many are monorepo-specific or need splitting | Too granular for file-structure-different repos |
+
+### Detailed Design
+
+#### Priority 1: Bug Fixes
+
+**`app/vvp/canonical.py` — SAID computation fix**
+Monorepo: `4daee15`. Two requirements:
+1. *Top-level key ordering*: Replace naive `json.dumps(sort_keys=True)` with keripy-compatible canonical ordering (KERI uses a specific field ordering, not lexicographic). Port the `keri_canonical()` function.
+2. *Recursive SAID computation*: Nested sections (e.g., `a`, `e`, `r` attribute blocks) must have their own SAIDs computed in compact canonical form before the outer credential SAID is computed. The fix must traverse the full ACDC structure depth-first, computing inner SAIDs first. This matches ACDC spec §2.3 which requires compact labels for nested sections.
+
+**`app/vvp/acdc.py` — Three fixes**
+1. *Non-signer issuer AID* (`5626b5f`): When the CESR attachment signing AID ≠ the credential `i` (issuer) AID (e.g., delegated issuance), two checks are required in sequence:
+   - **Anchor-only historical key state**: The signer's establishment event must be identified via an authenticated KERI anchor — specifically the KEL event whose sequence number (`sn`) is embedded in the credential's TEL `iss` event anchor, or the `anc` (anchor) block in the credential's CESR attachment if present. **No timestamp or body-metadata fallback is permitted.** If neither anchor is present in the dossier material, the credential fails with `INDETERMINATE` — we never infer which keys to verify against. Verify the CESR signature against the key(s) from the identified establishment event.
+   - **Signer authorization**: Separately confirm the signing AID was authorized to issue on behalf of the credential `i` AID (via delegation event in the `i` AID's KEL, or a delegated issuance chain). The `issuer_key_cache` (`dict[tuple[str, int], list[VerKey]]`) maps `(signer_aid, anchor_sn)` → keys-at-that-establishment-event across the chain walk, avoiding N+1 OOBI lookups. Keying by `(aid, anchor_sn)` correctly handles rotating issuers: two credentials from the same issuer AID that anchor to different sequence numbers get distinct cache entries and are each verified against the keys valid at their own anchor event. Never cache by AID alone.
+   A credential fails if either check fails; a credential with a valid historical signature from an unauthorized signer is rejected; a credential whose anchor cannot be authenticated returns INDETERMINATE.
+2. *Optional `u` nonce* (`b3b4310`, `d5be1ef`): `u` field in ACDC body should be `Optional[str]` — schema validation must not require it.
+3. *Brand credential as optional display evidence only* (`b3b4310`): `ProvenantBrandSchema` credentials are **not authority-bearing**. They are optional referential/display evidence that may appear in a brand-specific dossier edge (e.g., a `brand` label in the dossier graph). They do not satisfy, substitute for, or count toward any trust-root, delegation, TN-rights, vetter-certification, or APE chain position. The chain validator treats Brand credentials as leaf nodes only — present or absent, they do not affect the pass/fail outcome of any authority check. Their SAIDs are registered in `schema.py` solely so their presence does not trigger an INDETERMINATE result for an unknown schema.
+
+**`app/vvp/revocation.py` — UNKNOWN fallback** (`2652ea8`)
+The `UNKNOWN` TEL status (witness hasn't seen the TEL event yet) must be resolved carefully:
+- If the dossier contains a cryptographically anchored TEL issuance event (`iss` SAID bound to the credential `d` field and anchored in the issuer KEL), treat `UNKNOWN` as `ACTIVE` — the issuance is on-chain even if the witness query is lagging.
+- If no TEL issuance evidence exists in the dossier at all, return `INDETERMINATE` — do not assume `ACTIVE` from generic dossier metadata.
+- If a TEL `rev` (revocation) event is anchored in the dossier (cryptographically bound), return `REVOKED` regardless of witness query result.
+This three-way logic replaces the simpler "UNKNOWN → ACTIVE from dossier" fallback. The TEL source remains witness-direct for the standalone verifier; the key distinction is whether issuance evidence is cryptographically present in the dossier before trusting ACTIVE status.
+
+**`app/vvp/schema.py` — Missing VVP schemas** (`e7d4b30`)
+Add the VVP-specific schema SAIDs (ProvenantBrand, TNAlloc, TNVoiceAuth, OVC Vetter) to the schema registry so dossier validation doesn't fail INDETERMINATE on unknown schema types.
+
+**`app/vvp/verify.py` — vCard format** (`4f9c73f`)
+The `card` claim serialization must use RFC 6350 property string array format (e.g. `["FN:Acme Corp", "TEL:+12025551234"]`) not a plain dict. Port the `_format_vcard_claim()` helper.
+
+#### Priority 2: Spec-Compliance & Protocol
+
+**`app/vvp/passport.py` — PASSporT claims** (Sprint 58)
+Add `card`, `call-id`, and `cseq` claims to PASSporT construction and parsing:
+- `card`: RFC 6350 vCard array built from brand credential data
+- `call-id`: SIP Call-ID header value for dialog correlation. On parse: reject values containing control characters (U+0000–U+001F, U+007F) or characters outside the RFC 3261 token grammar. On emit: sanitize via the same validator before embedding.
+- `cseq`: CSeq value (`"<seq> METHOD"` format). On parse: validate integer + whitespace + method token; reject otherwise. On emit: validate before embedding.
+Both `call-id` and `cseq` are informational claims derived from SIP headers; the verifier validates their syntax but does not perform SIP-layer correlation against live call state.
+
+**`ALGORITHMS.md` + `README.md` + `CHANGES.md` — Documentation** *(mandatory deliverables)*
+Six explicit documentation tasks:
+1. **PASSporT claims**: Update `ALGORITHMS.md` PASSporT section with `card`, `call-id`, and `cseq` claim definitions, format (RFC 6350 vCard array for `card`), optionality, and examples. Explicitly document: `card` is informational in the JWT — verifier treats dossier credential chain as authoritative for brand identity; `card` is not verified against the dossier.
+2. **README API table**: Add new PASSporT claim fields to `/verify` response schema in `README.md`, with descriptions and examples.
+3. **Historical key state**: Add `ALGORITHMS.md` section "Delegated Credential Verification" explaining historical key state lookup vs. current key fallback, and how signer authorization is checked separately.
+4. **issuer_key_cache**: Document in `ALGORITHMS.md` under "ACDC Signature Verification" — explains the per-call `dict[AID → keys-at-anchor-event]` that prevents N+1 OOBI lookups.
+5. **Schema SAID glossary**: Add glossary entries in `ALGORITHMS.md` for all new VVP-specific schema SAIDs (ProvenantBrand, TNAlloc, TNVoiceAuth, OVC Vetter) — SAID value, credential type, role in dossier chain.
+6. **Config documentation**: Update `README.md` environment variable table with all 6 new config variables (`ALLOW_HTTP_WITNESSES`, `ALLOWED_EXTERNAL_HOSTS`, `KEY_STATE_CACHE_MAX_SIZE`, `KEY_STATE_CACHE_TTL_SECONDS`, `TEL_NEGATIVE_CACHE_TTL_SECONDS`, `TEL_SOURCE`) including default values and deployment guidance (e.g. per-worker cache sizing implications for multi-worker deployments — each uvicorn worker has an independent in-process cache, so cache entries are not shared across workers).
+7. **CHANGES.md**: Add a `v0.2.0` entry listing all user-facing behavior changes: new PASSporT claims, UNKNOWN→evidence-required logic, SSRF strict defaults (https-only), brand credential scoping, recursive SAID computation, new config variables.
+
+**`app/vvp/verify.py` — Brand derived from dossier only** (Sprint 60)
+Remove any code path that reads brand/caller-ID data from the JWT `card` claim on the verification side. Brand identity must come from the dossier's credential chain. The `card` claim is for signalling only; verifier must not trust it as authoritative.
+
+**`app/vvp/dossier.py` — TNAlloc credentials**
+Include TNAlloc credential type in the dossier fetch and parse logic. TNAlloc grants the right to use a range of telephone numbers — required for TN authorization validation.
+
+#### Priority 3: Performance
+
+**`app/vvp/fetch.py` — New common fetch layer** *(covers all external fetch surfaces)*
+A new module centralises all outbound HTTP requests from the verifier (TEL witness queries, OOBI `kid` resolution, dossier `evd` fetches). The shared `httpx.AsyncClient` and URL validation policy live here and are applied uniformly before any request. This replaces ad-hoc per-module client creation.
+
+*Shared client*: `timeout=httpx.Timeout(connect=3.0, read=10.0, write=5.0, pool=1.0)`, `limits=httpx.Limits(max_connections=50, max_keepalive_connections=20)`, `verify=True`, `follow_redirects=False`, `trust_env=False` (disables HTTP_PROXY/HTTPS_PROXY env var proxy injection). Initialized in FastAPI lifespan, closed on shutdown. Response bodies are capped at 10 MB (`MAX_RESPONSE_BYTES=10_485_760`); responses exceeding this are rejected with `DOSSIER_FETCH_FAILED`. Content-type is validated per fetch surface (dossier fetches expect `application/json` or CESR MIME types).
+
+*`safe_get(url, ...)` entry point*: Every module (tel.py, dossier.py, acdc.py) calls `safe_get()` from `fetch.py` rather than calling httpx directly. This ensures SSRF policy cannot be bypassed by a module-level client.
+
+*URL validation policy (strict defaults)*:
+- `https://` only. Exception: `ALLOW_HTTP_WITNESSES=true` env var enables `http://` for local dev (not default).
+- Block all RFC 1918 private ranges, loopback, link-local, multicast, and IANA special-purpose ranges (RFC 5735/5156). Resolution against DNS does not bypass IP-range checks — the resolved IP must also pass.
+- No built-in bypass list. Additional allowed hosts require explicit `ALLOWED_EXTERNAL_HOSTS=host1,host2` operator config (parsed URL hostname match, not prefix).
+- Raises `VVPIdentityError(ErrorCode.DOSSIER_FETCH_FAILED, "SSRF: disallowed URL")` on violation.
+
+**`app/vvp/tel.py` — Caching (uses fetch.py for HTTP)**
+Tel.py is updated to call `fetch.safe_get()` instead of managing its own client.
+
+1. *Range-based KEL key state cache*: Cache key state by `(AID, first_event_sn, last_event_sn)`. `RangeKeyStateCache`: `maxsize=1000` LRU, `ttl=300s`. Config: `KEY_STATE_CACHE_MAX_SIZE` and `KEY_STATE_CACHE_TTL_SECONDS`.
+2. *Negative TEL result caching*: Cache TEL `UNKNOWN`/`404` per `(registry_AID, credential_SAID)`. Cache: `maxsize=500`, `ttl=30s`. Config: `TEL_NEGATIVE_CACHE_TTL_SECONDS`.
+3. *TEL source strategy*: `TEL_SOURCE` env var, values `witness-direct` (default) or `dossier-only`. `dossier-only` skips live witness TEL probes entirely and relies on dossier-embedded TEL evidence — for KEL-only deployments where witnesses don't serve TEL endpoints.
+
+**`app/main.py` — Lifespan wiring**
+Wire the shared `httpx.AsyncClient` into the FastAPI lifespan so it is created on startup and closed on shutdown.
+
+### Data Flow (unchanged, for reference)
+
+```
+SIP INVITE → parse VVP-Identity → parse PASSporT JWT
+          → verify Ed25519 sig → fetch dossier
+          → validate ACDC chain (canonical SAID, key state, revocation)
+          → validate TN authorization
+          → SIP 302 redirect with X-VVP-* headers
+```
+
+### Error Handling
+
+All ported error handling follows the existing OVC pattern: raise `VVPIdentityError` / `PassportError` with a structured `ErrorCode`. No new error codes are introduced.
+
+### Test Strategy
+
+- Existing OVC test suite must pass unchanged after each priority block
+- New unit tests for each bug fix (one failing test per bug → green after fix)
+- New tests for PASSporT claims (card, call-id, cseq construction and parsing)
+- SSRF validation: test blocked private IPs, loopback, and valid external URLs
+- Range cache: test cache hit/miss behaviour, eviction
+
+## Files to Create/Modify (OVC repo)
+
+| File | Action | Purpose |
+|------|--------|---------|
+| `app/vvp/canonical.py` | Modify | keripy-compatible SAID canonicalization |
+| `app/vvp/acdc.py` | Modify | Non-signer issuer, optional u nonce, Brand as APE |
+| `app/vvp/revocation.py` | Modify | UNKNOWN → ACTIVE fallback |
+| `app/vvp/schema.py` | Modify | Add missing VVP schema SAIDs |
+| `app/vvp/verify.py` | Modify | vCard format, brand-from-dossier flow |
+| `app/vvp/passport.py` | Modify | card, call-id, cseq claims |
+| `app/vvp/dossier.py` | Modify | TNAlloc credential support |
+| `app/vvp/fetch.py` | Create | Common fetch layer: shared httpx client, SSRF validation for all external fetches |
+| `app/vvp/tel.py` | Modify | Range key state cache, negative TEL cache, TEL_SOURCE strategy; uses fetch.py |
+| `app/vvp/dossier.py` | Modify | Use fetch.safe_get() for dossier fetches |
+| `app/vvp/acdc.py` | Modify | Use fetch.safe_get() for OOBI kid resolution |
+| `app/main.py` | Modify | Shared client lifespan, config for new env vars |
+| `app/config.py` | Modify | New config: ALLOW_HTTP_WITNESSES, ALLOWED_EXTERNAL_HOSTS, KEY_STATE_CACHE_MAX_SIZE, KEY_STATE_CACHE_TTL_SECONDS, TEL_NEGATIVE_CACHE_TTL_SECONDS, TEL_SOURCE |
+| `tests/test_acdc.py` | Modify/Create | Bug fix tests |
+| `tests/test_revocation.py` | Modify/Create | Fallback tests |
+| `tests/test_passport.py` | Modify/Create | New claim tests |
+| `tests/test_tel.py` | Modify/Create | Shared client, SSRF, cache tests |
+| `ALGORITHMS.md` | Modify | PASSporT claims, delegated verification, issuer_key_cache, SSRF error, revocation evidence rules, schema SAID glossary |
+| `README.md` | Modify | HTTP API table: new PASSporT claim fields in /verify response |
+| `CHANGES.md` | Create/Modify | v0.2.0 release notes with all user-facing behavior changes and new config variables |
+
+## Architecture Clarification: OVC IS the VVP Verifier
+
+The OVC-VVP-Verifier is the **standalone VVP Verifier**. It is not a client of a separate "VVP" component — it IS the VVP verifier. The architecture is:
+
+```
+SIP INVITE → [OVC-VVP-Verifier] → queries KERI witnesses directly for TEL status
+```
+
+The monorepo has an issuer service that acts as a TEL facade (Sprint 80), but that is a monorepo-only deployment concern. In the standalone OVC verifier, TEL revocation queries go directly from the verifier to KERI witnesses via the existing `tel.py` client. There is no intermediate VVP service layer.
+
+The `_resolve_revocation_with_fallback()` logic therefore correctly lives in the OVC verifier and performs witness queries directly. When a witness returns `UNKNOWN`, the verifier checks the dossier for **cryptographically bound TEL issuance evidence** (an `iss` event SAID anchored in the issuer KEL). If that evidence is present, the credential is treated as `ACTIVE`; if absent, the result is `INDETERMINATE`. Generic dossier metadata or an embedded status string is never used as authoritative evidence for `ACTIVE` — only a verifiable on-chain anchor is.
+
+## Open Questions
+
+1. Should `ProvenantBrandSchema` SAIDs be added to `schema.py` alongside the vLEI SAIDs, or kept in a separate brand schema registry? (Recommendation: inline in `schema.py` for simplicity)
+2. ~~The Sprint 80 issuer TEL facade is monorepo-only~~ — Confirmed: OVC queries witnesses directly (see architecture clarification above).
+
+## Risks and Mitigations
+
+| Risk | Likelihood | Impact | Mitigation |
+|------|------------|--------|------------|
+| Flat-to-modular porting introduces subtle import errors | Medium | Low | Run OVC test suite after each file change |
+| keripy canonicalization fix changes SAID output for existing test vectors | Medium | Medium | Update test fixtures to use correct SAIDs after fix |
+| SSRF strict defaults break local dev witness setups | Medium | Medium | `ALLOW_HTTP_WITNESSES=true` env override for local dev; document clearly in README |
+| Shared httpx client not thread-safe in test fixture teardown | Low | Low | Use `pytest-anyio` async fixtures with explicit client lifecycle |
+
+## Revision History
+
+| Round | Date | Changes |
+|-------|------|---------|
+| R1 | 2026-03-12 | Initial draft |
+| R2 | 2026-03-12 | Added API docs task for new PASSporT claims; N+1 OOBI mitigation via issuer_key_cache; explicit SSRF error code documented |
+| R3 | 2026-03-12 | Architecture clarification: OVC IS the VVP verifier (no intermediate VVP layer); expanded API docs to 4 explicit tasks including issuer_key_cache docs and schema SAID glossary |
+| R4 | 2026-03-12 | [High] canonical.py: require recursive SAID computation (nested before outer); [High] acdc.py: delegated verification uses historical key state + separate signer auth check, brand-as-APE narrowed to root-path only; [High] revocation: UNKNOWN→ACTIVE only when TEL issuance evidence present in dossier, else INDETERMINATE; [High] SSRF: https-only default, no built-in bypasses, operator override via env; [Medium] tel.py: explicit httpx pool/timeout config + negative TEL cache; [Medium] docs: add CHANGES.md, historical-key-state section, revocation evidence rules |
+| R5 | 2026-03-12 | [High] acdc.py: anchor-only historical key state — remove timestamp fallback, INDETERMINATE if no authenticated anchor; [High] SSRF: introduce common fetch layer (fetch.py) covering all external fetches (tel, oobi, dossier); [High] brand: rewritten as optional display-only leaf node, never authority-bearing; [High] arch clarification: aligned with evidence-required revocation rule; [Medium] tel.py: TEL_SOURCE strategy for KEL-only deployments; [Medium] docs: 7 explicit tasks including config var docs + multi-worker guidance; [New] passport.py: call-id/cseq syntax validation/sanitization |
+| R6 | 2026-03-12 | [High] issuer_key_cache key: changed from AID-only to (signer_aid, anchor_sn) to correctly handle rotating issuers; fetch.py: add trust_env=False, 10MB response cap, content-type validation per fetch surface |
+

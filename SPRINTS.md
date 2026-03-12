@@ -6123,3 +6123,77 @@ Since Sprint 69 introduced ephemeral LMDB with deterministic state rebuild from 
 - [ ] Rebuild report accessible via `/readyz` response body
 - [ ] All existing tests pass + new tests for readyz, full KEL publish, TEL publish, verification
 - [ ] E2E call works immediately after a fresh deploy (no manual republish needed)
+
+---
+
+## Sprint 82: OVC-VVP-Verifier Sync
+
+**Status:** COMPLETE
+**Goal:** Port all material changes made to the monorepo verifier (Sprints 58–81) into the standalone open-source OVC-VVP-Verifier repository, and release as v0.2.0.
+
+**Repository:** https://github.com/Rich-Connexions-Ltd/OVC-VVP-Verifier (local: `/Users/andrewbale/code/active/OVC-VVP-Verifier/`)
+
+**Sync baseline:** Commit `47b86d8` (OVC repo HEAD) vs monorepo commits since `0bc4347` (2026-02-10)
+
+### Deliverables
+
+**Priority 1 — Bug Fixes (must port):**
+- [ ] ACDC SAID computation fix to match keripy canonicalization (`4daee15`)
+- [ ] ACDC signature verification for non-signer issuer AIDs (`5626b5f`)
+- [ ] vCard RFC 6350 property string array format (`4f9c73f`)
+- [ ] Revocation status fallback: UNKNOWN → ACTIVE (`2652ea8`)
+- [ ] Optional `u` nonce in Brand/APE credential (`b3b4310`, `d5be1ef`)
+- [ ] VVP schemas added to verifier to prevent INDETERMINATE (`e7d4b30`)
+
+**Priority 2 — Spec-Compliance & Protocol:**
+- [ ] PASSporT `card` claim with brand identity in JWT payload (Sprint 58)
+- [ ] `call-id` and `cseq` claims in callee PASSporT for dialog binding (Sprint 58)
+- [ ] Spec-compliant VVP header flow: brand derived from dossier only (Sprint 60)
+- [ ] TNAlloc credentials included in dossier for TN rights validation
+- [ ] Brand credential recognised as APE equivalent (Sprint 79)
+
+**Priority 3 — Performance:**
+- [ ] Range-based KEL key state caching (Sprint 78) — reduces witness queries by ~50%
+- [ ] Shared `httpx.AsyncClient` with connection pooling (Sprint 78)
+- [ ] SSRF validation for external URLs (Sprint 78) — security hardening
+
+**Release:**
+- [ ] Update OVC tests to cover all ported changes
+- [ ] Update ALGORITHMS.md and README if protocol behaviour changed
+- [ ] Verify all file headers and `LICENSE` copyright line attribute **"Open Verifiable Calling Alliance"**
+- [ ] Tag `v0.2.0` on OVC repo and push
+
+### Key Files to Modify (OVC repo)
+
+| File | Changes |
+|------|---------|
+| `app/vvp/acdc.py` | SAID fix, non-signer issuer AID fix, optional u nonce, Brand as APE |
+| `app/vvp/canonical.py` | keripy canonicalization alignment |
+| `app/vvp/verify.py` | vCard format, brand/dossier flow, TNAlloc, card claim |
+| `app/vvp/revocation.py` | UNKNOWN → ACTIVE fallback |
+| `app/vvp/schema.py` | Add missing VVP schemas |
+| `app/vvp/tel.py` | Shared client, SSRF validation, range-based caching |
+| `app/vvp/cache.py` | Range-based key state cache |
+| `app/main.py` | Shared httpx client lifespan |
+| `app/vvp/passport.py` | call-id, cseq, card claims |
+| `tests/` | New/updated tests for all ported changes |
+
+### Technical Notes
+
+- **Structure difference**: OVC is flat (`app/vvp/*.py`); monorepo has subdirs (`keri/`, `acdc/`, etc.). Port logic into flat OVC files rather than replicating monorepo structure.
+- **No issuer dependency**: Sprint 80's TEL Issuer facade is a monorepo-only concern. OVC TEL queries go directly to witnesses. Port only the revocation fallback logic, not the issuer routing.
+- **No UI changes**: Explorer/credential card UI fixes are monorepo-only. Not applicable to OVC.
+- **No vetter constraints**: Jurisdiction constraints (Sprint 75/62) are enforced by the Issuer. The standalone verifier validates the dossier structure; policy enforcement is out of scope.
+
+### Dependencies
+
+- Sprint 54 (OVC-VVP-Verifier initial release)
+- Sprints 58–81 (monorepo verifier changes being ported)
+
+### Exit Criteria
+
+- [ ] All 6 bug fixes applied and covered by tests
+- [ ] Protocol changes (card claim, call-id/cseq, brand flow, TNAlloc) implemented and tested
+- [ ] Performance improvements (caching, connection pool, SSRF) integrated
+- [ ] All existing OVC tests pass
+- [ ] `v0.2.0` tag pushed to OVC repo
