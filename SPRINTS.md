@@ -6197,3 +6197,73 @@ Since Sprint 69 introduced ephemeral LMDB with deterministic state rebuild from 
 - [ ] Performance improvements (caching, connection pool, SSRF) integrated
 - [ ] All existing OVC tests pass
 - [ ] `v0.2.0` tag pushed to OVC repo
+
+---
+
+## Sprint 83: Root of Trust Admin Configuration
+
+**Status:** COMPLETE ✅
+**Goal:** Expose `TRUSTED_ROOT_AIDS` as a runtime-configurable setting with a dedicated admin page in both the monorepo VVP Verifier and the OVC-VVP-Verifier.
+
+### Background
+
+Currently, `TRUSTED_ROOT_AIDS` is a `frozenset` populated once at startup from the `VVP_TRUSTED_ROOT_AIDS` environment variable. Changing the trusted root set requires an environment variable update and service restart. Operators need a way to inspect and update roots of trust without a restart — especially during onboarding of new trust anchors (e.g., GSMA, GLEIF staging).
+
+### Deliverables
+
+**Monorepo VVP Verifier (`services/verifier/`):**
+- [ ] `GET /admin/trusted-roots` — list current trusted root AIDs with metadata
+- [ ] `POST /admin/trusted-roots/add` — add a root AID at runtime
+- [ ] `POST /admin/trusted-roots/remove` — remove a root AID at runtime
+- [ ] `POST /admin/trusted-roots/replace` — replace entire set atomically
+- [ ] `GET /admin` response updated to include `trusted_roots` section
+- [ ] Admin UI (`/ui/admin`) updated with a Trusted Roots section (list + add/remove form)
+- [ ] Verification cache invalidated when trusted roots change
+- [ ] Tests for all new endpoints
+
+**OVC-VVP-Verifier (`/Users/andrewbale/code/active/OVC-VVP-Verifier/`):**
+- [ ] `GET /admin` — new endpoint returning service config including trusted roots
+- [ ] `POST /admin/trusted-roots/add` — add a root AID at runtime
+- [ ] `POST /admin/trusted-roots/remove` — remove a root AID at runtime
+- [ ] `POST /admin/trusted-roots/replace` — replace entire set atomically
+- [ ] `GET /admin/ui` — simple HTML admin page (no JS framework dependency)
+- [ ] Verification cache invalidated on trusted root changes
+- [ ] Tests for all new endpoints
+
+### Technical Notes
+
+- **In-memory mutation only**: Runtime changes update a module-level mutable set; changes are lost on restart. Admin UI should display a prominent banner: "Changes are in-memory only — update `VVP_TRUSTED_ROOT_AIDS` env var and restart to persist."
+- **Thread/async safety**: Use `asyncio.Lock` to guard mutations to the live roots set.
+- **Cache invalidation**: Any mutation to trusted roots must call `get_verification_cache().clear()` and reset the config fingerprint used for cache keying.
+- **Admin auth**: Both verifiers already gate admin endpoints on `ADMIN_ENDPOINT_ENABLED`. No additional auth layer needed for this sprint.
+- **OVC structure**: OVC is flat (`app/vvp/*.py`); add new admin module `app/admin.py` with router; mount at `/admin` in `app/main.py`.
+- **Monorepo structure**: Admin endpoints already inline in `app/main.py`; add new endpoints following the existing pattern.
+
+### Key Files to Create/Modify
+
+| Repo | File | Action |
+|------|------|--------|
+| Monorepo | `services/verifier/app/core/config.py` | Convert `TRUSTED_ROOT_AIDS` to mutable runtime state |
+| Monorepo | `services/verifier/app/main.py` | Add trusted-roots API endpoints |
+| Monorepo | `services/verifier/app/templates/admin.html` | Add Trusted Roots section to admin UI |
+| Monorepo | `services/verifier/tests/test_admin_trusted_roots.py` | New tests |
+| OVC | `app/config.py` | Convert `TRUSTED_ROOT_AIDS` to mutable runtime state |
+| OVC | `app/admin.py` | New admin router with all endpoints |
+| OVC | `app/main.py` | Mount admin router, add `/admin/ui` template |
+| OVC | `app/templates/admin.html` | New admin HTML page |
+| OVC | `tests/test_admin.py` | New tests |
+
+### Dependencies
+
+- Sprint 82 (OVC-VVP-Verifier v0.2.0 — establishes OVC baseline)
+
+### Exit Criteria
+
+- [ ] Monorepo: trusted roots can be listed, added, removed, and replaced via HTTP API
+- [ ] Monorepo: admin UI shows current trusted roots and allows edits
+- [ ] OVC: `/admin` GET endpoint returns config including trusted roots
+- [ ] OVC: trusted roots can be mutated via API
+- [ ] OVC: `/admin/ui` serves a functional HTML admin page
+- [ ] Cache is invalidated on every trusted roots mutation
+- [ ] In-memory-only warning displayed in both UIs
+- [ ] All new tests pass

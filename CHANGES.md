@@ -19,7 +19,7 @@
 - `app/templates/admin.html` — New file: admin UI with Jinja2 server-side roots table, JS add/remove, toast notifications
 - `tests/test_admin.py` — New file: 102 tests covering config store, all admin endpoints, auth, rate limiting, UI
 
-**Commit:** `<sha>`
+**Commit:** `e5a47bb` (monorepo), `f41ffd6` (OVC)
 
 ## Sprint 82: OVC-VVP-Verifier Sync — 2026-03-12
 
