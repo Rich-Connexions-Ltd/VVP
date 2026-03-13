@@ -1,0 +1,76 @@
+name: System Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      loopback:
+        description: 'Include loopback test (full dialplan flow, adds ~20s)'
+        type: boolean
+        required: false
+        default: false
+      skip_sip:
+        description: 'Skip SIP call tests (health + PBX + dialplan only)'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+  id-token: write   # required for OIDC to Azure
+
+jobs:
+  system-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run system test
+        run: |
+          FLAGS="-v"
+          if [ "${{ inputs.skip_sip }}" = "true" ]; then
+            FLAGS="$FLAGS --skip-sip"
+          fi
+          if [ "${{ inputs.loopback }}" = "true" ]; then
+            FLAGS="$FLAGS --loopback"
+          fi
+          echo "Running: python3 scripts/system-test.py $FLAGS"
+          python3 scripts/system-test.py $FLAGS
+
+      - name: Run system test (JSON)
+        if: always()
+        run: |
+          FLAGS="--json"
+          if [ "${{ inputs.skip_sip }}" = "true" ]; then
+            FLAGS="$FLAGS --skip-sip"
+          fi
+          if [ "${{ inputs.loopback }}" = "true" ]; then
+            FLAGS="$FLAGS --loopback"
+          fi
+          python3 scripts/system-test.py $FLAGS > system-test-results.json 2>&1 || true
+          echo "### System Test Results" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          cat system-test-results.json >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: system-test-results
+          path: system-test-results.json
+          retention-days: 7
