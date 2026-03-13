@@ -209,9 +209,14 @@ def strip_az_output(output):
     """Extract stdout content from az vm run-command output.
 
     Azure wraps output as: 'Enable succeeded: \\n[stdout]\\n...\\n[stderr]\\n...'
-    This extracts just the stdout portion.
+    The \\n may be literal two-character sequences (backslash + n) rather than
+    actual newlines, depending on how az formats --query tsv output.
+    This extracts just the stdout portion, handling both cases.
     """
     text = output
+    # Azure CLI sometimes outputs literal \n instead of real newlines
+    # Replace literal \n sequences with real newlines first
+    text = text.replace("\\n", "\n")
     # Strip 'Enable succeeded:' prefix
     if "Enable succeeded:" in text:
         text = text.split("Enable succeeded:", 1)[1]
@@ -398,63 +403,79 @@ def phase0_warmup(verifier_url, issuer_url, witness_urls,
             log_fail(f"{name} not ready after {WARMUP_TIMEOUT}s", json_output)
 
     # Warm up PBX services
+    # Single pbx_run call that checks status, restarts if needed, and re-checks
+    # This avoids Azure Conflict errors from sequential run-command calls
     pbx_ok = True
     if not json_output:
-        log_info("Checking PBX services...")
+        log_info("Checking PBX services (with auto-restart)...")
 
     ok, output = pbx_run(
-        "for svc in freeswitch vvp-sip-redirect vvp-sip-verify; do "
-        "  if systemctl is-active --quiet \"$svc\" 2>/dev/null; then "
-        "    echo \"$svc=active\"; "
-        "  else "
-        "    echo \"$svc=$(systemctl is-active $svc 2>/dev/null)\"; "
-        "  fi; "
-        "done"
+        "SERVICES='freeswitch vvp-sip-redirect vvp-sip-verify'\n"
+        "NEED_RESTART=''\n"
+        "for svc in $SERVICES; do\n"
+        "  if systemctl is-active --quiet \"$svc\" 2>/dev/null; then\n"
+        "    echo \"INITIAL:$svc=active\"\n"
+        "  else\n"
+        "    actual=$(systemctl is-active \"$svc\" 2>/dev/null)\n"
+        "    echo \"INITIAL:$svc=${actual:-unknown}\"\n"
+        "    NEED_RESTART=\"$NEED_RESTART $svc\"\n"
+        "  fi\n"
+        "done\n"
+        "if [ -n \"$NEED_RESTART\" ]; then\n"
+        "  echo \"RESTARTING:$NEED_RESTART\"\n"
+        "  for svc in $NEED_RESTART; do\n"
+        "    systemctl restart \"$svc\" 2>&1 || true\n"
+        "  done\n"
+        "  sleep 15\n"
+        "  for svc in $NEED_RESTART; do\n"
+        "    if systemctl is-active --quiet \"$svc\" 2>/dev/null; then\n"
+        "      echo \"AFTER_RESTART:$svc=active\"\n"
+        "    else\n"
+        "      actual=$(systemctl is-active \"$svc\" 2>/dev/null)\n"
+        "      echo \"AFTER_RESTART:$svc=${actual:-unknown}\"\n"
+        "      # Show journal for failed service\n"
+        "      echo \"JOURNAL:$svc=$(journalctl -u $svc -n 5 --no-pager 2>&1 | tail -3)\"\n"
+        "    fi\n"
+        "  done\n"
+        "fi",
+        timeout=120,
     )
 
     if ok:
         clean = strip_az_output(output)
-        not_active = []
+        if verbose and not json_output:
+            log_info(f"PBX warmup output: {clean[:500]}")
+
         for svc in ["freeswitch", "vvp-sip-redirect", "vvp-sip-verify"]:
-            found = False
+            # Check AFTER_RESTART first (if restart was attempted), then INITIAL
+            svc_active = False
             for line in clean.split("\n"):
                 line = line.strip()
-                if line == f"{svc}=active":
-                    found = True
+                if line == f"AFTER_RESTART:{svc}=active":
+                    svc_active = True
+                    log_pass(f"PBX {svc} ready (after restart)", json_output)
                     break
-            if found:
-                log_pass(f"PBX {svc} ready", json_output)
-            else:
-                not_active.append(svc)
+                elif line == f"INITIAL:{svc}=active":
+                    svc_active = True
+                    log_pass(f"PBX {svc} ready", json_output)
+                    break
 
-        if not_active:
-            # Try restarting the non-active services and wait
-            svc_list = " ".join(not_active)
-            log_info(f"Restarting: {svc_list}")
-            restart_ok, restart_out = pbx_run(
-                f"for svc in {svc_list}; do "
-                f"  systemctl restart $svc; "
-                f"done; "
-                f"sleep 10; "
-                f"for svc in {svc_list}; do "
-                f"  if systemctl is-active --quiet $svc 2>/dev/null; then "
-                f"    echo \"$svc=active\"; "
-                f"  else "
-                f"    echo \"$svc=$(systemctl is-active $svc 2>/dev/null)\"; "
-                f"  fi; "
-                f"done"
-            )
-            if restart_ok:
-                clean2 = strip_az_output(restart_out)
-                for svc in not_active:
-                    if f"{svc}=active" in clean2:
-                        log_pass(f"PBX {svc} ready (after restart)", json_output)
-                    else:
-                        log_fail(f"PBX {svc} not ready after restart", json_output)
-                        pbx_ok = False
-            else:
-                for svc in not_active:
-                    log_fail(f"PBX {svc} restart failed", json_output)
+            if not svc_active:
+                # Find the status for error reporting
+                status = "unknown"
+                for line in clean.split("\n"):
+                    line = line.strip()
+                    if line.startswith(f"AFTER_RESTART:{svc}="):
+                        status = line.split("=", 1)[1]
+                    elif line.startswith(f"INITIAL:{svc}="):
+                        status = line.split("=", 1)[1]
+                log_fail(f"PBX {svc} not active (status={status})", json_output)
+                # Show journal if available
+                for line in clean.split("\n"):
+                    line = line.strip()
+                    if line.startswith(f"JOURNAL:{svc}="):
+                        journal = line.split("=", 1)[1]
+                        log_info(f"  Journal: {journal[:200]}")
                 pbx_ok = False
     else:
         log_warn(f"Could not reach PBX VM: {output[:100]}", json_output)
@@ -627,12 +648,18 @@ def phase3_dialplan_validation(json_output=False, verbose=False):
     # Strip az output wrapper to get raw XML
     xml_content = strip_az_output(output)
 
+    if verbose and not json_output:
+        log_info(f"Raw XML (first 300 chars): {xml_content[:300]}")
+
     # Parse XML
     try:
         root = ET.fromstring(xml_content)
     except ET.ParseError as e:
         log_fail(f"Could not parse dialplan XML: {e}", json_output)
-        results.append({"check": "parse_xml", "ok": False, "detail": str(e)})
+        # Show what we're trying to parse for debugging
+        log_info(f"  Content starts with: {repr(xml_content[:200])}")
+        results.append({"check": "parse_xml", "ok": False, "detail": str(e),
+                         "content_preview": xml_content[:200]})
         return False, results
 
     log_pass("Dialplan XML parsed successfully", json_output)
