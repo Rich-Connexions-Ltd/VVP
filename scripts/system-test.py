@@ -423,8 +423,22 @@ def phase0_warmup(verifier_url, issuer_url, witness_urls,
         "done\n"
         "if [ -n \"$NEED_RESTART\" ]; then\n"
         "  echo \"RESTARTING:$NEED_RESTART\"\n"
+        "  # Stop services and kill any lingering processes holding ports\n"
         "  for svc in $NEED_RESTART; do\n"
-        "    systemctl restart \"$svc\" 2>&1 || true\n"
+        "    systemctl stop \"$svc\" 2>&1 || true\n"
+        "  done\n"
+        "  sleep 2\n"
+        "  # Force-kill any processes still holding SIP ports (5070-5072)\n"
+        "  for port in 5070 5071 5072; do\n"
+        "    PID=$(ss -lntp 2>/dev/null | grep \":$port \" | sed 's/.*pid=\\([0-9]*\\).*/\\1/' | head -1)\n"
+        "    if [ -n \"$PID\" ] && [ \"$PID\" != \"0\" ]; then\n"
+        "      echo \"KILLING:pid=$PID on port $port\"\n"
+        "      kill -9 \"$PID\" 2>/dev/null || true\n"
+        "    fi\n"
+        "  done\n"
+        "  sleep 2\n"
+        "  for svc in $NEED_RESTART; do\n"
+        "    systemctl start \"$svc\" 2>&1 || true\n"
         "  done\n"
         "  sleep 15\n"
         "  for svc in $NEED_RESTART; do\n"
@@ -635,18 +649,28 @@ def phase3_dialplan_validation(json_output=False, verbose=False):
     with open(DIALPLAN_RULES_PATH) as f:
         rules = json.load(f)
 
-    # Fetch dialplan from PBX
+    # Fetch dialplan from PBX — use base64 encoding to avoid az run-command
+    # output truncation (az has a ~4KB message limit for raw output)
     dialplan_path = rules.get("dialplan_path", "/etc/freeswitch/dialplan/public.xml")
     log_check(f"Fetching {dialplan_path} from PBX", json_output)
-    ok, output = pbx_run(f"cat {dialplan_path}")
+    ok, output = pbx_run(f"base64 {dialplan_path}")
 
     if not ok:
         log_fail(f"Could not fetch dialplan: {output[:100]}", json_output)
         results.append({"check": "fetch_dialplan", "ok": False, "detail": output[:200]})
         return False, results
 
-    # Strip az output wrapper to get raw XML
-    xml_content = strip_az_output(output)
+    # Decode base64 to get raw XML
+    raw_b64 = strip_az_output(output)
+    # Clean up whitespace/newlines in base64 string
+    raw_b64 = raw_b64.replace("\n", "").replace("\r", "").replace(" ", "")
+    try:
+        xml_content = base64.b64decode(raw_b64).decode("utf-8")
+    except Exception as e:
+        log_fail(f"Could not decode dialplan base64: {e}", json_output)
+        log_info(f"  Base64 starts with: {repr(raw_b64[:100])}")
+        results.append({"check": "decode_dialplan", "ok": False, "detail": str(e)})
+        return False, results
 
     if verbose and not json_output:
         log_info(f"Raw XML (first 300 chars): {xml_content[:300]}")
