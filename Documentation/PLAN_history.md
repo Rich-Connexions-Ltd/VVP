@@ -25026,3 +25026,363 @@ The `_resolve_revocation_with_fallback()` logic therefore correctly lives in the
 | R5 | 2026-03-12 | [High] acdc.py: anchor-only historical key state — remove timestamp fallback, INDETERMINATE if no authenticated anchor; [High] SSRF: introduce common fetch layer (fetch.py) covering all external fetches (tel, oobi, dossier); [High] brand: rewritten as optional display-only leaf node, never authority-bearing; [High] arch clarification: aligned with evidence-required revocation rule; [Medium] tel.py: TEL_SOURCE strategy for KEL-only deployments; [Medium] docs: 7 explicit tasks including config var docs + multi-worker guidance; [New] passport.py: call-id/cseq syntax validation/sanitization |
 | R6 | 2026-03-12 | [High] issuer_key_cache key: changed from AID-only to (signer_aid, anchor_sn) to correctly handle rotating issuers; fetch.py: add trust_env=False, 10MB response cap, content-type validation per fetch surface |
 
+
+---
+
+# Sprint 84: Dossier TEL Event Filtering & INDETERMINATE Brand Policy
+
+_Archived: 2026-03-13_
+
+# Sprint 84: Dossier TEL Event Filtering & INDETERMINATE Brand Policy
+
+## Problem Statement
+
+**Issue 1 — KERI TEL events in dossier cause INVALID:**
+The VVP issuer serves dossier CESR streams containing both ACDC credentials and KERI10 Transaction Event Log (`t: "iss"`) events. These share fields (`d`, `i`, `s`) with ACDCs. The OVC verifier's Strategy 3 CESR parser passes them to `parse_acdc`, which fails SAID validation — marking the call **INVALID** when it should be **INDETERMINATE**.
+
+**Issue 2 — INDETERMINATE suppresses brand (wrong policy):**
+Monorepo verifier: brand fields are populated only when `brand_claim.status == ClaimStatus.VALID`. With all production credentials issued by E-prefix transferable AIDs, Tier 1 always produces INDETERMINATE for signature verification. Brand is never surfaced.
+
+Per operator policy and §12 Tier 1 compliance: INDETERMINATE = structurally valid call with unresolvable Tier 2 requirements. Brand SHALL be displayed with a "partial" certainty indicator.
+
+## Spec References
+
+- §12: "Tier 1: Direct Verification (Complete)" — does not require KEL resolution
+- §4.3A: `INDETERMINATE` if any required claim is INDETERMINATE, all others VALID
+
+## Current State
+
+**OVC `parse_dossier` Strategy 3:** all JSON objects in CESR stream attempted as ACDCs; KERI TEL events pass field-presence check, fail SAID validation → INVALID.
+
+**Monorepo brand gate:** `brand_claim.status == ClaimStatus.VALID` → never met with E-prefix issuers.
+
+## Proposed Solution
+
+### Approach
+
+**Fix 1 — CESR parser:** Classify KERI events using **positive protocol markers only** and route them to a separate track in a structured parse result. This fixes the INVALID bug while preserving TEL evidence for future inline revocation evaluation.
+
+**Fix 2 — Monorepo brand gate:** Relax from `== VALID` to `in (VALID, INDETERMINATE)`. Only applies to the brand-specific claim node (already narrowly scoped in existing code). Brand source (validated Brand/BrandOwner credential) and logo proxy are unchanged.
+
+**Fix 3 — `certainty` field + `X-VVP-Certainty` header:** Add a canonical certainty indicator to both verifiers' API responses and to the OVC SIP headers. OVC brand emission (requiring BrandOwner credential recognition) is **deferred** to a future sprint.
+
+### Alternatives Considered
+
+| Alternative | Pros | Cons | Why Rejected |
+|-------------|------|------|--------------|
+| Fix issuer to not embed TEL events | Cleaner | Requires issuer sprint; mixed streams are valid per spec | Verifier should handle mixed streams |
+| Discard TEL events (log only) | Simple | Destroys revocation evidence for future Tier 2 inline evaluation | TEL events carry credential status; not noise |
+| Use bare tuple `(acdcs, tel_events)` | Simple | Callers must unpack positionally; fragile if signature dict also returned | Named result object is explicit |
+| OVC brand from APE attributes | Provides brand | Brand provenance not from validated Brand credential path | Deferred to future sprint |
+| Monorepo brand gate includes all INDETERMINATE causes | Permissive | Unnecessarily broad — but `brand_claim` gate is already narrowly scoped to brand credential status | Acceptable: gating on brand-specific claim node is correct |
+
+### Detailed Design
+
+#### Component 1: `_is_keri_event()` — positive-marker classifier
+
+Used in both repos. Identifies KERI protocol events using **positive markers only**:
+
+```python
+def _is_keri_event(obj: dict) -> bool:
+    """Return True iff obj is positively identified as a KERI protocol event.
+
+    Uses POSITIVE markers only. Unknown/malformed objects return False so
+    they fall through to parse_acdc and fail with a proper validation error.
+    """
+    # KERI events always carry a message-type field; ACDCs never have "t".
+    if "t" in obj:
+        return True
+    # KERI versioned messages start with "KERI10"; ACDCs use "ACDC10".
+    if isinstance(obj.get("v"), str) and obj["v"].startswith("KERI10"):
+        return True
+    return False
+```
+
+No shape-based heuristics. Anything not positively identified as KERI is attempted as an ACDC (and may fail validation normally).
+
+#### Component 2: `DossierParseResult` — named parse result
+
+A small dataclass returned by `parse_dossier` in both repos. Avoids bare tuple expansion; explicit field names.
+
+**OVC (`app/vvp/dossier.py`):**
+```python
+@dataclass
+class DossierParseResult:
+    """Result of parsing a dossier CESR stream."""
+    acdcs: List[ACDC]
+    tel_events: List[dict]  # Retained for future inline revocation evaluation
+```
+
+**Monorepo (`services/verifier/app/vvp/dossier/parser.py`):**
+```python
+@dataclass
+class DossierParseResult:
+    nodes: List[ACDCNode]
+    signatures: Dict[str, bytes]
+    tel_events: List[dict]  # Retained for future inline revocation evaluation
+```
+
+`parse_dossier` returns `DossierParseResult` in both repos. All callers updated to access `result.acdcs` / `result.nodes` and `result.signatures`.
+
+#### Component 3: OVC `dossier.py` — Strategy 3 bifurcation
+
+```python
+def parse_dossier(raw: bytes) -> DossierParseResult:
+    ...
+    # Strategy 3: CESR/mixed stream
+    acdcs: List[ACDC] = []
+    tel_events: List[dict] = []
+
+    for obj in json_objects:
+        if not all(k in obj for k in ("d", "i", "s")):
+            logger.debug("Skipping non-credential object (missing d/i/s)")
+            continue
+        if _is_keri_event(obj):
+            tel_events.append(obj)
+            continue
+        try:
+            acdcs.append(parse_acdc(obj))
+        except ValueError as exc:
+            logger.debug("ACDC parse failed: %s", exc)
+
+    if tel_events:
+        logger.info("Dossier contains %d inline TEL events (retained)", len(tel_events))
+    if not acdcs:
+        raise DossierParseError("No valid ACDC credentials found in dossier payload")
+    return DossierParseResult(acdcs=acdcs, tel_events=tel_events)
+```
+
+Strategies 1 and 2 (JSON array / single object) return `DossierParseResult(acdcs=[...], tel_events=[])`.
+
+Callers: `build_and_validate_dossier` receives `acdcs` from `result.acdcs`; callers in `verify.py` updated to unpack via named fields.
+
+#### Component 4: Monorepo `parser.py` — CESR paths
+
+Both strict and permissive CESR paths updated to use `_is_keri_event()` and populate `DossierParseResult`:
+
+```python
+# Strict path:
+tel_events: List[dict] = []
+for msg in messages:
+    event = msg.event_dict
+    if _is_keri_event(event):
+        tel_events.append(event)
+        continue
+    if "d" in event and "i" in event:
+        try:
+            node = parse_acdc(event)
+            nodes.append(node)
+            if msg.controller_sigs:
+                signatures[node.said] = msg.controller_sigs[0]
+        except ParseError:
+            continue
+
+if tel_events:
+    logger.info("Dossier contains %d inline TEL events (retained)", len(tel_events))
+return DossierParseResult(nodes=nodes, signatures=signatures, tel_events=tel_events)
+```
+
+Permissive path: existing `"t" in event` filter replaced with `_is_keri_event(event)` for consistency.
+
+#### Component 5: `_status_to_certainty()` — canonical certainty mapping
+
+Single helper per repo (not per call site), co-located with `VerifyResponse`:
+
+```python
+def _status_to_certainty(
+    status: ClaimStatus,
+) -> Literal["full", "partial", "none"]:
+    """Map verification status to public certainty indicator.
+
+    full    — VALID: all claims verified
+    partial — INDETERMINATE: structural checks passed, Tier 2 resolution unavailable
+    none    — INVALID: one or more required claims failed
+    """
+    if status == ClaimStatus.VALID:
+        return "full"
+    if status == ClaimStatus.INDETERMINATE:
+        return "partial"
+    return "none"
+```
+
+#### Component 6: OVC `models.py` — `certainty` field
+
+```python
+from typing import Literal
+
+class VerifyResponse(BaseModel):
+    ...
+    certainty: Literal["full", "partial", "none"] = "none"
+    """Verification certainty. See _status_to_certainty for value semantics."""
+```
+
+Brand emission from OVC is **not changed in Sprint 84** (no BrandOwner credential recognition in OVC yet).
+
+#### Component 7: OVC `verify.py` — populate `certainty`
+
+```python
+from app.vvp.models import _status_to_certainty
+
+return VerifyResponse(
+    ...
+    brand_name=brand_name,       # unchanged
+    certainty=_status_to_certainty(overall_status),
+)
+```
+
+#### Component 8: OVC `builder.py` — `X-VVP-Certainty` + sanitization
+
+```python
+import re
+
+_MAX_HEADER_VALUE_LEN = 256
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+
+def _sanitize_sip_header_value(value: str) -> Optional[str]:
+    """Strip all ASCII control characters (0x00–0x1F and 0x7F); truncate.
+    Returns None if empty after sanitization — header is then omitted.
+    """
+    cleaned = _CONTROL_CHARS.sub("", value).strip()
+    return cleaned[:_MAX_HEADER_VALUE_LEN] if cleaned else None
+
+
+def build_vvp_headers(verify_result) -> dict[str, str]:
+    ...
+    # Certainty: enum-constrained, no sanitization needed
+    certainty = getattr(verify_result, "certainty", "none")
+    if certainty not in ("full", "partial", "none"):
+        certainty = "none"
+    headers["X-VVP-Certainty"] = certainty
+
+    # Brand name: sanitize before SIP header emission
+    brand_name = getattr(verify_result, "brand_name", None)
+    if brand_name is not None:
+        sanitized = _sanitize_sip_header_value(str(brand_name))
+        if sanitized:
+            headers["X-VVP-Brand-Name"] = sanitized
+    ...
+```
+
+#### Component 9: Monorepo `api_models.py` + `verify.py`
+
+```python
+# api_models.py
+class VerifyResponse(BaseModel):
+    ...
+    certainty: Literal["full", "partial", "none"] = "none"
+
+# verify.py — brand gate relaxed
+if brand_info and brand_claim and brand_claim.status in (ClaimStatus.VALID, ClaimStatus.INDETERMINATE):
+    response_brand_name = brand_info.brand_name
+    response_brand_logo_url = brand_info.brand_logo_url
+    response_brand_logo_hash = brand_info.brand_logo_hash
+
+# verify.py — certainty
+response_certainty = _status_to_certainty(overall_status)
+```
+
+`brand_claim` is the brand-specific claim node from the credential chain — not `overall_status`. INDETERMINATE here means the brand credential's structure is valid but its signature can't be verified at Tier 1. This is the narrowest possible gate.
+
+#### Component 10: Documentation + changelog
+
+**Monorepo:**
+- `knowledge/api-reference.md`: document `certainty: Literal["full","partial","none"]` in `VerifyResponse`; note brand gate now includes INDETERMINATE
+- `CHANGES.md`: Sprint 84 entry
+
+**OVC-VVP-Verifier:**
+- `CHANGES.md`: Sprint 84 entry — TEL bifurcation, `certainty` field, `X-VVP-Certainty` header, header sanitization
+
+### Data Flow
+
+```
+Issuer CESR stream (7 ACDCs + 7 KERI10 iss events)
+    ↓
+parse_dossier() → DossierParseResult
+    ├── acdcs=[7 ACDC credentials]   → build_credential_graph → DAG
+    └── tel_events=[7 iss events]    → retained, logged, unused this sprint
+
+verify_chain(dag) → chain_claim: INDETERMINATE (E-prefix sig, Tier 2)
+_status_to_certainty(INDETERMINATE) → "partial"
+
+VerifyResponse(
+    overall_status=INDETERMINATE,
+    certainty="partial",
+    brand_name=<from _extract_brand_name, unchanged>
+)
+    ↓ (OVC SIP builder)
+302 {
+    X-VVP-Status: INDETERMINATE,
+    X-VVP-Certainty: partial,
+    X-VVP-Brand-Name: <sanitized, if present>
+}
+```
+
+### Error Handling
+
+- `_is_keri_event()` does not raise; unknown objects return `False` and fall through
+- `_sanitize_sip_header_value()` returns `None` for empty-after-sanitization; caller omits header
+- `_status_to_certainty()` returns `"none"` as safe default for unrecognized status values
+
+### Test Strategy
+
+**OVC `tests/test_dossier_tel_filtering.py`:**
+- `test_acdc_only_stream_unchanged`: stream with no KERI events → tel_events empty, ACDCs returned
+- `test_t_field_identifies_keri_event`: event with `"t": "iss"` → classified as KERI, in tel_events
+- `test_keri10_version_identifies_keri_event`: event with `"v": "KERI10JSON..."` → in tel_events
+- `test_unknown_object_falls_through_to_acdc_parse`: object without `t`/`KERI10` → attempted as ACDC, parse error raised normally
+- `test_mixed_stream_acme_dossier`: fixture with 7 ACDCs + 7 TEL events → 7 ACDCs, 7 tel_events, no parse error
+- `test_tel_events_are_retained_not_discarded`: DossierParseResult.tel_events contains all KERI events
+
+**OVC `tests/test_certainty.py`:**
+- `test_certainty_valid_is_full`
+- `test_certainty_indeterminate_is_partial`
+- `test_certainty_invalid_is_none`
+- `test_sip_header_contains_certainty`: VerifyResponse with certainty="partial" → X-VVP-Certainty: partial in headers
+- `test_sanitize_strips_control_chars`: brand_name with CR/LF → stripped before header
+- `test_sanitize_truncates_at_256`: very long brand_name → truncated
+
+**Monorepo `tests/test_dossier_tel_filtering.py`:**
+- Parallel fixtures for strict and permissive CESR paths
+- `test_strict_path_retains_tel_events`: DossierParseResult.tel_events populated
+- `test_permissive_path_retains_tel_events`: same for permissive path
+
+## Files to Create/Modify
+
+| Repo | File | Action | Purpose |
+|------|------|--------|---------|
+| OVC | `app/vvp/dossier.py` | Modify | `DossierParseResult`, `_is_keri_event()`, Strategy 3 bifurcation |
+| OVC | `app/vvp/verify.py` | Modify | Unpack `DossierParseResult`, populate `certainty` |
+| OVC | `app/vvp/models.py` | Modify | Add `certainty: Literal[...]`, `_status_to_certainty()` |
+| OVC | `app/sip/builder.py` | Modify | `X-VVP-Certainty` header, `_sanitize_sip_header_value()` |
+| OVC | `tests/test_dossier_tel_filtering.py` | Create | TEL bifurcation tests |
+| OVC | `tests/test_certainty.py` | Create | certainty + sanitization tests |
+| Monorepo | `services/verifier/app/vvp/dossier/parser.py` | Modify | `DossierParseResult`, `_is_keri_event()`, both CESR paths |
+| Monorepo | `services/verifier/app/vvp/verify.py` | Modify | Unpack `DossierParseResult`, brand gate relaxed, `certainty` |
+| Monorepo | `services/verifier/app/vvp/api_models.py` | Modify | Add `certainty: Literal[...]` |
+| Monorepo | `services/verifier/tests/test_dossier_tel_filtering.py` | Create | TEL filtering tests (strict + permissive paths) |
+| Monorepo | `knowledge/api-reference.md` | Modify | Document `certainty` field |
+| OVC | `CHANGES.md` | Modify | Sprint 84 entry |
+| Monorepo | `CHANGES.md` | Modify | Sprint 84 entry |
+
+## Open Questions
+
+None — scope confirmed by operator.
+
+## Risks and Mitigations
+
+| Risk | Likelihood | Impact | Mitigation |
+|------|-----------|--------|------------|
+| `parse_dossier` callers not updated to use `DossierParseResult` | Low | High | Grep all callers; type errors will be caught at parse/import time |
+| Monorepo brand INDETERMINATE gate triggers for non-signature reasons | Low | Medium | Gate is on `brand_claim.status` (brand credential specifically), not `overall_status` |
+| Cached responses don't have `certainty` field | Low | Low | Field has default `"none"`; cache will repopulate |
+
+## Revision History
+
+| Round | Date | Changes |
+|-------|------|---------|
+| R1 | 2026-03-13 | Initial draft |
+| R2 | 2026-03-13 | Bifurcate TEL events; remove raw logo from SIP |
+| R3 | 2026-03-13 | Positive-marker only classifier; OVC brand gate on APE SAID; full control-char sanitization |
+| R4 | 2026-03-13 | Remove s-shape heuristic; OVC brand emission deferred; TEL retained via logging only |
+| R5 | 2026-03-13 | Clean rewrite: `DossierParseResult` named result for TEL retention; `_status_to_certainty()` canonical helper; OVC brand unchanged (emission deferred); single test file per concern; all logo refs removed |
+

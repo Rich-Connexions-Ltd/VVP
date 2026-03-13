@@ -10,7 +10,7 @@
 - `tests/test_dossier_tel_filtering.py` — New: TEL filtering tests for both CESR paths and backward-compat unpacking
 - `knowledge/api-reference.md` — Documented `certainty` field and updated brand gate policy
 
-**Commit:** *(pending)*
+**Commit:** `0241ef9`
 
 ## Sprint 83: Runtime-Mutable Trusted Roots Admin — 2026-03-12
 

@@ -6272,7 +6272,7 @@ Currently, `TRUSTED_ROOT_AIDS` is a `frozenset` populated once at startup from t
 
 ## Sprint 84: Dossier TEL Event Filtering & INDETERMINATE Brand Policy
 
-**Status:** IN PROGRESS
+**Status:** COMPLETE
 **Goal:** Fix dossier parsers in both verifiers to skip non-ACDC (KERI10 TEL) events embedded in CESR streams, and establish INDETERMINATE as a "partially verified" policy that surfaces brand assets to callers.
 
 ### Background
