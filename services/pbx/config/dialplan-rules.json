@@ -1,0 +1,85 @@
+{
+  "description": "Expected PBX dialplan structure for VVP system test validation. Update this file when the dialplan changes intentionally.",
+  "dialplan_path": "/etc/freeswitch/dialplan/public.xml",
+  "contexts": {
+    "public": {
+      "required_extensions": [
+        "internal-extensions",
+        "vvp-loopback-brand-assure",
+        "vvp-loopback-deutsche-vetters",
+        "vvp-loopback-outbound",
+        "vvp-loopback-inbound"
+      ],
+      "checks": {
+        "vvp-loopback-outbound": {
+          "bridge_contains": "127.0.0.1:5070",
+          "bridge_contains_api_key": true,
+          "sets_variable": "sip_redirect_context=redirected"
+        },
+        "vvp-loopback-brand-assure": {
+          "bridge_contains": "127.0.0.1:5070",
+          "bridge_contains_api_key": true,
+          "sets_variable": "sip_redirect_context=redirected"
+        },
+        "vvp-loopback-deutsche-vetters": {
+          "bridge_contains": "127.0.0.1:5070",
+          "bridge_contains_api_key": true,
+          "sets_variable": "sip_redirect_context=redirected"
+        },
+        "vvp-loopback-inbound": {
+          "exports_headers": [
+            "X-VVP-Brand-Name",
+            "X-VVP-Brand-Logo",
+            "X-VVP-Status",
+            "X-VVP-Warning-Reason"
+          ]
+        }
+      }
+    },
+    "redirected": {
+      "required_extensions": [
+        "vvp-redirect-to-verify"
+      ],
+      "checks": {
+        "vvp-redirect-to-verify": {
+          "bridge_contains": "127.0.0.1:5072",
+          "exports_headers": [
+            "Identity",
+            "P-VVP-Identity",
+            "P-VVP-Passport"
+          ],
+          "sets_variable": "sip_redirect_context=verified"
+        }
+      }
+    },
+    "verified": {
+      "required_extensions": [
+        "vvp-deliver"
+      ],
+      "checks": {
+        "vvp-deliver": {
+          "exports_headers": [
+            "X-VVP-Brand-Name",
+            "X-VVP-Brand-Logo",
+            "X-VVP-Status",
+            "X-VVP-Warning-Reason",
+            "X-VVP-Vetter-Status"
+          ]
+        }
+      }
+    }
+  },
+  "sip_ports": {
+    "freeswitch_internal": 5060,
+    "freeswitch_external": 5080,
+    "sip_redirect": 5070,
+    "sip_verify": 5071,
+    "ovc_vvp_verifier": 5072,
+    "verto_wss": 7443
+  },
+  "services": [
+    "freeswitch",
+    "vvp-sip-redirect",
+    "vvp-sip-verify"
+  ]
+}

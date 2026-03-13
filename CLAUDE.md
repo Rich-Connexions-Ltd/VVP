@@ -293,6 +293,43 @@ az vm run-command invoke --resource-group VVP --name vvp-pbx --command-id RunShe
 | `test/mock_sip_redirect.py` | Mock signing/verification Python service |
 | `scripts/deploy-mock-services.sh` | Deployment script (uses SSH, prefer az CLI) |
 
+## System Test Gate
+
+Before making code changes in any session, Claude MUST run the system test:
+
+```bash
+python3 scripts/system-test.py
+```
+
+**Do not proceed with implementation until the system test passes (exit code 0).**
+
+The system test validates:
+1. **Service health** — Verifier, Issuer, and 3 Witnesses are responding
+2. **PBX services** — FreeSWITCH, SIP Redirect, SIP Verify are active on the PBX VM
+3. **Dialplan configuration** — PBX dialplan matches expected structure in `services/pbx/config/dialplan-rules.json`
+4. **SIP call flow** — Signing returns 302 with correct X-VVP headers; verification processes the signed PASSporT
+5. **Loopback (optional)** — Full FreeSWITCH originate through all 3 dialplan contexts (`--loopback` flag)
+
+### Options
+
+```bash
+python3 scripts/system-test.py                # Full test (health + PBX + dialplan + SIP)
+python3 scripts/system-test.py --skip-pbx     # Health checks only
+python3 scripts/system-test.py --skip-sip     # Skip SIP call tests
+python3 scripts/system-test.py --loopback     # Include full loopback test (~20s extra)
+python3 scripts/system-test.py --gate-only    # Check if gate file is still fresh
+python3 scripts/system-test.py --json         # Machine-readable output
+```
+
+### If the test fails
+
+- Health check failures → check service deployment, run `./scripts/system-health-check.sh`
+- Dialplan validation failures → compare PBX dialplan against `services/pbx/config/dialplan-rules.json`
+- SIP call failures → check PBX services, run `python3 scripts/sip-call-test.py` for diagnostics
+- TN not mapped → run `python3 scripts/bootstrap-issuer.py`
+
+The system test writes `.system-test-gate` on success. If the gate file exists and is less than 1 hour old, the test may be skipped.
+
 ## User Commands
 
 ### "Complete"
