@@ -288,9 +288,10 @@ async def admin(request: Request):
             status_code=404,
             content={"detail": "Admin endpoint disabled"}
         ))
-    origin = request.headers.get("origin")
-    if origin and origin.rstrip("/") != str(request.base_url).rstrip("/"):
-        return _admin_security_headers(JSONResponse(status_code=403, content={"detail": "Cross-origin admin access not allowed"}))
+    try:
+        _check_same_origin(request)
+    except HTTPException as e:
+        return _admin_security_headers(JSONResponse(status_code=e.status_code, content={"detail": e.detail}))
     if ADMIN_TOKEN is not None:
         auth = request.headers.get("Authorization", "")
         if not auth.startswith("Bearer ") or auth[7:] != ADMIN_TOKEN:
@@ -402,10 +403,22 @@ def _require_admin(request: Request) -> None:
     from app.core.config import ADMIN_ENDPOINT_ENABLED
     if not ADMIN_ENDPOINT_ENABLED:
         raise HTTPException(status_code=404, detail="Admin endpoint disabled")
+    _check_same_origin(request)
+
+
+def _check_same_origin(request: Request) -> None:
+    """Reject requests where Origin host doesn't match Host header.
+
+    Compares host portions only so HTTPS termination by a reverse proxy
+    doesn't cause false positives (request.base_url reflects the internal
+    HTTP scheme, not the public HTTPS URL).
+    """
+    from urllib.parse import urlparse
     origin = request.headers.get("origin")
     if origin:
-        host = str(request.base_url).rstrip("/")
-        if origin.rstrip("/") != host:
+        origin_host = urlparse(origin).netloc
+        request_host = request.headers.get("host", "")
+        if origin_host != request_host:
             raise HTTPException(status_code=403, detail="Cross-origin admin access not allowed")
 
 
@@ -468,9 +481,10 @@ async def admin_get_trusted_roots(request: Request):
     from app.core.config import ADMIN_ENDPOINT_ENABLED, ADMIN_TOKEN, get_trusted_roots_current
     if not ADMIN_ENDPOINT_ENABLED:
         return _admin_security_headers(JSONResponse(status_code=404, content={"detail": "Admin endpoint disabled"}))
-    origin = request.headers.get("origin")
-    if origin and origin.rstrip("/") != str(request.base_url).rstrip("/"):
-        return _admin_security_headers(JSONResponse(status_code=403, content={"detail": "Cross-origin admin access not allowed"}))
+    try:
+        _check_same_origin(request)
+    except HTTPException as e:
+        return _admin_security_headers(JSONResponse(status_code=e.status_code, content={"detail": e.detail}))
     if ADMIN_TOKEN is not None:
         auth = request.headers.get("Authorization", "")
         if not auth.startswith("Bearer ") or auth[7:] != ADMIN_TOKEN:
