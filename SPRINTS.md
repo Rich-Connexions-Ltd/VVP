@@ -6267,3 +6267,80 @@ Currently, `TRUSTED_ROOT_AIDS` is a `frozenset` populated once at startup from t
 - [ ] Cache is invalidated on every trusted roots mutation
 - [ ] In-memory-only warning displayed in both UIs
 - [ ] All new tests pass
+
+---
+
+## Sprint 84: Dossier TEL Event Filtering & INDETERMINATE Brand Policy
+
+**Status:** IN PROGRESS
+**Goal:** Fix dossier parsers in both verifiers to skip non-ACDC (KERI10 TEL) events embedded in CESR streams, and establish INDETERMINATE as a "partially verified" policy that surfaces brand assets to callers.
+
+### Background
+
+The VVP issuer serves dossier CESR streams containing both ACDC credentials and KERI10 Transaction Event Log (`iss`) events (revocation proofs). The OVC verifier's permissive dossier parser treats every JSON object in the stream as a candidate ACDC, including these KERI10 events. Because TEL `iss` events have `d`, `i`, and `s` fields (where `s` is a sequence number `"0"`, not a schema SAID), they pass the field-presence filter, are handed to `parse_acdc`, and then fail SAID validation — causing the overall chain status to be **INVALID** when it should be **INDETERMINATE** (the actual credentials are valid, only Tier 2 KEL resolution is unavailable).
+
+Separately, the VVP Verifier Specification §12 defines Tier 1 as complete without KEL resolution. INDETERMINATE is the correct Tier 1 result when credential issuer AIDs are transferable (E-prefix); this is not an error state. Per operator policy, INDETERMINATE calls should surface brand assets to the receiver (showing partial trust) rather than being treated as failed calls.
+
+### Deliverables
+
+**OVC-VVP-Verifier (`/Users/andrewbale/code/active/OVC-VVP-Verifier/`):**
+- [ ] `app/vvp/dossier.py` — Strategy 3 CESR extraction: skip events with `"t"` key (KERI event type field) or where `s` is not a 44-char `E`-prefix SAID
+- [ ] `app/vvp/dossier.py` — Strategy 3: also skip events where `"v"` starts with `KERI10` (belt-and-suspenders defence)
+- [ ] `app/vvp/verify.py` — ensure `brand_name` and `brand_logo_url` are populated in `VerifyResponse` when `overall_status == INDETERMINATE`
+- [ ] `app/sip/builder.py` — on INDETERMINATE, include brand headers AND add `X-VVP-Certainty: partial` header to distinguish from VALID
+- [ ] `tests/test_dossier_tel_filtering.py` — unit tests for TEL event skipping
+- [ ] `tests/test_indeterminate_brand.py` — unit tests for brand surfacing on INDETERMINATE
+
+**Monorepo VVP Verifier (`services/verifier/`):**
+- [ ] `app/vvp/dossier/parser.py` — harden CESR-strict path: in addition to `parse_acdc` try/except, explicitly skip events with `"t"` key or `KERI10` version string before attempting parse
+- [ ] `app/vvp/verify.py` — ensure `brand_name` and `brand_logo_url` are included in INDETERMINATE responses (currently brand info may be suppressed when credential chain fails)
+- [ ] `app/vvp/api_models.py` — add `certainty` field to `VerifyResponse` (`"full"` | `"partial"` | `"none"`), derived from overall_status
+- [ ] `tests/test_dossier_tel_filtering.py` — unit tests
+
+### Technical Notes
+
+**Identifying KERI TEL events in CESR stream:**
+```json
+{"v":"KERI10JSON0000ed_","t":"iss","d":"EHwbIQci...","i":"ELAEd--Ab...","s":"0","ri":"EPNFHfDLIN..."}
+```
+Three reliable discriminators (any one sufficient, use all for defence-in-depth):
+1. `"t"` key present — KERI events always have a type field; ACDCs never do
+2. `"v"` starts with `KERI10` — all KERI events; ACDCs use `ACDC10`
+3. `"s"` is not a 44-char E-prefix SAID — KERI `s` is a sequence number (`"0"`), ACDC `s` is a schema SAID
+
+**INDETERMINATE brand policy:**
+- `overall_status == INDETERMINATE` means Tier 1 checks passed (structure valid, PASSporT signature verified for B-prefix, or INDETERMINATE for E-prefix) but Tier 2 KEL resolution was unavailable
+- Brand assets SHALL be returned in the response (brand_name, brand_logo_url, brand_logo_hash where applicable)
+- OVC SIP handler: add `X-VVP-Certainty: partial` header alongside `X-VVP-Status: INDETERMINATE`
+- Monorepo: add `certainty: "partial"` to JSON `VerifyResponse`
+
+**Monorepo CESR-strict path** (`parse_cesr_stream`): already relies on `parse_acdc` try/except to skip non-ACDCs. KERI TEL events have `d` and `i` but their `parse_acdc` call will fail at SAID validation since the SAID was computed with KERI canonical form. The fallback permissive path already has `"t"` key filtering. Primary risk is in CESR-strict path if `parse_acdc` accepts a TEL event (unlikely given schema field mismatch). Harden proactively.
+
+### Key Files
+
+| Repo | File | Action |
+|------|------|--------|
+| OVC | `app/vvp/dossier.py` | Add KERI event filtering to Strategy 3 |
+| OVC | `app/vvp/verify.py` | Ensure brand populated on INDETERMINATE |
+| OVC | `app/sip/builder.py` | Add X-VVP-Certainty header |
+| OVC | `tests/test_dossier_tel_filtering.py` | New TEL filtering tests |
+| OVC | `tests/test_indeterminate_brand.py` | New INDETERMINATE brand tests |
+| Monorepo | `services/verifier/app/vvp/dossier/parser.py` | Harden CESR-strict path |
+| Monorepo | `services/verifier/app/vvp/verify.py` | Ensure brand populated on INDETERMINATE |
+| Monorepo | `services/verifier/app/vvp/api_models.py` | Add `certainty` field |
+| Monorepo | `services/verifier/tests/test_dossier_tel_filtering.py` | New tests |
+
+### Dependencies
+
+- Sprint 82 (OVC-VVP-Verifier v0.2.0 baseline)
+- Sprint 83 (Trusted Root Admin — establishes OVC admin structure)
+
+### Exit Criteria
+
+- [ ] OVC verifier: dossier with 7 ACDC + 7 KERI TEL events parses to 7 ACDCs with no INVALID
+- [ ] OVC verifier: INDETERMINATE call returns brand_name + brand_logo in 302 headers
+- [ ] OVC verifier: INDETERMINATE call includes `X-VVP-Certainty: partial` header
+- [ ] Monorepo verifier: CESR-strict path ignores KERI10 events
+- [ ] Monorepo verifier: INDETERMINATE response includes brand fields
+- [ ] Monorepo verifier: `VerifyResponse.certainty` field present and correct
+- [ ] All new tests pass in both repos

@@ -1180,8 +1180,7 @@ def main():
         print('  ./scripts/council-review.py --allow-external-code-review code 77 "Credential Revocation"')
         print()
         print("Platforms:")
-        print("  Codex CLI  — Account auth via ~/.codex/auth.json (run 'codex login' once)")
-        print("  Google     — Requires GOOGLE_API_KEY environment variable")
+        print("  Google Gemini — Requires GOOGLE_API_KEY environment variable (or set in ~/.zprofile)")
         sys.exit(1)
 
     review_type = positional[0]

@@ -13,13 +13,65 @@ ACDC field conventions:
 """
 
 import json
+import logging
+from dataclasses import dataclass, field
 from typing import Dict, List, Tuple
 
 from .exceptions import ParseError
 from .models import ACDCNode
 
+log = logging.getLogger(__name__)
+
 # Required ACDC fields per spec §6.1A
 REQUIRED_FIELDS = frozenset({"d", "i", "s"})
+
+
+def _is_keri_event(obj: dict) -> bool:
+    """Return True iff *obj* is positively identified as a KERI protocol event.
+
+    Uses POSITIVE markers only. Objects not identified as KERI fall through
+    to parse_acdc and may fail with a proper validation error.
+
+    Discriminators (any one sufficient):
+    1. ``"t"`` key present — KERI events always carry message-type; ACDCs never have "t".
+    2. ``"v"`` starts with ``"KERI10"`` — KERI versioned messages; ACDCs use ``"ACDC10"``.
+    """
+    if "t" in obj:
+        return True
+    if isinstance(obj.get("v"), str) and obj["v"].startswith("KERI10"):
+        return True
+    return False
+
+
+@dataclass
+class DossierParseResult:
+    """Result of parsing a dossier CESR stream.
+
+    Attributes
+    ----------
+    nodes : list[ACDCNode]
+        Parsed ACDC credential objects.
+    signatures : dict[str, bytes]
+        SAID -> signature bytes extracted from CESR attachments.
+        Empty for non-CESR (plain JSON) formats.
+    tel_events : list[dict]
+        KERI Transaction Event Log events found in the stream.
+        Retained for future inline revocation evaluation; not consumed
+        by the current verification pipeline.
+
+    Notes
+    -----
+    ``__iter__`` yields ``(nodes, signatures)`` to preserve backward
+    compatibility with code that unpacks the result as a 2-tuple.
+    """
+    nodes: List[ACDCNode]
+    signatures: Dict[str, bytes]
+    tel_events: List[dict] = field(default_factory=list)
+
+    def __iter__(self):
+        """Yield (nodes, signatures) for backward-compatible tuple unpacking."""
+        yield self.nodes
+        yield self.signatures
 
 
 def parse_acdc(data: dict) -> ACDCNode:
@@ -180,22 +232,23 @@ def _is_cesr_stream(data: bytes) -> bool:
     return False
 
 
-def parse_dossier(raw: bytes) -> Tuple[List[ACDCNode], Dict[str, bytes]]:
-    """Parse dossier from raw bytes, extracting ACDCs and their signatures.
+def parse_dossier(raw: bytes) -> DossierParseResult:
+    """Parse dossier from raw bytes, extracting ACDCs, their signatures, and TEL events.
 
     Supports:
     - Single ACDC object: {...}
     - Array of ACDC objects: [{...}, {...}]
     - CESR stream with attachments: {...}-A##<sig>...
 
-    For CESR format, signatures are extracted from the attachments and
-    returned in a dict mapping SAID -> signature bytes.
+    For CESR format, signatures are extracted from the attachments.
+    KERI TEL events (identified via _is_keri_event) are separated into
+    tel_events and retained for future inline revocation evaluation.
 
     Args:
         raw: Raw bytes from HTTP response
 
     Returns:
-        Tuple of (list of ACDCNode, dict mapping SAID -> signature bytes)
+        DossierParseResult with nodes, signatures, and tel_events
 
     Raises:
         ParseError: If parsing fails or structure is malformed
@@ -213,44 +266,45 @@ def parse_dossier(raw: bytes) -> Tuple[List[ACDCNode], Dict[str, bytes]]:
         try:
             messages = cesr.parse_cesr_stream(raw)
             nodes = []
+            tel_events: List[dict] = []
             for msg in messages:
                 event = msg.event_dict
-                # Check if this is an ACDC (has 'd' and 'i' fields)
+                if _is_keri_event(event):
+                    tel_events.append(event)
+                    continue
                 if "d" in event and "i" in event:
                     try:
                         node = parse_acdc(event)
                         nodes.append(node)
-                        # Extract first controller signature if present
                         if msg.controller_sigs:
                             signatures[node.said] = msg.controller_sigs[0]
                     except ParseError:
-                        # Skip non-ACDC events in the stream
                         continue
 
+            if tel_events:
+                log.info(
+                    "Dossier contains %d inline TEL events (retained)", len(tel_events)
+                )
             if not nodes:
                 raise ParseError("No ACDCs found in CESR stream")
 
-            return nodes, signatures
+            return DossierParseResult(nodes=nodes, signatures=signatures, tel_events=tel_events)
         except Exception:
             # Strict CESR parsing failed - fall back to permissive extraction
-            # This extracts JSON events without validating attachments
-            # Signatures will not be available in permissive mode
             events = _extract_json_events_permissive(raw)
             nodes = []
-            seen_saids: set = set()  # Deduplicate by SAID
+            tel_events = []
+            seen_saids: set = set()
             for event in events:
-                # Filter for ACDCs vs KEL events:
-                # - KEL events have "t" (type: icp, ixn, rot, etc.) and numeric "s" (sequence)
-                # - ACDCs don't have "t" and have SAID-format "s" (schema SAID)
-                if "t" in event:
-                    continue  # This is a KEL event, not an ACDC
+                if _is_keri_event(event):
+                    tel_events.append(event)
+                    continue
                 if "d" not in event or "i" not in event or "s" not in event:
                     continue
                 # Schema SAID should start with 'E' (KERI prefix for Blake3-256)
                 schema = event.get("s", "")
                 if not isinstance(schema, str) or not schema.startswith("E"):
-                    continue  # Likely a KEL sequence number, not schema SAID
-                # Deduplicate
+                    continue
                 said = event.get("d", "")
                 if said in seen_saids:
                     continue
@@ -261,10 +315,14 @@ def parse_dossier(raw: bytes) -> Tuple[List[ACDCNode], Dict[str, bytes]]:
                 except ParseError:
                     continue
 
+            if tel_events:
+                log.info(
+                    "Dossier contains %d inline TEL events (retained)", len(tel_events)
+                )
             if not nodes:
                 raise ParseError("No ACDCs found in CESR stream (permissive mode)")
 
-            return nodes, signatures  # signatures empty in permissive mode
+            return DossierParseResult(nodes=nodes, signatures=signatures, tel_events=tel_events)
 
     # Plain JSON format - no signatures
     try:
@@ -275,27 +333,28 @@ def parse_dossier(raw: bytes) -> Tuple[List[ACDCNode], Dict[str, bytes]]:
     # Handle Provenant wrapper format: {"details": "...CESR content..."}
     if isinstance(data, dict) and "details" in data and isinstance(data["details"], str):
         details_content = data["details"].encode("utf-8")
-        # The details field contains CESR stream content
         if _is_cesr_stream(details_content):
             return parse_dossier(details_content)
-        # Try parsing as plain JSON
         try:
             inner_data = json.loads(details_content)
             if isinstance(inner_data, dict):
-                return [parse_acdc(inner_data)], signatures
+                return DossierParseResult(nodes=[parse_acdc(inner_data)], signatures=signatures)
             elif isinstance(inner_data, list):
                 if not inner_data:
                     raise ParseError("Empty ACDC array in details")
-                return [parse_acdc(item) for item in inner_data], signatures
+                return DossierParseResult(
+                    nodes=[parse_acdc(item) for item in inner_data], signatures=signatures
+                )
         except json.JSONDecodeError:
-            # Not valid JSON inside details, treat as CESR
             return parse_dossier(details_content)
 
     if isinstance(data, dict):
-        return [parse_acdc(data)], signatures
+        return DossierParseResult(nodes=[parse_acdc(data)], signatures=signatures)
     elif isinstance(data, list):
         if not data:
             raise ParseError("Empty ACDC array")
-        return [parse_acdc(item) for item in data], signatures
+        return DossierParseResult(
+            nodes=[parse_acdc(item) for item in data], signatures=signatures
+        )
     else:
         raise ParseError(f"Expected object or array, got {type(data).__name__}")

@@ -367,6 +367,7 @@ class VerifyResponse(BaseModel):
     brand_name: Optional[str] = None
     brand_logo_url: Optional[str] = None
     brand_logo_hash: Optional[str] = None  # Sprint 79: Blake3 SAID from LOGO HASH param
+    certainty: Literal["full", "partial", "none"] = "none"
     revocation_pending: bool = False
     cache_hit: bool = False
     vetter_warning_reason: Optional[str] = None
@@ -375,6 +376,23 @@ class VerifyResponse(BaseModel):
 # =============================================================================
 # §4.3A Status Derivation
 # =============================================================================
+
+
+def _status_to_certainty(
+    status: ClaimStatus,
+) -> Literal["full", "partial", "none"]:
+    """Map verification status to public certainty indicator.
+
+    full    — VALID: all claims verified
+    partial — INDETERMINATE: structural checks passed, Tier 2 resolution unavailable
+    none    — INVALID: one or more required claims failed
+    """
+    if status == ClaimStatus.VALID:
+        return "full"
+    if status == ClaimStatus.INDETERMINATE:
+        return "partial"
+    return "none"
+
 
 def derive_overall_status(
     claims: Optional[List[ClaimNode]],

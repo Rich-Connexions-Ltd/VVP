@@ -132,9 +132,20 @@ All mutation endpoints return `503` when `VVP_ADMIN_TOKEN` is not configured (fa
   "issuer_identities": {"AID": {/* IssuerIdentityInfo */}},
   "vetter_constraints": {"SAID": {/* VetterConstraintInfo */}},
   "brand_name": "Acme Corp",
-  "brand_logo_url": "https://..."
+  "brand_logo_url": "https://...",
+  "certainty": "full|partial|none"
 }
 ```
+
+**`certainty` field** (Sprint 84): Maps `overall_status` to a three-value certainty indicator:
+- `"full"` — `VALID`: all claims verified
+- `"partial"` — `INDETERMINATE`: structural checks passed, Tier 2 KEL resolution unavailable
+- `"none"` — `INVALID`: one or more required claims failed
+
+**Brand emission policy** (Sprint 84): `brand_name`, `brand_logo_url`, and `brand_logo_hash` are now
+populated when `brand_claim.status` is `VALID` **or** `INDETERMINATE`. Previously only `VALID` was
+accepted. INDETERMINATE means the brand credential's structure is valid but its signature could not be
+verified at Tier 1 — brand is surfaced with `certainty: "partial"`.
 
 ### POST /verify-callee - Callee Verification
 

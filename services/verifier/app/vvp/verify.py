@@ -32,6 +32,7 @@ from .api_models import (
     ErrorCode,
     ERROR_RECOVERABILITY,
     derive_overall_status,
+    _status_to_certainty,
     DelegationChainResponse,
     DelegationNodeResponse,
     ToIPWarningDetail,
@@ -1911,7 +1912,7 @@ async def verify_vvp(
     response_brand_name = None
     response_brand_logo_url = None
     response_brand_logo_hash = None
-    if brand_info and brand_claim and brand_claim.status == ClaimStatus.VALID:
+    if brand_info and brand_claim and brand_claim.status in (ClaimStatus.VALID, ClaimStatus.INDETERMINATE):
         response_brand_name = brand_info.brand_name
         response_brand_logo_url = brand_info.brand_logo_url
         response_brand_logo_hash = brand_info.brand_logo_hash
@@ -1934,6 +1935,7 @@ async def verify_vvp(
         brand_name=response_brand_name,
         brand_logo_url=response_brand_logo_url,
         brand_logo_hash=response_brand_logo_hash,
+        certainty=_status_to_certainty(overall_status),
         revocation_pending=_revocation_pending,
         cache_hit=_verification_cache_hit,
         vetter_warning_reason=_vetter_warning_reason if overall_status == ClaimStatus.WARNING else None,

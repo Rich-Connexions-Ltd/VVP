@@ -849,15 +849,20 @@ class TestCESRSignatureExtraction:
 
         assert _is_cesr_stream(b"") is False
 
-    def test_parse_dossier_returns_tuple(self):
-        """parse_dossier always returns (nodes, signatures) tuple."""
+    def test_parse_dossier_returns_parse_result(self):
+        """parse_dossier returns DossierParseResult with named fields."""
+        from app.vvp.dossier.parser import DossierParseResult
         raw = json.dumps(VALID_ACDC).encode()
         result = parse_dossier(raw)
 
-        assert isinstance(result, tuple)
-        assert len(result) == 2
-        assert isinstance(result[0], list)
-        assert isinstance(result[1], dict)
+        assert isinstance(result, DossierParseResult)
+        assert isinstance(result.nodes, list)
+        assert isinstance(result.signatures, dict)
+        assert isinstance(result.tel_events, list)
+        # Backward-compat: still unpacks as (nodes, signatures)
+        nodes, sigs = result
+        assert isinstance(nodes, list)
+        assert isinstance(sigs, dict)
 
     def test_cesr_signature_extraction_mocked(self):
         """Test CESR signature extraction with mocked cesr module.

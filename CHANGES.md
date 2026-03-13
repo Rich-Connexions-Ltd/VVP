@@ -1,5 +1,17 @@
 # VVP Verifier Change Log
 
+## Sprint 84: Dossier TEL Event Filtering & INDETERMINATE Brand Policy — 2026-03-13
+
+**Files changed (monorepo `services/verifier/`):**
+- `app/vvp/dossier/parser.py` — Added `_is_keri_event()` classifier (positive-marker only); added `DossierParseResult` dataclass with `nodes`, `signatures`, `tel_events`, and backward-compat `__iter__`; updated both strict and permissive CESR paths to bifurcate TEL events into `tel_events` (retained for future revocation evaluation); updated all plain-JSON paths to return `DossierParseResult`
+- `app/vvp/api_models.py` — Added `certainty: Literal["full","partial","none"] = "none"` to `VerifyResponse`; added `_status_to_certainty()` canonical helper
+- `app/vvp/verify.py` — Imported `_status_to_certainty`; relaxed brand gate from `brand_claim.status == VALID` to `brand_claim.status in (VALID, INDETERMINATE)`; populated `certainty` field in `VerifyResponse` return
+- `tests/test_dossier.py` — Updated `test_parse_dossier_returns_tuple` → `test_parse_dossier_returns_parse_result` to validate `DossierParseResult` and backward-compat unpacking
+- `tests/test_dossier_tel_filtering.py` — New: TEL filtering tests for both CESR paths and backward-compat unpacking
+- `knowledge/api-reference.md` — Documented `certainty` field and updated brand gate policy
+
+**Commit:** *(pending)*
+
 ## Sprint 83: Runtime-Mutable Trusted Roots Admin — 2026-03-12
 
 **Files changed (monorepo `services/verifier/`):**

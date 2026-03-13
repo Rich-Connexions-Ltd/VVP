@@ -429,14 +429,19 @@ This project uses a **heterogeneous multi-agent workflow**: Claude (Editor/Imple
 
 **Prerequisites:**
 ```bash
-# Council review (default) — requires all 3 API keys:
-export ANTHROPIC_API_KEY=...   # Claude models (Security expert, Consolidator)
-export GOOGLE_API_KEY=...      # Gemini models (Performance, UX experts)
-export OPENAI_API_KEY=...      # OpenAI models (Documentation, Simplicity experts)
+# 1. Google API key — add to ~/.zprofile (auto-sourced by council-review.py):
+#    Used by: Performance, Cost, UX experts (primary) + fallback for all Codex roles
+export GOOGLE_API_KEY="..."    # https://aistudio.google.com/apikey
 
-# Fallback: Codex (single reviewer)
-npm install -g @openai/codex   # Install Codex CLI
-codex                           # Authenticate (follow prompts)
+# 2. Codex account login — run once in your terminal:
+codex login                    # Opens browser for OpenAI account auth
+                               # Stores session in ~/.codex/ — no API key needed after this
+
+# Verify everything is configured correctly:
+./scripts/council-check.sh
+
+# Fallback: Gemini single reviewer (GOOGLE_API_KEY only)
+python3 scripts/gemini-review.py
 ```
 
 ### Council of Experts Review
