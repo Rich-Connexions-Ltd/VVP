@@ -430,10 +430,13 @@ def phase0_warmup(verifier_url, issuer_url, witness_urls,
         "  sleep 2\n"
         "  # Force-kill any processes still holding SIP ports (5070-5072)\n"
         "  for port in 5070 5071 5072; do\n"
-        "    PID=$(ss -lntp 2>/dev/null | grep \":$port \" | sed 's/.*pid=\\([0-9]*\\).*/\\1/' | head -1)\n"
-        "    if [ -n \"$PID\" ] && [ \"$PID\" != \"0\" ]; then\n"
-        "      echo \"KILLING:pid=$PID on port $port\"\n"
-        "      kill -9 \"$PID\" 2>/dev/null || true\n"
+        "    if fuser ${port}/udp 2>/dev/null; then\n"
+        "      echo \"KILLING:port ${port}/udp\"\n"
+        "      fuser -k ${port}/udp 2>/dev/null || true\n"
+        "    fi\n"
+        "    if fuser ${port}/tcp 2>/dev/null; then\n"
+        "      echo \"KILLING:port ${port}/tcp\"\n"
+        "      fuser -k ${port}/tcp 2>/dev/null || true\n"
         "    fi\n"
         "  done\n"
         "  sleep 2\n"
@@ -636,7 +639,12 @@ def phase2_pbx_services(json_output=False, verbose=False):
 # ---------------------------------------------------------------------------
 
 def phase3_dialplan_validation(json_output=False, verbose=False):
-    """Fetch and validate PBX dialplan against rules."""
+    """Validate PBX dialplan by running checks ON the PBX.
+
+    Deploys a small Python validation script to the PBX via base64 to avoid
+    az run-command's ~4KB output truncation. The script parses the dialplan
+    XML locally and outputs structured CHECK= lines.
+    """
     log_header("Phase 3: Dialplan Validation", json_output)
     results = []
 
@@ -649,135 +657,122 @@ def phase3_dialplan_validation(json_output=False, verbose=False):
     with open(DIALPLAN_RULES_PATH) as f:
         rules = json.load(f)
 
-    # Fetch dialplan from PBX — use base64 encoding to avoid az run-command
-    # output truncation (az has a ~4KB message limit for raw output)
-    dialplan_path = rules.get("dialplan_path", "/etc/freeswitch/dialplan/public.xml")
-    log_check(f"Fetching {dialplan_path} from PBX", json_output)
-    ok, output = pbx_run(f"base64 {dialplan_path}")
+    # Build a Python validation script to run ON the PBX
+    # This avoids transferring the large XML through az run-command
+    rules_json = json.dumps(rules)
+    validation_script = '''
+import json
+import sys
+import xml.etree.ElementTree as ET
 
-    if not ok:
-        log_fail(f"Could not fetch dialplan: {output[:100]}", json_output)
-        results.append({"check": "fetch_dialplan", "ok": False, "detail": output[:200]})
-        return False, results
+rules = json.loads(RULES_JSON_PLACEHOLDER)
+dialplan_path = rules.get("dialplan_path", "/etc/freeswitch/dialplan/public.xml")
 
-    # Decode base64 to get raw XML
-    raw_b64 = strip_az_output(output)
-    # Clean up whitespace/newlines in base64 string
-    raw_b64 = raw_b64.replace("\n", "").replace("\r", "").replace(" ", "")
-    try:
-        xml_content = base64.b64decode(raw_b64).decode("utf-8")
-    except Exception as e:
-        log_fail(f"Could not decode dialplan base64: {e}", json_output)
-        log_info(f"  Base64 starts with: {repr(raw_b64[:100])}")
-        results.append({"check": "decode_dialplan", "ok": False, "detail": str(e)})
-        return False, results
+try:
+    tree = ET.parse(dialplan_path)
+    root = tree.getroot()
+    print("CHECK:parse_xml=PASS")
+except Exception as e:
+    print(f"CHECK:parse_xml=FAIL:{e}")
+    sys.exit(0)
 
-    if verbose and not json_output:
-        log_info(f"Raw XML (first 300 chars): {xml_content[:300]}")
+for ctx_name, ctx_rules in rules.get("contexts", {}).items():
+    ctx_elem = root.find(f".//context[@name='{ctx_name}']")
+    if ctx_elem is None:
+        print(f"CHECK:context_{ctx_name}=FAIL:not found")
+        continue
+    print(f"CHECK:context_{ctx_name}=PASS")
 
-    # Parse XML
-    try:
-        root = ET.fromstring(xml_content)
-    except ET.ParseError as e:
-        log_fail(f"Could not parse dialplan XML: {e}", json_output)
-        # Show what we're trying to parse for debugging
-        log_info(f"  Content starts with: {repr(xml_content[:200])}")
-        results.append({"check": "parse_xml", "ok": False, "detail": str(e),
-                         "content_preview": xml_content[:200]})
-        return False, results
+    for ext_name in ctx_rules.get("required_extensions", []):
+        ext_elem = ctx_elem.find(f".//extension[@name='{ext_name}']")
+        if ext_elem is None:
+            print(f"CHECK:ext_{ext_name}=FAIL:missing")
+        else:
+            print(f"CHECK:ext_{ext_name}=PASS")
 
-    log_pass("Dialplan XML parsed successfully", json_output)
-    results.append({"check": "parse_xml", "ok": True})
-
-    all_ok = True
-
-    # Validate each context
-    for ctx_name, ctx_rules in rules.get("contexts", {}).items():
-        # Find context element
-        ctx_elem = root.find(f".//context[@name='{ctx_name}']")
-        if ctx_elem is None:
-            log_fail(f"Context '{ctx_name}' not found in dialplan", json_output)
-            results.append({"check": f"context_{ctx_name}", "ok": False})
-            all_ok = False
+    for ext_name, checks in ctx_rules.get("checks", {}).items():
+        ext_elem = ctx_elem.find(f".//extension[@name='{ext_name}']")
+        if ext_elem is None:
             continue
 
-        log_pass(f"Context '{ctx_name}' exists", json_output)
-        results.append({"check": f"context_{ctx_name}", "ok": True})
+        actions = ext_elem.findall(".//action")
+        action_data = [a.get("data", "") for a in actions]
+        all_data = " ".join(action_data)
 
-        # Check required extensions
-        for ext_name in ctx_rules.get("required_extensions", []):
-            ext_elem = ctx_elem.find(f".//extension[@name='{ext_name}']")
-            if ext_elem is None:
-                log_fail(f"  Extension '{ext_name}' missing from '{ctx_name}'",
-                         json_output)
-                results.append({"check": f"ext_{ext_name}", "ok": False})
-                all_ok = False
-            else:
-                log_pass(f"  Extension '{ext_name}' present", json_output)
-                results.append({"check": f"ext_{ext_name}", "ok": True})
+        if "bridge_contains" in checks:
+            target = checks["bridge_contains"]
+            found = target in all_data
+            status = "PASS" if found else f"FAIL:bridge does not target {target}"
+            print(f"CHECK:{ext_name}_bridge_{target}={status}")
 
-        # Run extension-specific checks
-        for ext_name, checks in ctx_rules.get("checks", {}).items():
-            ext_elem = ctx_elem.find(f".//extension[@name='{ext_name}']")
-            if ext_elem is None:
-                continue  # Already reported as missing
+        if checks.get("bridge_contains_api_key"):
+            has_key = "X-VVP-API-Key=" in all_data
+            status = "PASS" if has_key else "FAIL:API key missing"
+            print(f"CHECK:{ext_name}_api_key={status}")
 
-            # Collect all action data values in this extension
-            actions = ext_elem.findall(".//action")
-            action_data = [a.get("data", "") for a in actions]
-            all_data = " ".join(action_data)
+        for header in checks.get("exports_headers", []):
+            found = header in all_data
+            status = "PASS" if found else f"FAIL:header not exported"
+            print(f"CHECK:{ext_name}_exports_{header}={status}")
 
-            # bridge_contains check
-            if "bridge_contains" in checks:
-                target = checks["bridge_contains"]
-                bridge_actions = [d for d in action_data
-                                  if any(a.get("application") == "bridge"
-                                         for a in actions
-                                         if a.get("data") == d)]
-                # Simpler: just check all data for the bridge target
-                found = target in all_data
-                if found:
-                    log_pass(f"  {ext_name}: bridge targets {target}", json_output)
-                else:
-                    log_fail(f"  {ext_name}: bridge does NOT target {target}",
-                             json_output)
-                    all_ok = False
-                results.append({"check": f"{ext_name}_bridge_{target}",
-                                 "ok": found})
+        if "sets_variable" in checks:
+            var = checks["sets_variable"]
+            found = var in all_data
+            status = "PASS" if found else f"FAIL:variable not set"
+            print(f"CHECK:{ext_name}_sets_{var}={status}")
+'''
+    # Inject the rules JSON into the script
+    validation_script = validation_script.replace(
+        'RULES_JSON_PLACEHOLDER', repr(rules_json)
+    )
 
-            # bridge_contains_api_key check
-            if checks.get("bridge_contains_api_key"):
-                has_key = "X-VVP-API-Key=" in all_data
-                if has_key:
-                    log_pass(f"  {ext_name}: API key in bridge data", json_output)
-                else:
-                    log_fail(f"  {ext_name}: API key MISSING from bridge data",
-                             json_output)
-                    all_ok = False
-                results.append({"check": f"{ext_name}_api_key", "ok": has_key})
+    # Deploy and run on PBX
+    log_check("Running dialplan validation on PBX", json_output)
+    script_b64 = base64.b64encode(validation_script.encode()).decode()
+    ok, output = pbx_run(
+        f"echo '{script_b64}' | base64 -d > /tmp/vvp_dialplan_check.py && "
+        f"python3 /tmp/vvp_dialplan_check.py && "
+        f"rm -f /tmp/vvp_dialplan_check.py",
+        timeout=60,
+    )
 
-            # exports_headers check
-            for header in checks.get("exports_headers", []):
-                found = header in all_data
-                if found:
-                    log_pass(f"  {ext_name}: exports {header}", json_output)
-                else:
-                    log_fail(f"  {ext_name}: does NOT export {header}",
-                             json_output)
-                    all_ok = False
-                results.append({"check": f"{ext_name}_exports_{header}",
-                                 "ok": found})
+    if not ok:
+        log_fail(f"Dialplan validation failed to run: {output[:200]}", json_output)
+        results.append({"check": "run_validation", "ok": False, "detail": output[:200]})
+        return False, results
 
-            # sets_variable check
-            if "sets_variable" in checks:
-                var = checks["sets_variable"]
-                found = var in all_data
-                if found:
-                    log_pass(f"  {ext_name}: sets {var}", json_output)
-                else:
-                    log_fail(f"  {ext_name}: does NOT set {var}", json_output)
-                    all_ok = False
-                results.append({"check": f"{ext_name}_sets_{var}", "ok": found})
+    # Parse CHECK= lines from output
+    clean = strip_az_output(output)
+    if verbose and not json_output:
+        log_info(f"Validation output: {clean[:500]}")
+
+    all_ok = True
+    found_checks = False
+
+    for line in clean.split("\n"):
+        line = line.strip()
+        if not line.startswith("CHECK:"):
+            continue
+        found_checks = True
+        # Format: CHECK:name=PASS or CHECK:name=FAIL:detail
+        rest = line[len("CHECK:"):]
+        name, status_part = rest.split("=", 1)
+        passed = status_part == "PASS"
+
+        if passed:
+            log_pass(f"  {name}", json_output)
+        else:
+            detail = status_part.split(":", 1)[1] if ":" in status_part else "failed"
+            log_fail(f"  {name}: {detail}", json_output)
+            all_ok = False
+
+        results.append({"check": name, "ok": passed})
+
+    if not found_checks:
+        log_fail("No validation results from PBX script", json_output)
+        log_info(f"  Output: {clean[:300]}")
+        results.append({"check": "validation_output", "ok": False})
+        return False, results
 
     return all_ok, results
 
