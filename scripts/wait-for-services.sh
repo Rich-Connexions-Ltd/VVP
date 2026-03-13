@@ -114,8 +114,11 @@ add_service "Witness-wan" "$WITNESS1_URL" "oobi" "$WAN_AID"
 add_service "Witness-wil" "$WITNESS2_URL" "oobi" "$WIL_AID"
 add_service "Witness-wes" "$WITNESS3_URL" "oobi" "$WES_AID"
 
-# Verifier
+# Verifier (monorepo)
 add_service "Verifier" "$VERIFIER_URL" "health" "/healthz"
+
+# OVC Verifier (pbx.rcnx.io/vvp-oss/ — local to PBX, proxied via nginx)
+add_service "OVC-Verifier" "https://pbx.rcnx.io" "health" "/vvp-oss/healthz"
 
 # KERI Agent (local only — internal in production, checked via Issuer /readyz)
 if [ -n "$KERI_AGENT_URL" ]; then
