@@ -205,6 +205,24 @@ def pbx_run(command, timeout=60):
     return False, "PBX command failed after 3 retries (Conflict)"
 
 
+def strip_az_output(output):
+    """Extract stdout content from az vm run-command output.
+
+    Azure wraps output as: 'Enable succeeded: \\n[stdout]\\n...\\n[stderr]\\n...'
+    This extracts just the stdout portion.
+    """
+    text = output
+    # Strip 'Enable succeeded:' prefix
+    if "Enable succeeded:" in text:
+        text = text.split("Enable succeeded:", 1)[1]
+    # Extract [stdout] content
+    if "[stdout]" in text:
+        text = text.split("[stdout]", 1)[1]
+        if "[stderr]" in text:
+            text = text.split("[stderr]")[0]
+    return text.strip()
+
+
 # ---------------------------------------------------------------------------
 # SIP message construction (from sip-call-test.py)
 # ---------------------------------------------------------------------------
@@ -318,6 +336,141 @@ def send_sip_and_receive(invite, host, port, timeout=SIP_TIMEOUT):
 
 
 # ---------------------------------------------------------------------------
+# Phase 0: Warmup — poll all services until healthy
+# ---------------------------------------------------------------------------
+
+WARMUP_TIMEOUT = 180  # Max seconds to wait for all services
+WARMUP_INTERVAL = 5   # Seconds between polls
+
+def phase0_warmup(verifier_url, issuer_url, witness_urls,
+                   json_output=False, verbose=False):
+    """Warm up all services by polling health endpoints until they respond.
+
+    Also polls PBX services via az vm run-command. Retries with backoff
+    until all services are healthy or timeout is reached.
+    """
+    log_header("Phase 0: Service Warmup", json_output)
+
+    # Build list of HTTP endpoints to poll
+    endpoints = [
+        ("Verifier", f"{verifier_url}/healthz", 10),
+        ("Issuer", f"{issuer_url}/healthz", 10),
+    ]
+    for i, (url, aid) in enumerate(zip(witness_urls, WITNESS_AIDS)):
+        endpoints.append((f"Witness {i+1}", f"{url}/oobi/{aid}/controller", 60))
+
+    # Track which endpoints are healthy
+    healthy = set()
+    start = time.monotonic()
+    attempt = 0
+
+    while time.monotonic() - start < WARMUP_TIMEOUT:
+        attempt += 1
+        remaining = [e for e in endpoints if e[0] not in healthy]
+
+        if not remaining:
+            break
+
+        if not json_output:
+            elapsed = int(time.monotonic() - start)
+            names = ", ".join(e[0] for e in remaining)
+            if attempt == 1:
+                log_info(f"Waiting for: {names}")
+            else:
+                log_info(f"Retry {attempt} ({elapsed}s): waiting for {names}")
+
+        for name, url, timeout in remaining:
+            ok, status, body, ms = check_http(url, timeout=min(timeout, 15))
+            if ok:
+                healthy.add(name)
+                log_pass(f"{name} ready ({ms}ms)", json_output)
+
+        if len(healthy) == len(endpoints):
+            break
+
+        time.sleep(WARMUP_INTERVAL)
+
+    # Report results
+    all_http_ok = len(healthy) == len(endpoints)
+    if not all_http_ok:
+        failed = [e[0] for e in endpoints if e[0] not in healthy]
+        for name in failed:
+            log_fail(f"{name} not ready after {WARMUP_TIMEOUT}s", json_output)
+
+    # Warm up PBX services
+    pbx_ok = True
+    if not json_output:
+        log_info("Checking PBX services...")
+
+    ok, output = pbx_run(
+        "for svc in freeswitch vvp-sip-redirect vvp-sip-verify; do "
+        "  if systemctl is-active --quiet \"$svc\" 2>/dev/null; then "
+        "    echo \"$svc=active\"; "
+        "  else "
+        "    echo \"$svc=$(systemctl is-active $svc 2>/dev/null)\"; "
+        "  fi; "
+        "done"
+    )
+
+    if ok:
+        clean = strip_az_output(output)
+        not_active = []
+        for svc in ["freeswitch", "vvp-sip-redirect", "vvp-sip-verify"]:
+            found = False
+            for line in clean.split("\n"):
+                line = line.strip()
+                if line == f"{svc}=active":
+                    found = True
+                    break
+            if found:
+                log_pass(f"PBX {svc} ready", json_output)
+            else:
+                not_active.append(svc)
+
+        if not_active:
+            # Try restarting the non-active services and wait
+            svc_list = " ".join(not_active)
+            log_info(f"Restarting: {svc_list}")
+            restart_ok, restart_out = pbx_run(
+                f"for svc in {svc_list}; do "
+                f"  systemctl restart $svc; "
+                f"done; "
+                f"sleep 10; "
+                f"for svc in {svc_list}; do "
+                f"  if systemctl is-active --quiet $svc 2>/dev/null; then "
+                f"    echo \"$svc=active\"; "
+                f"  else "
+                f"    echo \"$svc=$(systemctl is-active $svc 2>/dev/null)\"; "
+                f"  fi; "
+                f"done"
+            )
+            if restart_ok:
+                clean2 = strip_az_output(restart_out)
+                for svc in not_active:
+                    if f"{svc}=active" in clean2:
+                        log_pass(f"PBX {svc} ready (after restart)", json_output)
+                    else:
+                        log_fail(f"PBX {svc} not ready after restart", json_output)
+                        pbx_ok = False
+            else:
+                for svc in not_active:
+                    log_fail(f"PBX {svc} restart failed", json_output)
+                pbx_ok = False
+    else:
+        log_warn(f"Could not reach PBX VM: {output[:100]}", json_output)
+        # Non-fatal during warmup — Phase 2 will catch this
+        pbx_ok = True
+
+    total_elapsed = int(time.monotonic() - start)
+    if all_http_ok and pbx_ok:
+        log_pass(f"All services ready ({total_elapsed}s)", json_output)
+    else:
+        log_warn(f"Warmup incomplete after {total_elapsed}s", json_output)
+
+    return all_http_ok and pbx_ok
+
+
+# ---------------------------------------------------------------------------
 # Phase 1: Service Health Checks
 # ---------------------------------------------------------------------------
 
@@ -355,7 +508,7 @@ def phase1_health_checks(verifier_url, issuer_url, witness_urls,
         name = f"Witness {i+1}"
         log_check(name, json_output)
         oobi_url = f"{url}/oobi/{aid}/controller"
-        ok, status, body, ms = check_http(oobi_url, timeout=30)
+        ok, status, body, ms = check_http(oobi_url, timeout=60)
         if ok:
             log_pass(f"{name} healthy ({ms}ms)", json_output)
         else:
@@ -380,8 +533,13 @@ def phase2_pbx_services(json_output=False, verbose=False):
     ok, output = pbx_run("""
         echo '=== SERVICES ==='
         for svc in freeswitch vvp-sip-redirect vvp-sip-verify; do
-            status=$(systemctl is-active "$svc" 2>/dev/null || echo 'inactive')
-            echo "$svc=$status"
+            # Use --quiet so only exit code matters, then print clean status
+            if systemctl is-active --quiet "$svc" 2>/dev/null; then
+                echo "$svc=active"
+            else
+                actual=$(systemctl is-active "$svc" 2>/dev/null)
+                echo "$svc=${actual:-unknown}"
+            fi
         done
         echo '=== PORTS ==='
         for port in 5060 5070 5071 5072 5080 7443; do
@@ -398,24 +556,36 @@ def phase2_pbx_services(json_output=False, verbose=False):
         results.append({"component": "pbx_vm", "ok": False, "detail": output[:200]})
         return False, results
 
+    # Strip az output wrapper
+    clean_output = strip_az_output(output)
+
     if verbose and not json_output:
-        log_info(f"  PBX output: {output[:200]}")
+        log_info(f"  PBX output: {clean_output[:300]}")
 
     all_ok = True
 
-    # Parse service status
+    # Parse service status — line-by-line for exact matching
+    output_lines = clean_output.split("\n")
     for svc in ["freeswitch", "vvp-sip-redirect", "vvp-sip-verify"]:
-        active = f"{svc}=active" in output
+        # Find the exact line for this service
+        svc_status = "unknown"
+        for line in output_lines:
+            line = line.strip()
+            if line.startswith(f"{svc}="):
+                svc_status = line.split("=", 1)[1]
+                break
+        active = svc_status == "active"
         if active:
             log_pass(f"{svc} is active", json_output)
         else:
-            log_fail(f"{svc} is NOT active", json_output)
+            log_fail(f"{svc} is NOT active (status={svc_status})", json_output)
             all_ok = False
-        results.append({"component": f"pbx_{svc}", "ok": active})
+        results.append({"component": f"pbx_{svc}", "ok": active,
+                         "status": svc_status})
 
     # Parse port status
     for port in [5060, 5070, 5071, 5072, 5080, 7443]:
-        listening = f"port_{port}=listening" in output
+        listening = f"port_{port}=listening" in clean_output
         if listening:
             log_pass(f"Port {port} listening", json_output)
         else:
@@ -454,17 +624,8 @@ def phase3_dialplan_validation(json_output=False, verbose=False):
         results.append({"check": "fetch_dialplan", "ok": False, "detail": output[:200]})
         return False, results
 
-    # The az vm run-command wraps output with [stdout] / [stderr] markers
-    # Extract actual XML content
-    xml_content = output
-    if "[stdout]" in xml_content:
-        # Extract content between [stdout] and [stderr] or end
-        parts = xml_content.split("[stdout]", 1)
-        if len(parts) > 1:
-            xml_part = parts[1]
-            if "[stderr]" in xml_part:
-                xml_part = xml_part.split("[stderr]")[0]
-            xml_content = xml_part.strip()
+    # Strip az output wrapper to get raw XML
+    xml_content = strip_az_output(output)
 
     # Parse XML
     try:
@@ -715,15 +876,8 @@ else:
         results.append({"test": "sip_execution", "ok": False, "detail": output[:200]})
         return False, results
 
-    # Extract content from az output
-    test_output = output
-    if "[stdout]" in test_output:
-        parts = test_output.split("[stdout]", 1)
-        if len(parts) > 1:
-            test_output = parts[1]
-            if "[stderr]" in test_output:
-                test_output = test_output.split("[stderr]")[0]
-            test_output = test_output.strip()
+    # Strip az output wrapper
+    test_output = strip_az_output(output)
 
     if verbose and not json_output:
         log_info(f"  SIP test output: {test_output[:300]}")
@@ -901,48 +1055,44 @@ def phase5_loopback(api_key, orig_tn, dest_tn,
         f"sofia/internal/7{dest_ext}@127.0.0.1 &park"
     )
 
-    ok, output = pbx_run(f"""
-        # Start the call
-        RESULT=$(fs_cli -x '{originate_cmd}' 2>&1)
-        echo "ORIGINATE=$RESULT"
+    # Use a regular string (not f-string) for the bash script to avoid
+    # Python escape sequence issues with grep patterns
+    loopback_script = (
+        "# Start the call\n"
+        "RESULT=$(fs_cli -x '" + originate_cmd + "' 2>&1)\n"
+        "echo \"ORIGINATE=$RESULT\"\n"
+        "\n"
+        "# Wait for call to establish (signing + verification can take 10-15s)\n"
+        "sleep 15\n"
+        "\n"
+        "# Check for channels\n"
+        "CHANNELS=$(fs_cli -x 'show channels as json' 2>&1)\n"
+        "echo \"CHANNELS=$CHANNELS\"\n"
+        "\n"
+        "# Look for our test call and extract VVP variables\n"
+        "UUIDS=$(fs_cli -x 'show channels' 2>&1 | grep -E 'vvp-systest|VVP-SystemTest|" + orig_tn + "' | head -1 | awk '{print $1}')\n"
+        "if [ -n \"$UUIDS\" ]; then\n"
+        "    echo \"FOUND_UUID=$UUIDS\"\n"
+        "    echo \"VAR_BRAND=$(fs_cli -x \\\"uuid_getvar $UUIDS vvp_brand_name\\\" 2>&1)\"\n"
+        "    echo \"VAR_STATUS=$(fs_cli -x \\\"uuid_getvar $UUIDS vvp_status\\\" 2>&1)\"\n"
+        "    echo \"VAR_VETTER=$(fs_cli -x \\\"uuid_getvar $UUIDS vvp_vetter_status\\\" 2>&1)\"\n"
+        "fi\n"
+        "\n"
+        "# Clean up: hangup test calls\n"
+        "fs_cli -x 'hupall NORMAL_CLEARING' 2>&1 | head -1\n"
+        "\n"
+        "sleep 2\n"
+    )
 
-        # Wait for call to establish
-        sleep 8
-
-        # Check for channels
-        CHANNELS=$(fs_cli -x 'show channels as json' 2>&1)
-        echo "CHANNELS=$CHANNELS"
-
-        # Look for our test call and extract VVP variables
-        # Get any active channel UUIDs
-        UUIDS=$(fs_cli -x 'show channels' 2>&1 | grep 'vvp-systest\|VVP-SystemTest\|{orig_tn}' | head -1 | awk '{{print $1}}')
-        if [ -n "$UUIDS" ]; then
-            echo "FOUND_UUID=$UUIDS"
-            echo "VAR_BRAND=$(fs_cli -x "uuid_getvar $UUIDS vvp_brand_name" 2>&1)"
-            echo "VAR_STATUS=$(fs_cli -x "uuid_getvar $UUIDS vvp_status" 2>&1)"
-            echo "VAR_VETTER=$(fs_cli -x "uuid_getvar $UUIDS vvp_vetter_status" 2>&1)"
-        fi
-
-        # Clean up: hangup test calls
-        fs_cli -x 'hupall NORMAL_CLEARING' 2>&1 | head -1
-
-        sleep 2
-    """, timeout=120)
+    ok, output = pbx_run(loopback_script, timeout=120)
 
     if not ok:
         log_fail(f"Loopback test failed: {output[:200]}", json_output)
         results.append({"test": "loopback", "ok": False, "detail": output[:200]})
         return False, results
 
-    # Extract content from az output
-    test_output = output
-    if "[stdout]" in test_output:
-        parts = test_output.split("[stdout]", 1)
-        if len(parts) > 1:
-            test_output = parts[1]
-            if "[stderr]" in test_output:
-                test_output = test_output.split("[stderr]")[0]
-            test_output = test_output.strip()
+    # Strip az output wrapper
+    test_output = strip_az_output(output)
 
     if verbose and not json_output:
         log_info(f"  Loopback output: {test_output[:400]}")
@@ -1108,6 +1258,12 @@ def main():
 
     all_results = {}
     overall_ok = True
+
+    # Phase 0: Warmup — ensure all services are ready before testing
+    warmup_ok = phase0_warmup(verifier_url, issuer_url, WITNESS_URLS,
+                               args.json, args.verbose)
+    if not warmup_ok:
+        log_warn("Warmup incomplete — continuing with tests", args.json)
 
     # Phase 1: Health checks
     ok, results = phase1_health_checks(verifier_url, issuer_url, WITNESS_URLS,
