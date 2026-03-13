@@ -336,6 +336,141 @@ def send_sip_and_receive(invite, host, port, timeout=SIP_TIMEOUT):
 
 
 # ---------------------------------------------------------------------------
+# Phase 0: Warmup — poll all services until healthy
+# ---------------------------------------------------------------------------
+
+WARMUP_TIMEOUT = 180  # Max seconds to wait for all services
+WARMUP_INTERVAL = 5   # Seconds between polls
+
+def phase0_warmup(verifier_url, issuer_url, witness_urls,
+                   json_output=False, verbose=False):
+    """Warm up all services by polling health endpoints until they respond.
+
+    Also polls PBX services via az vm run-command. Retries with backoff
+    until all services are healthy or timeout is reached.
+    """
+    log_header("Phase 0: Service Warmup", json_output)
+
+    # Build list of HTTP endpoints to poll
+    endpoints = [
+        ("Verifier", f"{verifier_url}/healthz", 10),
+        ("Issuer", f"{issuer_url}/healthz", 10),
+    ]
+    for i, (url, aid) in enumerate(zip(witness_urls, WITNESS_AIDS)):
+        endpoints.append((f"Witness {i+1}", f"{url}/oobi/{aid}/controller", 60))
+
+    # Track which endpoints are healthy
+    healthy = set()
+    start = time.monotonic()
+    attempt = 0
+
+    while time.monotonic() - start < WARMUP_TIMEOUT:
+        attempt += 1
+        remaining = [e for e in endpoints if e[0] not in healthy]
+
+        if not remaining:
+            break
+
+        if not json_output:
+            elapsed = int(time.monotonic() - start)
+            names = ", ".join(e[0] for e in remaining)
+            if attempt == 1:
+                log_info(f"Waiting for: {names}")
+            else:
+                log_info(f"Retry {attempt} ({elapsed}s): waiting for {names}")
+
+        for name, url, timeout in remaining:
+            ok, status, body, ms = check_http(url, timeout=min(timeout, 15))
+            if ok:
+                healthy.add(name)
+                log_pass(f"{name} ready ({ms}ms)", json_output)
+
+        if len(healthy) == len(endpoints):
+            break
+
+        time.sleep(WARMUP_INTERVAL)
+
+    # Report results
+    all_http_ok = len(healthy) == len(endpoints)
+    if not all_http_ok:
+        failed = [e[0] for e in endpoints if e[0] not in healthy]
+        for name in failed:
+            log_fail(f"{name} not ready after {WARMUP_TIMEOUT}s", json_output)
+
+    # Warm up PBX services
+    pbx_ok = True
+    if not json_output:
+        log_info("Checking PBX services...")
+
+    ok, output = pbx_run(
+        "for svc in freeswitch vvp-sip-redirect vvp-sip-verify; do "
+        "  if systemctl is-active --quiet \"$svc\" 2>/dev/null; then "
+        "    echo \"$svc=active\"; "
+        "  else "
+        "    echo \"$svc=$(systemctl is-active $svc 2>/dev/null)\"; "
+        "  fi; "
+        "done"
+    )
+
+    if ok:
+        clean = strip_az_output(output)
+        not_active = []
+        for svc in ["freeswitch", "vvp-sip-redirect", "vvp-sip-verify"]:
+            found = False
+            for line in clean.split("\n"):
+                line = line.strip()
+                if line == f"{svc}=active":
+                    found = True
+                    break
+            if found:
+                log_pass(f"PBX {svc} ready", json_output)
+            else:
+                not_active.append(svc)
+
+        if not_active:
+            # Try restarting the non-active services and wait
+            svc_list = " ".join(not_active)
+            log_info(f"Restarting: {svc_list}")
+            restart_ok, restart_out = pbx_run(
+                f"for svc in {svc_list}; do "
+                f"  systemctl restart $svc; "
+                f"done; "
+                f"sleep 10; "
+                f"for svc in {svc_list}; do "
+                f"  if systemctl is-active --quiet $svc 2>/dev/null; then "
+                f"    echo \"$svc=active\"; "
+                f"  else "
+                f"    echo \"$svc=$(systemctl is-active $svc 2>/dev/null)\"; "
+                f"  fi; "
+                f"done"
+            )
+            if restart_ok:
+                clean2 = strip_az_output(restart_out)
+                for svc in not_active:
+                    if f"{svc}=active" in clean2:
+                        log_pass(f"PBX {svc} ready (after restart)", json_output)
+                    else:
+                        log_fail(f"PBX {svc} not ready after restart", json_output)
+                        pbx_ok = False
+            else:
+                for svc in not_active:
+                    log_fail(f"PBX {svc} restart failed", json_output)
+                pbx_ok = False
+    else:
+        log_warn(f"Could not reach PBX VM: {output[:100]}", json_output)
+        # Non-fatal during warmup — Phase 2 will catch this
+        pbx_ok = True
+
+    total_elapsed = int(time.monotonic() - start)
+    if all_http_ok and pbx_ok:
+        log_pass(f"All services ready ({total_elapsed}s)", json_output)
+    else:
+        log_warn(f"Warmup incomplete after {total_elapsed}s", json_output)
+
+    return all_http_ok and pbx_ok
+
+
+# ---------------------------------------------------------------------------
 # Phase 1: Service Health Checks
 # ---------------------------------------------------------------------------
 
@@ -1123,6 +1258,12 @@ def main():
 
     all_results = {}
     overall_ok = True
+
+    # Phase 0: Warmup — ensure all services are ready before testing
+    warmup_ok = phase0_warmup(verifier_url, issuer_url, WITNESS_URLS,
+                               args.json, args.verbose)
+    if not warmup_ok:
+        log_warn("Warmup incomplete — continuing with tests", args.json)
 
     # Phase 1: Health checks
     ok, results = phase1_health_checks(verifier_url, issuer_url, WITNESS_URLS,
