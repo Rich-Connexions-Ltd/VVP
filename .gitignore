@@ -74,5 +74,8 @@ Thumbs.db
 *.pem
 *.key
 
+# System test gate file (transient)
+.system-test-gate
+
 # Temporary test data
 .tmp-issuer-data/
