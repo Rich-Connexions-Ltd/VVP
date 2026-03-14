@@ -1062,6 +1062,142 @@ class TestEdgeSemantics:
         assert warnings == []
 
 
+class TestEdgeSemanticsWithClassifications:
+    """Sprint 88: Classification-aware branches in validate_edge_semantics."""
+
+    def test_classification_overrides_heuristic_type(self):
+        """When classifications provided, uses governed type instead of heuristic."""
+        from app.vvp.acdc.verifier import validate_edge_semantics
+        from common.vvp.schema.registry import CredentialClassification, SchemaGovernanceStatus
+
+        le_said = "E" + "L" * 43
+        ape_said = "E" + "A" * 43
+
+        # LE credential as vetting target
+        le_cred = ACDC(
+            version="", said=le_said, issuer_aid="D" + "R" * 43,
+            schema_said=KNOWN_LE_SCHEMA,
+            attributes={"LEI": "1234567890"},
+            raw={}
+        )
+        # APE credential with vetting edge to LE
+        ape_cred = ACDC(
+            version="", said=ape_said, issuer_aid="D" + "I" * 43,
+            schema_said="",
+            edges={"vetting": {"n": le_said}},
+            attributes={"name": "Test"},
+            raw={}
+        )
+
+        classifications = {
+            ape_said: CredentialClassification("APE", SchemaGovernanceStatus.GOVERNED, "Eape_schema"),
+            le_said: CredentialClassification("LE", SchemaGovernanceStatus.GOVERNED, KNOWN_LE_SCHEMA),
+        }
+
+        warnings, status = validate_edge_semantics(
+            ape_cred, {le_said: le_cred}, classifications=classifications
+        )
+        assert status == ClaimStatus.VALID
+        assert warnings == []
+
+    def test_non_governed_target_produces_indeterminate(self):
+        """Non-governed target classification produces INDETERMINATE + EDGE_GOVERNANCE_PENDING.
+
+        Uses DE→APE delegation edge to avoid APE's extra schema validation on LE targets.
+        """
+        from app.vvp.acdc.verifier import validate_edge_semantics
+        from common.vvp.schema.registry import CredentialClassification, SchemaGovernanceStatus
+
+        ape_said = "E" + "A" * 43
+        de_said = "E" + "D" * 43
+
+        # APE target credential (delegation target for DE)
+        ape_cred = ACDC(
+            version="", said=ape_said, issuer_aid="D" + "R" * 43,
+            schema_said="",
+            edges={"vetting": {"n": "E" + "L" * 43}},
+            attributes={"name": "Test APE"},
+            raw={}
+        )
+        # DE credential delegating to APE
+        de_cred = ACDC(
+            version="", said=de_said, issuer_aid="D" + "I" * 43,
+            schema_said="",
+            edges={"delegation": {"n": ape_said}},
+            attributes={"name": "Test DE"},
+            raw={}
+        )
+
+        classifications = {
+            de_said: CredentialClassification("DE", SchemaGovernanceStatus.GOVERNED, "Ede"),
+            ape_said: CredentialClassification("APE", SchemaGovernanceStatus.UNCLASSIFIED, "Eunknown"),
+        }
+
+        warnings, status = validate_edge_semantics(
+            de_cred, {ape_said: ape_cred}, classifications=classifications
+        )
+        assert status == ClaimStatus.INDETERMINATE
+        assert any("EDGE_GOVERNANCE_PENDING" in w for w in warnings)
+
+    def test_wrong_type_with_classification_raises(self):
+        """Classification-authoritative type mismatch raises ACDCChainInvalid."""
+        from app.vvp.acdc.verifier import validate_edge_semantics
+        from common.vvp.schema.registry import CredentialClassification, SchemaGovernanceStatus
+
+        target_said = "E" + "T" * 43
+        ape_said = "E" + "A" * 43
+
+        # Target is classified as TNAlloc (wrong for APE vetting)
+        target = ACDC(
+            version="", said=target_said, issuer_aid="D" + "R" * 43,
+            schema_said="",
+            attributes={"tn": ["+1*"]},
+            raw={}
+        )
+        ape_cred = ACDC(
+            version="", said=ape_said, issuer_aid="D" + "I" * 43,
+            schema_said="",
+            edges={"vetting": {"n": target_said}},
+            attributes={"name": "Test"},
+            raw={}
+        )
+
+        classifications = {
+            ape_said: CredentialClassification("APE", SchemaGovernanceStatus.GOVERNED, "Eape"),
+            target_said: CredentialClassification("TNAlloc", SchemaGovernanceStatus.GOVERNED, "Etn"),
+        }
+
+        with pytest.raises(ACDCChainInvalid, match="expected one of"):
+            validate_edge_semantics(
+                ape_cred, {target_said: target}, classifications=classifications
+            )
+
+    def test_without_classifications_uses_heuristic(self):
+        """Without classifications parameter, falls back to heuristic type."""
+        from app.vvp.acdc.verifier import validate_edge_semantics
+
+        le_said = "E" + "L" * 43
+        ape_said = "E" + "A" * 43
+
+        le_cred = ACDC(
+            version="", said=le_said, issuer_aid="D" + "R" * 43,
+            schema_said=KNOWN_LE_SCHEMA,
+            attributes={"LEI": "1234567890"},
+            raw={}
+        )
+        ape_cred = ACDC(
+            version="", said=ape_said, issuer_aid="D" + "I" * 43,
+            schema_said="",
+            edges={"vetting": {"n": le_said}},
+            attributes={"name": "Test"},
+            raw={}
+        )
+
+        # No classifications passed — should use heuristic and still work
+        warnings, status = validate_edge_semantics(ape_cred, {le_said: le_cred})
+        assert status == ClaimStatus.VALID
+
+
 class TestAcdcVariantDetection:
     """Tests for ACDC variant detection and rejection (8.9)."""
 
