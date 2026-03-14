@@ -29,7 +29,7 @@
 - `VVP_ADMIN_API_KEY` — admin API key for CI/CD witness republish
 - `VVP_PROBE_AID` — optional seeded AID for fallback OOBI verification
 
-**Commit:** `pending`
+**Commit:** `ade674f`
 
 ## Sprint 85: OVC Verifier Tier 2 + Cross-Verifier System Test — 2026-03-14
 

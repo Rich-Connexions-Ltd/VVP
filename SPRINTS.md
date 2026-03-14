@@ -75,7 +75,7 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 83 | Root of Trust Admin Configuration | COMPLETE | Sprint 82 |
 | 84 | Dossier TEL Event Filtering & INDETERMINATE Brand Policy | COMPLETE | Sprint 82, 83 |
 | 85 | OVC Verifier Tier 2 + Cross-Verifier System Test | COMPLETE | Sprint 82, 83, 84 |
-| 86 | Witness State Resilience | IN PROGRESS | Sprint 70, 81 |
+| 86 | Witness State Resilience | COMPLETE | Sprint 70, 81 |
 
 ---
 
