@@ -120,7 +120,11 @@ class WitnessRecoveryService:
         self._witness_urls = self._extract_witness_urls()
 
     def _extract_witness_urls(self) -> list[str]:
-        """Extract base URLs from configured witness OOBI iurls."""
+        """Extract base witness URLs from configured OOBI introduction URLs.
+
+        Parses WITNESS_IURLS (e.g. 'http://host:port/oobi/AID/controller')
+        and returns the base URL portion before '/oobi/'.
+        """
         urls = []
         for iurl in WITNESS_IURLS:
             parts = iurl.split("/oobi/")
