@@ -1,5 +1,26 @@
 # VVP Verifier Change Log
 
+## Sprint 85: OVC Verifier Tier 2 + Cross-Verifier System Test — 2026-03-14
+
+**Files changed (VVP monorepo):**
+- `scripts/system-test.py` — Added `--oss-verifier` and `--verifier-url` flags for cross-verifier testing; HTTPS-only with origin allowlist; isolated test service on port 5073; try/finally cleanup
+
+**Files changed (OVC repo — `OVC-VVP-Verifier/`):**
+- `app/vvp/keri/` — New: 9 modules ported from monorepo (kel_parser, oobi, cache, kel_resolver, delegation, signature, exceptions, key_parser, cesr)
+- `app/vvp/signature.py` — Added async Tier 2 routing for D/E-prefix AIDs
+- `app/vvp/verify.py` — Phase 4 async with KERI exception handling
+- `app/vvp/fetch.py` — Added `authorize_destination()` destination allowlist
+- `app/config.py` — Added Tier 2 config + `VVP_ALLOWED_FETCH_ORIGINS` + `VVP_ADMIN_ENABLED`
+- `app/main.py` — Admin router gated behind `VVP_ADMIN_ENABLED`
+- `app/sip/handler.py` — SIP STIR parameter stripping
+- `tests/test_keri.py` — New: 53 tests for KERI subsystem
+- `tests/test_fetch_allowlist.py` — New: 9 tests for destination allowlist
+- `ALGORITHMS.md` — Added Tier 2 KEL resolution algorithm documentation
+- `README.md` — Updated capabilities table and config reference
+- `CHANGES.md` — Sprint 85 changelog
+
+**Commit:** `9b72b37` (monorepo), `3c84fa5` (OVC)
+
 ## Sprint 84: Dossier TEL Event Filtering & INDETERMINATE Brand Policy — 2026-03-13
 
 **Files changed (monorepo `services/verifier/`):**

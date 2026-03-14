@@ -71,6 +71,10 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 79 | Provenant Brand Schema & Logo Integrity | COMPLETE | Sprint 58, 78 |
 | 80 | TEL Publication to Witnesses | COMPLETE | Sprint 74b |
 | 81 | Robust Post-Update State Restoration | PLANNED | Sprint 69, 70, 75, 80 |
+| 82 | OVC-VVP-Verifier Sync (v0.2.0) | COMPLETE | Sprint 54 |
+| 83 | Root of Trust Admin Configuration | COMPLETE | Sprint 82 |
+| 84 | Dossier TEL Event Filtering & INDETERMINATE Brand Policy | COMPLETE | Sprint 82, 83 |
+| 85 | OVC Verifier Tier 2 + Cross-Verifier System Test | PENDING | Sprint 82, 83, 84 |
 
 ---
 
@@ -6344,3 +6348,102 @@ Three reliable discriminators (any one sufficient, use all for defence-in-depth)
 - [ ] Monorepo verifier: INDETERMINATE response includes brand fields
 - [ ] Monorepo verifier: `VerifyResponse.certainty` field present and correct
 - [ ] All new tests pass in both repos
+
+---
+
+## Sprint 85: OVC Verifier Tier 2 + Cross-Verifier System Test
+
+**Status:** IN PROGRESS
+**Goal:** Port Tier 2 KEL resolution and SIP STIR parameter stripping to the OVC-VVP-Verifier, deploy it to Azure, and add a cross-verifier mode to the system test that validates the VVP issuer signing chain against the OSS verifier.
+
+**Repository:** https://github.com/Rich-Connexions-Ltd/OVC-VVP-Verifier (local: `/Users/andrewbale/code/active/OVC-VVP-Verifier/`)
+
+### Background
+
+The OVC-VVP-Verifier (v0.2.0) handles Tier 1 verification only — non-transferable Ed25519 AIDs with B-prefix. All transferable AIDs (E/D-prefix) are rejected with `KERI_RESOLUTION_FAILED`. Since the VVP issuer creates transferable identities, the OSS verifier returns INDETERMINATE for every real call. The monorepo verifier has a full Tier 2 KEL implementation (Sprints 9-25) with OOBI fetch, KEL parsing, witness receipt validation, delegation chains, and range-based caching. This sprint ports that capability to the OSS verifier.
+
+Additionally, the SIP handler doesn't strip RFC 8224 STIR parameters (`;info=<url>;alg=EdDSA;ppt=vvp`) from the Identity header before extracting the PASSporT JWT, causing parse failures when receiving calls via FreeSWITCH.
+
+Finally, we add a `--oss-verifier` mode to `scripts/system-test.py` that exercises the VVP issuer's signing service against the OSS verifier deployed in Azure, validating interoperability.
+
+### Deliverables
+
+**Phase 1 — Tier 2 KEL Resolution (OVC repo):**
+- [ ] Port `keri/kel_parser.py` — KEL event parsing (CESR binary + JSON formats)
+- [ ] Port `keri/kel_resolver.py` — Temporal key state resolution at reference time T
+- [ ] Port `keri/oobi.py` — OOBI HTTP fetch with SSRF validation
+- [ ] Port `keri/cesr.py` — Binary CESR stream parsing (-D/-V attachments)
+- [ ] Port `keri/signature.py` — Tier 2 signature verification (`verify_passport_signature_tier2`)
+- [ ] Port `keri/delegation.py` — Delegated AID (dip/drt) chain validation
+- [ ] Port `keri/witness_pool.py` — Unified witness pool (GLEIF + configured + KEL-derived)
+- [ ] Port `keri/cache.py` — Range-based key state caching (Sprint 78)
+- [ ] Update `app/vvp/verify.py` — Integrate Tier 2 into Phase 3 signature verification
+- [ ] Update `app/config.py` — Add `TIER2_KEL_RESOLUTION_ENABLED`, `VVP_KEY_STATE_FRESHNESS_WINDOW_SECONDS`, witness URLs
+- [ ] Port relevant tests — KEL parser, resolver, CESR, delegation, witness receipt tests
+- [ ] Port `common/vvp/canonical/keri_canonical.py` if not already present (KERI field ordering for SAID computation)
+
+**Phase 2 — SIP STIR Parameter Stripping (OVC repo):**
+- [ ] `app/sip/handler.py` — Strip `;info=...;alg=...;ppt=...` from Identity header before JWT extraction
+- [ ] `app/sip/parser.py` — Add STIR parameter parsing helper
+- [ ] Tests for STIR-formatted Identity headers
+
+**Phase 3 — Azure Deployment (OVC repo):**
+- [ ] `Dockerfile` — Container definition (if not already present)
+- [ ] `.github/workflows/deploy.yml` — CI/CD pipeline to Azure Container Apps
+- [ ] Azure Container App configuration — deploy as `vvp-verifier-oss.rcnx.io` (or similar)
+- [ ] Configure trusted roots: GLEIF + QVI mock AIDs matching the VVP issuer
+- [ ] Verify health endpoint responds at deployed URL
+
+**Phase 4 — Cross-Verifier System Test (VVP monorepo):**
+- [ ] `scripts/system-test.py` — Add `--oss-verifier` flag that:
+  - Uses the VVP issuer for signing (same as default)
+  - Routes verification through the OSS verifier URL instead of the monorepo verifier
+  - Runs all existing SIP scenarios and asserts same VALID/brand/logo expectations
+- [ ] `scripts/system-test.py` — Add `--verifier-url <URL>` flag for arbitrary verifier targeting
+- [ ] PBX dialplan — Add ability to route verification to an alternative verifier (e.g., via environment variable on sip-verify service, or a separate sip-verify instance on a different port)
+- [ ] Document cross-verifier testing in system test `--help` output
+
+### Technical Notes
+
+**Porting strategy:** The OVC repo uses a flat structure (`app/vvp/*.py`). Port KEL modules into a `app/vvp/keri/` subdirectory to keep the same logical grouping. The canonical serialization module may need vendoring from `common/` since OVC doesn't depend on the common package.
+
+**Witness configuration:** The OSS verifier in Azure needs to reach the same witnesses as the monorepo verifier. Configure `PROVENANT_WITNESS_URLS` and/or `VVP_WITNESS_URLS` to point to `vvp-witness{1,2,3}.rcnx.io`.
+
+**Trusted roots:** The OSS verifier must trust the same root AIDs as the monorepo verifier: the mock GLEIF root (`EMIHOLO8...`) and mock GSMA/QVI (`EMAO69dw...`). These are set via `VVP_TRUSTED_ROOT_AIDS` environment variable.
+
+**Cross-verifier test architecture:** The system test's SIP phase runs scripts ON the PBX. For cross-verifier testing, the simplest approach is configuring the `vvp-sip-verify` service's `VVP_VERIFIER_URL` to point to the OSS verifier URL, or deploying a second sip-verify instance on a different port. The system test would then route verification SIP through the appropriate port.
+
+**Out of scope:** Vetter constraints (Sprint 82 declared these out of scope for standalone verifier — policy enforcement belongs to the issuer/operator). Brand verification is already partially ported (Sprint 82/84). Goal verification and callee verification remain monorepo-only features.
+
+### Key Files
+
+| Repo | File | Action |
+|------|------|--------|
+| OVC | `app/vvp/keri/` (new dir) | Port 8 KEL modules from monorepo |
+| OVC | `app/vvp/verify.py` | Integrate Tier 2 into Phase 3 |
+| OVC | `app/vvp/signature.py` | Update to call Tier 2 for transferable AIDs |
+| OVC | `app/config.py` | Add Tier 2 config variables |
+| OVC | `app/sip/handler.py` | STIR parameter stripping |
+| OVC | `tests/test_kel_*.py` | Port KEL test suite |
+| OVC | `Dockerfile` | Azure deployment |
+| OVC | `.github/workflows/deploy.yml` | CI/CD |
+| VVP | `scripts/system-test.py` | Add --oss-verifier / --verifier-url flags |
+
+### Dependencies
+
+- Sprint 82 (OVC v0.2.0 baseline — bug fixes, protocol alignment)
+- Sprint 83 (Trusted Root Admin — OVC now has admin endpoint for root config)
+- Sprint 84 (TEL event filtering — OVC can parse dossiers with KERI events)
+
+### Exit Criteria
+
+- [ ] OVC verifier: transferable AID (E-prefix) PASSporT returns VALID (not INDETERMINATE) when OOBI is resolvable
+- [ ] OVC verifier: KEL resolution validates witness receipts against threshold
+- [ ] OVC verifier: delegated AIDs resolve through delegation chain
+- [ ] OVC verifier: STIR-formatted Identity header parsed correctly (`;info=...` stripped)
+- [ ] OVC verifier: deployed to Azure and healthz returns 200
+- [ ] OVC verifier: `VVP_TRUSTED_ROOT_AIDS` configured with VVP issuer mock roots
+- [ ] System test: `python3 scripts/system-test.py --oss-verifier` passes all SIP scenarios with VALID status
+- [ ] System test: cross-verifier results match monorepo verifier results (same brand name, logo, status)
+- [ ] All existing OVC tests continue to pass
+- [ ] New KEL tests pass (parser, resolver, delegation, witness receipts, CESR binary)
