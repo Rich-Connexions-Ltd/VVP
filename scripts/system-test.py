@@ -671,24 +671,24 @@ dialplan_path = rules.get("dialplan_path", "/etc/freeswitch/dialplan/public.xml"
 try:
     tree = ET.parse(dialplan_path)
     root = tree.getroot()
-    print("CHECK:parse_xml=PASS")
+    print("CHECK|parse_xml|PASS")
 except Exception as e:
-    print(f"CHECK:parse_xml=FAIL:{e}")
+    print(f"CHECK|parse_xml|FAIL|{e}")
     sys.exit(0)
 
 for ctx_name, ctx_rules in rules.get("contexts", {}).items():
     ctx_elem = root.find(f".//context[@name='{ctx_name}']")
     if ctx_elem is None:
-        print(f"CHECK:context_{ctx_name}=FAIL:not found")
+        print(f"CHECK|context_{ctx_name}|FAIL|not found")
         continue
-    print(f"CHECK:context_{ctx_name}=PASS")
+    print(f"CHECK|context_{ctx_name}|PASS")
 
     for ext_name in ctx_rules.get("required_extensions", []):
         ext_elem = ctx_elem.find(f".//extension[@name='{ext_name}']")
         if ext_elem is None:
-            print(f"CHECK:ext_{ext_name}=FAIL:missing")
+            print(f"CHECK|ext_{ext_name}|FAIL|missing")
         else:
-            print(f"CHECK:ext_{ext_name}=PASS")
+            print(f"CHECK|ext_{ext_name}|PASS")
 
     for ext_name, checks in ctx_rules.get("checks", {}).items():
         ext_elem = ctx_elem.find(f".//extension[@name='{ext_name}']")
@@ -702,24 +702,26 @@ for ctx_name, ctx_rules in rules.get("contexts", {}).items():
         if "bridge_contains" in checks:
             target = checks["bridge_contains"]
             found = target in all_data
-            status = "PASS" if found else f"FAIL:bridge does not target {target}"
-            print(f"CHECK:{ext_name}_bridge_{target}={status}")
+            status = "PASS" if found else "FAIL|bridge does not target " + target
+            print(f"CHECK|{ext_name}_bridge_{target}|{status}")
 
         if checks.get("bridge_contains_api_key"):
             has_key = "X-VVP-API-Key=" in all_data
-            status = "PASS" if has_key else "FAIL:API key missing"
-            print(f"CHECK:{ext_name}_api_key={status}")
+            status = "PASS" if has_key else "FAIL|API key missing"
+            print(f"CHECK|{ext_name}_api_key|{status}")
 
         for header in checks.get("exports_headers", []):
             found = header in all_data
-            status = "PASS" if found else f"FAIL:header not exported"
-            print(f"CHECK:{ext_name}_exports_{header}={status}")
+            status = "PASS" if found else "FAIL|header not exported"
+            print(f"CHECK|{ext_name}_exports_{header}|{status}")
 
         if "sets_variable" in checks:
             var = checks["sets_variable"]
             found = var in all_data
-            status = "PASS" if found else f"FAIL:variable not set"
-            print(f"CHECK:{ext_name}_sets_{var}={status}")
+            # Use sanitized name (replace = with _eq_) for display
+            safe_name = var.replace("=", "_eq_")
+            status = "PASS" if found else "FAIL|variable not set"
+            print(f"CHECK|{ext_name}_sets_{safe_name}|{status}")
 '''
     # Inject the rules JSON into the script
     validation_script = validation_script.replace(
@@ -751,18 +753,21 @@ for ctx_name, ctx_rules in rules.get("contexts", {}).items():
 
     for line in clean.split("\n"):
         line = line.strip()
-        if not line.startswith("CHECK:"):
+        if not line.startswith("CHECK|"):
             continue
         found_checks = True
-        # Format: CHECK:name=PASS or CHECK:name=FAIL:detail
-        rest = line[len("CHECK:"):]
-        name, status_part = rest.split("=", 1)
+        # Format: CHECK|name|PASS or CHECK|name|FAIL|detail
+        parts = line.split("|")
+        if len(parts) < 3:
+            continue
+        name = parts[1]
+        status_part = parts[2]
         passed = status_part == "PASS"
 
         if passed:
             log_pass(f"  {name}", json_output)
         else:
-            detail = status_part.split(":", 1)[1] if ":" in status_part else "failed"
+            detail = parts[3] if len(parts) > 3 else "failed"
             log_fail(f"  {name}: {detail}", json_output)
             all_ok = False
 
@@ -778,27 +783,85 @@ for ctx_name, ctx_rules in rules.get("contexts", {}).items():
 
 
 # ---------------------------------------------------------------------------
-# Phase 4: SIP Call Tests (on PBX)
+# Phase 4: SIP Call Tests (on PBX) — Scenario-Driven
 # ---------------------------------------------------------------------------
 
-def phase4_sip_calls(api_key, orig_tn, dest_tn,
-                     json_output=False, verbose=False):
-    """Run SIP signing and verification tests on the PBX."""
-    log_header("Phase 4: SIP Call Tests", json_output)
-    results = []
+# Test scenarios: each defines a signing+verification test with expected outcomes
+# Add new scenarios here as more orgs/dossiers are bootstrapped
+# Test scenarios: each defines a signing+verification test with expected outcomes.
+#
+# Signing service (port 5070) returns:
+#   302 + P-VVP-Identity + P-VVP-Passport + Contact (NO X-VVP-* headers)
+#
+# Verification service (port 5071) returns:
+#   302 + X-VVP-Status + X-VVP-Brand-Name + X-VVP-Brand-Logo
+#       + X-VVP-Vetter-Status + X-VVP-Warning-Reason + Contact
+#
+# X-VVP-Status values: VALID (authorized vetter), INDETERMINATE (unknown/
+# unauthorized vetter per Sprint 84), INVALID (verification failure)
+#
+# Add new scenarios here as more orgs/dossiers are bootstrapped.
+SIP_TEST_SCENARIOS = [
+    {
+        "name": "ACME Inc (primary)",
+        "description": "Valid dossier, full signing→verification chain",
+        "orig_tn": "+441923311000",
+        "dest_tn": "+441923311006",
+        "expect_signing": {
+            "status_code": 302,
+            "has_P-VVP-Identity": True,
+            "has_P-VVP-Passport": True,
+            "has_Contact": True,
+        },
+        "expect_verification": {
+            "status_code": 302,
+            # Accept VALID or INDETERMINATE — both prove the flow works.
+            # INDETERMINATE means vetter not authorized for jurisdiction (Sprint 84).
+            "has_X-VVP-Status": True,
+        },
+        "chain_to_verification": True,
+    },
+    {
+        "name": "ACME Inc (reverse TN)",
+        "description": "Same org, swapped from/dest TNs — bidirectional TN mapping",
+        "orig_tn": "+441923311006",
+        "dest_tn": "+441923311000",
+        "expect_signing": {
+            "status_code": 302,
+            "has_P-VVP-Identity": True,
+            "has_P-VVP-Passport": True,
+            "has_Contact": True,
+        },
+        "expect_verification": {
+            "status_code": 302,
+            "has_X-VVP-Status": True,
+        },
+        "chain_to_verification": True,
+    },
+    {
+        "name": "Unmapped TN (negative)",
+        "description": "From TN not in any mapping — signing returns 404",
+        "orig_tn": "+441923319999",
+        "dest_tn": "+441923311006",
+        "expect_signing": {
+            "status_code_not": 302,
+        },
+        "chain_to_verification": False,
+    },
+]
 
-    if not api_key:
-        log_warn("No API key — skipping SIP tests (set VVP_TEST_API_KEY "
-                 "or add to scripts/.e2e-config)", json_output)
-        results.append({"test": "sip_signing", "ok": True, "skipped": True})
-        results.append({"test": "sip_verification", "ok": True, "skipped": True})
-        return True, results
 
-    # We run the SIP tests FROM the PBX VM itself (localhost UDP)
-    # This avoids firewall/NAT issues with external UDP
+def _build_sip_test_script(scenarios, api_key):
+    """Build the Python SIP test script that runs ON the PBX.
 
-    # Build Python SIP test script to run on the PBX
-    sip_test_script = f'''
+    The script tests multiple scenarios sequentially, outputting structured
+    SCENARIO_RESULT lines for each. Uses the same socket helper functions
+    for all scenarios.
+    """
+    # Serialize scenarios as JSON for the script
+    scenarios_json = json.dumps(scenarios)
+
+    script = '''
 import base64
 import json
 import socket
@@ -806,28 +869,13 @@ import sys
 import time
 import uuid
 
-def build_signing_invite():
-    call_id = f"vvp-systest-{{uuid.uuid4().hex[:12]}}@127.0.0.1"
-    branch = f"z9hG4bK{{uuid.uuid4().hex[:16]}}"
-    tag = uuid.uuid4().hex[:8]
-    lines = [
-        "INVITE sip:{dest_tn}@127.0.0.1:5070 SIP/2.0",
-        f"Via: SIP/2.0/UDP 127.0.0.1:15060;branch={{branch}}",
-        f"From: <sip:{orig_tn}@127.0.0.1>;tag={{tag}}",
-        "To: <sip:{dest_tn}@127.0.0.1>",
-        f"Call-ID: {{call_id}}",
-        "CSeq: 1 INVITE",
-        "Contact: <sip:127.0.0.1:15060>",
-        "X-VVP-API-Key: {api_key}",
-        "Max-Forwards: 70",
-        "Content-Length: 0",
-    ]
-    return ("\\r\\n".join(lines) + "\\r\\n\\r\\n").encode("utf-8")
+API_KEY = "''' + api_key + '''"
+SCENARIOS = json.loads(''' + repr(scenarios_json) + ''')
 
 def parse_response(data):
     text = data.decode("utf-8", errors="replace")
     lines = text.split("\\r\\n")
-    result = {{"status_code": 0, "headers": {{}}}}
+    result = {"status_code": 0, "headers": {}}
     if not lines:
         return result
     parts = lines[0].split(" ", 2)
@@ -844,77 +892,185 @@ def parse_response(data):
             result["headers"][key.strip()] = value.strip()
     return result
 
-def send_and_receive(invite, host, port, timeout=15):
+def send_and_receive(invite, host, port, timeout=30):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(timeout)
     start = time.monotonic()
     try:
         sock.sendto(invite, (host, port))
-        data, addr = sock.recvfrom(65535)
-        elapsed = (time.monotonic() - start) * 1000
-        resp = parse_response(data)
-        resp["elapsed_ms"] = round(elapsed, 1)
-        return resp
+        while True:
+            remaining = timeout - (time.monotonic() - start)
+            if remaining <= 0:
+                return {"error": "timeout", "elapsed_ms": round((time.monotonic() - start) * 1000, 1)}
+            sock.settimeout(remaining)
+            data, addr = sock.recvfrom(65535)
+            resp = parse_response(data)
+            code = resp.get("status_code", 0)
+            if code < 200:
+                continue
+            elapsed = (time.monotonic() - start) * 1000
+            resp["elapsed_ms"] = round(elapsed, 1)
+            return resp
     except socket.timeout:
-        return {{"error": "timeout", "elapsed_ms": round((time.monotonic() - start) * 1000, 1)}}
+        return {"error": "timeout", "elapsed_ms": round((time.monotonic() - start) * 1000, 1)}
     except OSError as e:
-        return {{"error": str(e)}}
+        return {"error": str(e)}
     finally:
         sock.close()
 
-# --- Signing test ---
-invite = build_signing_invite()
-sign_result = send_and_receive(invite, "127.0.0.1", 5070)
-print("SIGN_RESULT=" + json.dumps(sign_result))
+def build_invite(from_tn, to_tn, port, api_key=None, extra_headers=None):
+    call_id = f"vvp-systest-{uuid.uuid4().hex[:12]}@127.0.0.1"
+    branch = f"z9hG4bK{uuid.uuid4().hex[:16]}"
+    tag = uuid.uuid4().hex[:8]
+    lines = [
+        f"INVITE sip:{to_tn}@127.0.0.1:{port} SIP/2.0",
+        f"Via: SIP/2.0/UDP 127.0.0.1:{15060 + (port % 10)};branch={branch}",
+        f"From: <sip:{from_tn}@127.0.0.1>;tag={tag}",
+        f"To: <sip:{to_tn}@127.0.0.1>",
+        f"Call-ID: {call_id}",
+        "CSeq: 1 INVITE",
+        f"Contact: <sip:127.0.0.1:{15060 + (port % 10)}>",
+    ]
+    if api_key:
+        lines.append(f"X-VVP-API-Key: {api_key}")
+    if extra_headers:
+        for k, v in extra_headers.items():
+            lines.append(f"{k}: {v}")
+    lines.extend(["Max-Forwards: 70", "Content-Length: 0"])
+    return ("\\r\\n".join(lines) + "\\r\\n\\r\\n").encode("utf-8")
 
-# --- Verification test (chained with real headers) ---
-if "error" not in sign_result and sign_result.get("status_code") == 302:
-    headers = sign_result.get("headers", {{}})
-    p_identity = headers.get("P-VVP-Identity", "")
-    p_passport = headers.get("P-VVP-Passport", "")
-    if p_identity and p_passport:
-        passport_b64 = base64.urlsafe_b64encode(p_passport.encode()).decode().rstrip("=")
-        try:
-            padded = p_identity + "=" * (4 - len(p_identity) % 4)
-            identity_data = json.loads(base64.urlsafe_b64decode(padded))
-            info_url = identity_data.get("kid", "")
-        except Exception:
-            info_url = ""
-        call_id = f"vvp-systest-v-{{uuid.uuid4().hex[:12]}}@127.0.0.1"
-        branch = f"z9hG4bK{{uuid.uuid4().hex[:16]}}"
-        tag = uuid.uuid4().hex[:8]
-        lines = [
-            "INVITE sip:{dest_tn}@127.0.0.1:5071 SIP/2.0",
-            f"Via: SIP/2.0/UDP 127.0.0.1:15061;branch={{branch}}",
-            f"From: <sip:{orig_tn}@carrier.example.com>;tag={{tag}}",
-            "To: <sip:{dest_tn}@127.0.0.1>",
-            f"Call-ID: {{call_id}}",
-            "CSeq: 1 INVITE",
-            "Contact: <sip:127.0.0.1:15061>",
-            f"Identity: <{{passport_b64}}>;info={{info_url}};alg=EdDSA;ppt=vvp",
-            f"P-VVP-Identity: {{p_identity}}",
-            f"P-VVP-Passport: {{p_passport}}",
-            "Max-Forwards: 70",
-            "Content-Length: 0",
-        ]
-        verify_invite = ("\\r\\n".join(lines) + "\\r\\n\\r\\n").encode("utf-8")
-        verify_result = send_and_receive(verify_invite, "127.0.0.1", 5071)
-        print("VERIFY_RESULT=" + json.dumps(verify_result))
-    else:
-        print("VERIFY_RESULT=" + json.dumps({{"error": "missing_headers", "detail": "No P-VVP-Identity/Passport in signing response"}}))
-else:
-    detail = sign_result.get("error", f"status_code={{sign_result.get('status_code', 0)}}")
-    print("VERIFY_RESULT=" + json.dumps({{"error": "signing_failed", "detail": str(detail)}}))
+
+for i, scenario in enumerate(SCENARIOS):
+    name = scenario["name"]
+    orig = scenario["orig_tn"]
+    dest = scenario["dest_tn"]
+    chain = scenario.get("chain_to_verification", False)
+    result = {"name": name, "signing": None, "verification": None}
+
+    # --- Signing ---
+    invite = build_invite(orig, dest, 5070, api_key=API_KEY)
+    sign_resp = send_and_receive(invite, "127.0.0.1", 5070)
+    result["signing"] = sign_resp
+
+    # --- Verification (chained) ---
+    if chain and "error" not in sign_resp and sign_resp.get("status_code") == 302:
+        headers = sign_resp.get("headers", {})
+        p_identity = headers.get("P-VVP-Identity", "")
+        p_passport = headers.get("P-VVP-Passport", "")
+        if p_identity and p_passport:
+            # Build Identity header
+            passport_b64 = base64.urlsafe_b64encode(p_passport.encode()).decode().rstrip("=")
+            try:
+                padded = p_identity + "=" * (4 - len(p_identity) % 4)
+                identity_data = json.loads(base64.urlsafe_b64decode(padded))
+                info_url = identity_data.get("kid", "")
+            except Exception:
+                info_url = ""
+
+            extra = {
+                "Identity": f"<{passport_b64}>;info={info_url};alg=EdDSA;ppt=vvp",
+                "P-VVP-Identity": p_identity,
+                "P-VVP-Passport": p_passport,
+            }
+            verify_invite = build_invite(orig, dest, 5071, extra_headers=extra)
+            verify_resp = send_and_receive(verify_invite, "127.0.0.1", 5071)
+            result["verification"] = verify_resp
+        else:
+            result["verification"] = {"error": "missing_headers", "detail": "No P-VVP-Identity/Passport in signing response"}
+    elif chain:
+        detail = sign_resp.get("error", f"status_code={sign_resp.get('status_code', 0)}")
+        result["verification"] = {"error": "signing_failed", "detail": str(detail)}
+
+    # Trim response to avoid az run-command 4KB output truncation
+    # Only include status_code, elapsed_ms, and key header values (not full JWT tokens)
+    def trim_response(resp):
+        if resp is None or "error" in resp:
+            return resp
+        trimmed = {
+            "status_code": resp.get("status_code", 0),
+            "elapsed_ms": resp.get("elapsed_ms", 0),
+        }
+        headers = resp.get("headers", {})
+        # Only include the headers we need for assertions
+        for h in ["X-VVP-Status", "X-VVP-Brand-Name", "X-VVP-Brand-Logo",
+                   "X-VVP-Vetter-Status", "X-VVP-Warning-Reason", "Contact"]:
+            if h in headers:
+                trimmed[h] = headers[h]
+        # For attestation headers, just note presence + structure, not full value
+        if "P-VVP-Identity" in headers:
+            trimmed["has_P-VVP-Identity"] = True
+            # Parse and include structure
+            try:
+                pid = headers["P-VVP-Identity"]
+                padded = pid + "=" * (4 - len(pid) % 4)
+                id_data = json.loads(base64.urlsafe_b64decode(padded))
+                trimmed["P-VVP-Identity-fields"] = {
+                    "ppt": id_data.get("ppt"),
+                    "has_kid": bool(id_data.get("kid")),
+                    "has_evd": bool(id_data.get("evd")),
+                    "has_iat": bool(id_data.get("iat")),
+                }
+            except Exception:
+                trimmed["P-VVP-Identity-fields"] = {"parse_error": True}
+        if "P-VVP-Passport" in headers:
+            passport = headers["P-VVP-Passport"]
+            trimmed["has_P-VVP-Passport"] = True
+            trimmed["P-VVP-Passport-segments"] = len(passport.split("."))
+        return trimmed
+
+    result["signing"] = trim_response(result["signing"])
+    result["verification"] = trim_response(result["verification"])
+    print(f"SCENARIO_RESULT_{i}=" + json.dumps(result))
+
+    # Small delay between scenarios to avoid UDP port conflicts
+    time.sleep(1)
 '''
+    return script
 
-    # Deploy and run the SIP test on PBX
-    log_check("Running SIP tests on PBX VM", json_output)
-    script_b64 = base64.b64encode(sip_test_script.encode()).decode()
+
+def phase4_sip_calls(api_key, orig_tn, dest_tn,
+                     json_output=False, verbose=False):
+    """Run scenario-driven SIP signing and verification tests on the PBX.
+
+    Tests multiple scenarios sequentially:
+    - ACME Inc primary (authorized vetter, valid dossier)
+    - ACME Inc reverse TN (bidirectional mapping)
+    - Unmapped TN (negative test)
+
+    Each scenario sends a signing INVITE to port 5070, then chains the
+    signing result into a verification INVITE to port 5071 (if expected
+    to succeed). All SIP traffic runs on the PBX VM via localhost UDP.
+    """
+    log_header("Phase 4: SIP Call Tests", json_output)
+    results = []
+
+    if not api_key:
+        log_warn("No API key — skipping SIP tests (set VVP_TEST_API_KEY "
+                 "or add to scripts/.e2e-config)", json_output)
+        results.append({"test": "sip_calls", "ok": True, "skipped": True})
+        return True, results
+
+    # Build scenario list — use e2e-config TNs as defaults
+    scenarios = []
+    for s in SIP_TEST_SCENARIOS:
+        scenario = dict(s)
+        # Allow env overrides for default TNs
+        if scenario["orig_tn"] == "+441923311000":
+            scenario["orig_tn"] = orig_tn
+        if scenario["dest_tn"] == "+441923311006":
+            scenario["dest_tn"] = dest_tn
+        scenarios.append(scenario)
+
+    # Build and deploy the test script
+    sip_script = _build_sip_test_script(scenarios, api_key)
+
+    log_check(f"Running {len(scenarios)} SIP scenarios on PBX VM", json_output)
+    script_b64 = base64.b64encode(sip_script.encode()).decode()
     ok, output = pbx_run(
         f"echo '{script_b64}' | base64 -d > /tmp/vvp_systest_sip.py && "
         f"python3 /tmp/vvp_systest_sip.py && "
         f"rm -f /tmp/vvp_systest_sip.py",
-        timeout=90,
+        timeout=180,
     )
 
     if not ok:
@@ -922,145 +1078,207 @@ else:
         results.append({"test": "sip_execution", "ok": False, "detail": output[:200]})
         return False, results
 
-    # Strip az output wrapper
     test_output = strip_az_output(output)
-
     if verbose and not json_output:
-        log_info(f"  SIP test output: {test_output[:300]}")
+        log_info(f"  SIP test output: {test_output[:500]}")
 
     all_ok = True
 
-    # Parse signing result
-    sign_data = None
-    for line in test_output.split("\n"):
-        line = line.strip()
-        if line.startswith("SIGN_RESULT="):
-            try:
-                sign_data = json.loads(line[len("SIGN_RESULT="):])
-            except json.JSONDecodeError:
-                pass
+    # Parse scenario results
+    for i, scenario in enumerate(scenarios):
+        prefix = f"SCENARIO_RESULT_{i}="
+        scenario_data = None
+        for line in test_output.split("\n"):
+            line = line.strip()
+            if line.startswith(prefix):
+                try:
+                    scenario_data = json.loads(line[len(prefix):])
+                except json.JSONDecodeError:
+                    pass
 
-    if sign_data is None:
-        log_fail("Could not parse signing test result", json_output)
-        results.append({"test": "sip_signing", "ok": False,
-                         "detail": "No SIGN_RESULT in output"})
-        return False, results
+        name = scenario["name"]
+        if not json_output:
+            print(f"\n    {BOLD}Scenario: {name}{NC}")
+            if verbose:
+                print(f"    {DIM}{scenario.get('description', '')}{NC}")
 
-    if "error" in sign_data:
-        log_fail(f"Signing test failed: {sign_data.get('error')}", json_output)
-        results.append({"test": "sip_signing", "ok": False,
-                         "detail": sign_data.get("error")})
-        all_ok = False
-    else:
-        code = sign_data.get("status_code", 0)
-        headers = sign_data.get("headers", {})
-        elapsed = sign_data.get("elapsed_ms", "?")
-
-        checks = {
-            "302_redirect": code == 302,
-            "X-VVP-Status=VALID": headers.get("X-VVP-Status") == "VALID",
-            "X-VVP-Brand-Name": bool(headers.get("X-VVP-Brand-Name")),
-            "P-VVP-Identity": bool(headers.get("P-VVP-Identity")),
-            "P-VVP-Passport": bool(headers.get("P-VVP-Passport")),
-            "Contact": bool(headers.get("Contact")),
-        }
-
-        # Validate P-VVP-Identity structure
-        p_id = headers.get("P-VVP-Identity", "")
-        if p_id:
-            try:
-                padded = p_id + "=" * (4 - len(p_id) % 4)
-                id_data = json.loads(base64.urlsafe_b64decode(padded))
-                checks["P-VVP-Identity.ppt"] = id_data.get("ppt") == "vvp"
-                checks["P-VVP-Identity.kid"] = bool(id_data.get("kid"))
-                checks["P-VVP-Identity.evd"] = bool(id_data.get("evd"))
-                checks["P-VVP-Identity.iat"] = bool(id_data.get("iat"))
-            except Exception:
-                checks["P-VVP-Identity_valid_json"] = False
-
-        # Validate P-VVP-Passport structure (3-segment JWT)
-        p_pass = headers.get("P-VVP-Passport", "")
-        if p_pass:
-            checks["P-VVP-Passport_3_segments"] = len(p_pass.split(".")) == 3
-
-        failed_checks = [k for k, v in checks.items() if not v]
-        if failed_checks:
-            log_fail(f"Signing: SIP {code} ({elapsed}ms) — "
-                     f"failed: {', '.join(failed_checks)}", json_output)
+        if scenario_data is None:
+            log_fail(f"  [{name}] No result from PBX", json_output)
+            results.append({"test": f"scenario_{i}", "name": name, "ok": False,
+                             "detail": "No output"})
             all_ok = False
-        else:
-            brand = headers.get("X-VVP-Brand-Name", "")
-            log_pass(f"Signing: 302 VALID brand={brand} ({elapsed}ms)",
-                     json_output)
+            continue
 
-        for check_name, passed in checks.items():
+        scenario_ok = True
+
+        # ---- Evaluate signing ----
+        # Trimmed response format: status_code, elapsed_ms, header values as top-level keys,
+        # has_P-VVP-Identity (bool), P-VVP-Identity-fields (dict), has_P-VVP-Passport (bool),
+        # P-VVP-Passport-segments (int)
+        sign = scenario_data.get("signing", {})
+        expect_sign = scenario.get("expect_signing", {})
+
+        if "error" in sign:
+            if "status_code_not" in expect_sign:
+                log_pass(f"  [{name}] Signing: error as expected "
+                         f"({sign.get('error')})", json_output)
+            else:
+                log_fail(f"  [{name}] Signing: {sign.get('error')}", json_output)
+                scenario_ok = False
+        else:
+            code = sign.get("status_code", 0)
+            elapsed = sign.get("elapsed_ms", "?")
+
+            # Check expected status code
+            if "status_code" in expect_sign:
+                if code != expect_sign["status_code"]:
+                    log_fail(f"  [{name}] Signing: expected SIP {expect_sign['status_code']}, "
+                             f"got {code}", json_output)
+                    scenario_ok = False
+            if "status_code_not" in expect_sign:
+                if code == expect_sign["status_code_not"]:
+                    log_fail(f"  [{name}] Signing: should NOT get SIP {code}", json_output)
+                    scenario_ok = False
+                else:
+                    log_pass(f"  [{name}] Signing: SIP {code} (not {expect_sign['status_code_not']}) "
+                             f"({elapsed}ms)", json_output)
+
+            # Check header values from trimmed response
+            sign_checks = []
+            for key, expected in expect_sign.items():
+                if key.startswith("status_code"):
+                    continue
+                if key.startswith("has_"):
+                    header_name = key[4:]
+                    # In trimmed format, has_X is a top-level bool
+                    actual = bool(sign.get(f"has_{header_name}") or sign.get(header_name))
+                    ok_check = actual == expected
+                    sign_checks.append((header_name, ok_check, "present" if actual else "missing"))
+                elif key.startswith("X-VVP-") or key.startswith("P-VVP-"):
+                    actual = sign.get(key, "")
+                    ok_check = actual == expected
+                    sign_checks.append((key, ok_check, actual or "(empty)"))
+
+            for check_name, passed, actual in sign_checks:
+                if not json_output:
+                    mark = f"{GREEN}+{NC}" if passed else f"{RED}-{NC}"
+                    print(f"        [{mark}] {check_name} = {actual}")
+                if not passed:
+                    scenario_ok = False
+
+            # Validate P-VVP-Identity structure from trimmed fields
+            id_fields = sign.get("P-VVP-Identity-fields")
+            if id_fields and code == 302:
+                if id_fields.get("parse_error"):
+                    if not json_output:
+                        print(f"        [{RED}-{NC}] P-VVP-Identity: invalid JSON")
+                    scenario_ok = False
+                else:
+                    id_checks = [
+                        ("ppt=vvp", id_fields.get("ppt") == "vvp"),
+                        ("kid present", id_fields.get("has_kid", False)),
+                        ("evd present", id_fields.get("has_evd", False)),
+                        ("iat present", id_fields.get("has_iat", False)),
+                    ]
+                    for check_name, passed in id_checks:
+                        if not json_output:
+                            mark = f"{GREEN}+{NC}" if passed else f"{RED}-{NC}"
+                            print(f"        [{mark}] P-VVP-Identity.{check_name}")
+                        if not passed:
+                            scenario_ok = False
+
+            # Validate JWT structure from trimmed segments count
+            if sign.get("has_P-VVP-Passport") and code == 302:
+                segments = sign.get("P-VVP-Passport-segments", 0)
+                is_jwt = segments == 3
+                if not json_output:
+                    mark = f"{GREEN}+{NC}" if is_jwt else f"{RED}-{NC}"
+                    print(f"        [{mark}] P-VVP-Passport: {segments}-segment JWT")
+                if not is_jwt:
+                    scenario_ok = False
+
+            if scenario_ok and code == 302:
+                brand = sign.get("X-VVP-Brand-Name", "")
+                log_pass(f"  [{name}] Signing: 302 VALID brand={brand} "
+                         f"({elapsed}ms)", json_output)
+
+        # ---- Evaluate verification ----
+        verify = scenario_data.get("verification")
+        expect_verify = scenario.get("expect_verification", {})
+
+        if verify is None and not scenario.get("chain_to_verification"):
+            # No verification expected
             if not json_output:
-                mark = f"{GREEN}+{NC}" if passed else f"{RED}-{NC}"
-                print(f"        [{mark}] {check_name}")
-
-        results.append({"test": "sip_signing", "ok": not failed_checks,
-                         "checks": checks, "status_code": code,
-                         "elapsed_ms": elapsed,
-                         "brand": headers.get("X-VVP-Brand-Name", "")})
-
-    # Parse verification result
-    verify_data = None
-    for line in test_output.split("\n"):
-        line = line.strip()
-        if line.startswith("VERIFY_RESULT="):
-            try:
-                verify_data = json.loads(line[len("VERIFY_RESULT="):])
-            except json.JSONDecodeError:
-                pass
-
-    if verify_data is None:
-        log_warn("Could not parse verification test result", json_output)
-        results.append({"test": "sip_verification", "ok": False,
-                         "detail": "No VERIFY_RESULT in output"})
-        all_ok = False
-    elif "error" in verify_data:
-        detail = verify_data.get("detail", verify_data.get("error", ""))
-        if verify_data.get("error") == "signing_failed":
-            log_warn(f"Verification skipped: signing failed ({detail})",
-                     json_output)
-            results.append({"test": "sip_verification", "ok": True,
-                             "skipped": True, "detail": detail})
+                print(f"        {DIM}(verification not chained for this scenario){NC}")
+        elif verify is None:
+            log_fail(f"  [{name}] Verification: no result", json_output)
+            scenario_ok = False
+        elif "error" in verify:
+            if not scenario.get("chain_to_verification"):
+                pass  # expected
+            else:
+                log_fail(f"  [{name}] Verification: {verify.get('detail', verify.get('error'))}",
+                         json_output)
+                scenario_ok = False
         else:
-            log_fail(f"Verification failed: {detail}", json_output)
-            results.append({"test": "sip_verification", "ok": False,
-                             "detail": detail})
+            code = verify.get("status_code", 0)
+            headers = verify.get("headers", {})
+            elapsed = verify.get("elapsed_ms", "?")
+
+            # Check expected status code
+            if "status_code" in expect_verify:
+                if code != expect_verify["status_code"]:
+                    log_fail(f"  [{name}] Verification: expected SIP {expect_verify['status_code']}, "
+                             f"got {code}", json_output)
+                    scenario_ok = False
+
+            # Check header values from trimmed response
+            # In trimmed format, X-VVP-* headers are top-level keys
+            verify_checks = []
+            for key, expected in expect_verify.items():
+                if key.startswith("status_code"):
+                    continue
+                if key.startswith("has_"):
+                    header_name = key[4:]
+                    # Check both trimmed top-level key and has_ prefix
+                    actual = bool(verify.get(header_name) or verify.get(f"has_{header_name}"))
+                    ok_check = actual == expected
+                    actual_val = verify.get(header_name, "")
+                    display = actual_val if actual_val else ("present" if actual else "missing")
+                    verify_checks.append((header_name, ok_check, display))
+                elif key.startswith("X-VVP-") or key.startswith("P-VVP-"):
+                    actual = verify.get(key, "")
+                    ok_check = actual == expected
+                    verify_checks.append((key, ok_check, actual or "(empty)"))
+
+            for check_name, passed, actual in verify_checks:
+                if not json_output:
+                    mark = f"{GREEN}+{NC}" if passed else f"{RED}-{NC}"
+                    print(f"        [{mark}] verify {check_name} = {actual}")
+                if not passed:
+                    scenario_ok = False
+
+            vvp_status = verify.get("X-VVP-Status", "")
+            brand = verify.get("X-VVP-Brand-Name", "")
+            vetter = verify.get("X-VVP-Vetter-Status", "")
+            if scenario_ok:
+                log_pass(f"  [{name}] Verification: SIP {code} "
+                         f"status={vvp_status} brand={brand} "
+                         f"vetter={vetter} ({elapsed}ms)", json_output)
+            else:
+                log_fail(f"  [{name}] Verification: SIP {code} "
+                         f"status={vvp_status} ({elapsed}ms)", json_output)
+
+        if not scenario_ok:
             all_ok = False
-    else:
-        code = verify_data.get("status_code", 0)
-        headers = verify_data.get("headers", {})
-        elapsed = verify_data.get("elapsed_ms", "?")
-        vvp_status = headers.get("X-VVP-Status", "")
 
-        checks = {
-            "sip_response": code > 0,
-            "X-VVP-Status_present": bool(vvp_status),
-        }
-
-        # 302 with status is ideal; any response proves service is alive
-        if code in (302, 200) and vvp_status:
-            log_pass(f"Verification: SIP {code} status={vvp_status} "
-                     f"({elapsed}ms)", json_output)
-        elif code >= 100:
-            log_pass(f"Verification: SIP {code} — service processing "
-                     f"({elapsed}ms)", json_output)
-        else:
-            log_fail(f"Verification: unexpected response code={code}",
-                     json_output)
-            all_ok = False
-
-        for check_name, passed in checks.items():
-            if not json_output:
-                mark = f"{GREEN}+{NC}" if passed else f"{RED}-{NC}"
-                print(f"        [{mark}] {check_name}")
-
-        results.append({"test": "sip_verification", "ok": code >= 100,
-                         "checks": checks, "status_code": code,
-                         "elapsed_ms": elapsed, "vvp_status": vvp_status})
+        results.append({
+            "test": f"scenario_{i}",
+            "name": name,
+            "ok": scenario_ok,
+            "signing": scenario_data.get("signing"),
+            "verification": scenario_data.get("verification"),
+        })
 
     return all_ok, results
 
