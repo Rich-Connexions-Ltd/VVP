@@ -140,7 +140,12 @@ async def create_organization(
             org.aid = org_identity.aid
             log.info(f"Created org identity: {org_identity.aid[:16]}...")
 
-            # Agent handles witness publishing internally during create_identity
+            # Publish identity to witnesses so OOBI is resolvable by verifiers
+            try:
+                await client.publish_identity(org_identity_name)
+                log.info(f"Published org identity to witnesses: {org_identity_name}")
+            except Exception as e:
+                log.warning(f"Failed to publish org identity to witnesses: {e}")
 
             # Create credential registry for org via agent
             org_registry_name = f"{org_identity_name}-registry"

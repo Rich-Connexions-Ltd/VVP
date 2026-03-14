@@ -176,6 +176,30 @@ async def get_oobi(aid: str) -> OobiResponse:
         raise HTTPException(status_code=503, detail=str(e))
 
 
+@router.post("/{aid}/publish")
+async def publish_identity(
+    aid: str,
+    http_request: Request,
+    principal: Principal = require_admin,
+):
+    """Publish an identity's KEL to witnesses so its OOBI becomes resolvable.
+
+    This is needed when an identity was created but not published (e.g., due
+    to a witness outage), or after witnesses have been restarted and lost
+    their in-memory state.
+
+    Requires: issuer:admin role
+    """
+    try:
+        client = get_keri_client()
+        identity = await _resolve_aid(client, aid)
+        await client.publish_identity(identity.name)
+        log.info(f"Published identity to witnesses: {identity.name} ({aid})")
+        return {"published": True, "aid": aid, "name": identity.name}
+    except KeriAgentUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
 @router.post("/{aid}/rotate", response_model=RotateIdentityResponse)
 async def rotate_identity(
     aid: str,

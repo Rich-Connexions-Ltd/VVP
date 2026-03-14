@@ -389,7 +389,7 @@ def step_create_tn_mapping(base_url, org_api_key, tn, dossier_said, identity_nam
         status, body = api_call(
             "PATCH",
             f"{base_url}/tn/mappings/{existing['id']}",
-            data={"dossier_said": dossier_said},
+            data={"dossier_said": dossier_said, "identity_name": identity_name},
             api_key=org_api_key,
         )
         if status != 200:
