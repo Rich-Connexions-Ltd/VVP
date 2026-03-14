@@ -22,6 +22,12 @@ Usage:
     # Skip SIP call tests only
     python3 scripts/system-test.py --skip-sip
 
+    # Run SIP verification against the OSS verifier (Azure)
+    python3 scripts/system-test.py --oss-verifier
+
+    # Override verifier URL for cross-verifier testing
+    python3 scripts/system-test.py --verifier-url https://vvp-verifier-oss.wittytree-2a937ccd.uksouth.azurecontainerapps.io
+
 Environment:
     VVP_VERIFIER_URL     Override verifier URL (default: https://vvp-verifier.rcnx.io)
     VVP_ISSUER_URL       Override issuer URL (default: https://vvp-issuer.rcnx.io)
@@ -68,6 +74,15 @@ WAN_AID = "BBilc4-L3tFUnfM_wJr4S4OJanAv_VmF_dJNN6vkf2Ha"
 WIL_AID = "BLskRTInXnMxWaGqcpSyMgo0nYbalW99cGZESrz3zapM"
 WES_AID = "BIKKuvBwpmDVA4Ds-EpL5bt9OqPzWPja2LigFYZN2YfX"
 WITNESS_AIDS = [WAN_AID, WIL_AID, WES_AID]
+
+# OSS Verifier
+OSS_VERIFIER_URL = "https://vvp-verifier-oss.wittytree-2a937ccd.uksouth.azurecontainerapps.io"
+ALLOWED_VERIFIER_ORIGINS = {
+    "https://vvp-verifier.rcnx.io",
+    "https://vvp-verifier.wittytree-2a937ccd.uksouth.azurecontainerapps.io",
+    "https://vvp-verifier-oss.wittytree-2a937ccd.uksouth.azurecontainerapps.io",
+}
+OSS_VERIFY_PORT = 5073  # Test-only sip-verify-test service port on PBX
 
 # PBX
 PBX_VM_NAME = "vvp-pbx"
@@ -857,7 +872,67 @@ SIP_TEST_SCENARIOS = [
 ]
 
 
-def _build_sip_test_script(scenarios, api_key):
+def _validate_verifier_url(url):
+    """Validate that a --verifier-url value is safe and allowed.
+
+    Returns the validated URL. Raises SystemExit on rejection.
+    """
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        print(f"{RED}ERROR{NC}: --verifier-url must use https:// scheme")
+        sys.exit(2)
+    if parsed.username or parsed.password:
+        print(f"{RED}ERROR{NC}: --verifier-url must not contain credentials")
+        sys.exit(2)
+    if parsed.query or parsed.fragment:
+        print(f"{RED}ERROR{NC}: --verifier-url must not contain query/fragment")
+        sys.exit(2)
+    # Check against allowlist (origin = scheme + host + port)
+    origin = f"{parsed.scheme}://{parsed.hostname}"
+    if parsed.port and parsed.port != 443:
+        origin += f":{parsed.port}"
+    if origin not in ALLOWED_VERIFIER_ORIGINS:
+        print(f"{RED}ERROR{NC}: Verifier origin not in allowlist: {origin}")
+        print(f"  Allowed: {', '.join(sorted(ALLOWED_VERIFIER_ORIGINS))}")
+        sys.exit(2)
+    return url.rstrip("/")
+
+
+def _start_oss_verify_service(verifier_url, json_output=False):
+    """Start the test-only sip-verify-test service on the PBX.
+
+    Deploys a temporary env file and starts the service on port 5073.
+    Returns True on success, False on failure.
+    """
+    log_check("Starting OSS verify test service on PBX (port 5073)", json_output)
+
+    env_content = f"VVP_VERIFIER_URL={verifier_url}\nVVP_VERIFY_PORT=5073\n"
+    env_b64 = base64.b64encode(env_content.encode()).decode()
+
+    ok, output = pbx_run(
+        f"echo '{env_b64}' | base64 -d > /etc/vvp/vvp-sip-verify-test.env && "
+        f"systemctl start vvp-sip-verify-test && "
+        f"sleep 2 && "
+        f"systemctl is-active vvp-sip-verify-test",
+        timeout=30,
+    )
+    if ok and "active" in strip_az_output(output).lower():
+        log_pass("OSS verify test service started on port 5073", json_output)
+        return True
+    else:
+        log_fail(f"Failed to start OSS verify test service: {strip_az_output(output)[:200]}",
+                 json_output)
+        return False
+
+
+def _stop_oss_verify_service(json_output=False):
+    """Stop the test-only sip-verify-test service on the PBX."""
+    pbx_run("systemctl stop vvp-sip-verify-test 2>/dev/null || true", timeout=15)
+    log_info("OSS verify test service stopped", json_output)
+
+
+def _build_sip_test_script(scenarios, api_key, verify_port=5071):
     """Build the Python SIP test script that runs ON the PBX.
 
     The script tests multiple scenarios sequentially, outputting structured
@@ -876,6 +951,7 @@ import time
 import uuid
 
 API_KEY = "''' + api_key + '''"
+VERIFY_PORT = ''' + str(verify_port) + '''
 SCENARIOS = json.loads(''' + repr(scenarios_json) + ''')
 
 def parse_response(data):
@@ -977,8 +1053,8 @@ for i, scenario in enumerate(SCENARIOS):
                 "P-VVP-Identity": p_identity,
                 "P-VVP-Passport": p_passport,
             }
-            verify_invite = build_invite(orig, dest, 5071, extra_headers=extra)
-            verify_resp = send_and_receive(verify_invite, "127.0.0.1", 5071)
+            verify_invite = build_invite(orig, dest, VERIFY_PORT, extra_headers=extra)
+            verify_resp = send_and_receive(verify_invite, "127.0.0.1", VERIFY_PORT)
             result["verification"] = verify_resp
         else:
             result["verification"] = {"error": "missing_headers", "detail": "No P-VVP-Identity/Passport in signing response"}
@@ -1034,7 +1110,8 @@ for i, scenario in enumerate(SCENARIOS):
 
 
 def phase4_sip_calls(api_key, orig_tn, dest_tn,
-                     json_output=False, verbose=False):
+                     json_output=False, verbose=False,
+                     verify_port=5071):
     """Run scenario-driven SIP signing and verification tests on the PBX.
 
     Tests multiple scenarios sequentially:
@@ -1043,8 +1120,9 @@ def phase4_sip_calls(api_key, orig_tn, dest_tn,
     - Unmapped TN (negative test)
 
     Each scenario sends a signing INVITE to port 5070, then chains the
-    signing result into a verification INVITE to port 5071 (if expected
-    to succeed). All SIP traffic runs on the PBX VM via localhost UDP.
+    signing result into a verification INVITE to the given verify_port
+    (default 5071, or 5073 for OSS verifier). All SIP traffic runs on
+    the PBX VM via localhost UDP.
     """
     log_header("Phase 4: SIP Call Tests", json_output)
     results = []
@@ -1067,7 +1145,7 @@ def phase4_sip_calls(api_key, orig_tn, dest_tn,
         scenarios.append(scenario)
 
     # Build and deploy the test script
-    sip_script = _build_sip_test_script(scenarios, api_key)
+    sip_script = _build_sip_test_script(scenarios, api_key, verify_port=verify_port)
 
     log_check(f"Running {len(scenarios)} SIP scenarios on PBX VM", json_output)
     script_b64 = base64.b64encode(sip_script.encode()).decode()
@@ -1485,8 +1563,20 @@ def main():
                         help="Show full response bodies")
     parser.add_argument("--gate-only", action="store_true",
                         help="Just check if gate file is fresh, no tests")
+    parser.add_argument("--oss-verifier", action="store_true",
+                        help="Run SIP verification against the OSS verifier (Azure)")
+    parser.add_argument("--verifier-url", type=str, default=None,
+                        help="Override verifier URL for SIP verification tests")
 
     args = parser.parse_args()
+
+    # Validate --oss-verifier / --verifier-url
+    if args.oss_verifier and args.verifier_url:
+        print(f"{RED}ERROR{NC}: --oss-verifier and --verifier-url are mutually exclusive")
+        sys.exit(2)
+    if (args.oss_verifier or args.verifier_url) and args.loopback:
+        print(f"{RED}ERROR{NC}: --oss-verifier/--verifier-url cannot be combined with --loopback")
+        sys.exit(2)
 
     # Gate-only mode: just check the gate file
     if args.gate_only:
@@ -1517,9 +1607,21 @@ def main():
                         e2e_config.get("VVP_TEST_TO_TN", DEFAULT_DEST_TN))
     skip_pbx = args.skip_pbx or os.getenv("VVP_SKIP_PBX", "false") == "true"
 
+    # Resolve OSS verifier URL
+    oss_verifier_url = None
+    verify_port = 5071  # default: production verify service
+    if args.oss_verifier:
+        oss_verifier_url = _validate_verifier_url(OSS_VERIFIER_URL)
+        verify_port = OSS_VERIFY_PORT
+    elif args.verifier_url:
+        oss_verifier_url = _validate_verifier_url(args.verifier_url)
+        verify_port = OSS_VERIFY_PORT
+
     if not args.json:
         print(f"\n{BOLD}VVP System Test{NC}")
         print(f"{DIM}Target: verifier={verifier_url}, issuer={issuer_url}{NC}")
+        if oss_verifier_url:
+            print(f"{DIM}OSS verifier: {oss_verifier_url} (port {verify_port}){NC}")
         if skip_pbx:
             print(f"{DIM}PBX checks: skipped{NC}")
         if args.loopback:
@@ -1556,11 +1658,27 @@ def main():
 
         # Phase 4: SIP call tests
         if not args.skip_sip:
-            ok, results = phase4_sip_calls(api_key, orig_tn, dest_tn,
-                                            args.json, args.verbose)
-            all_results["phase4_sip"] = results
-            if not ok:
-                overall_ok = False
+            # Start OSS verify test service if needed
+            oss_started = False
+            if oss_verifier_url:
+                oss_started = _start_oss_verify_service(oss_verifier_url, args.json)
+                if not oss_started:
+                    log_fail("Cannot run SIP tests: OSS verify service failed to start",
+                             args.json)
+                    all_results["phase4_sip"] = [{"test": "oss_service", "ok": False}]
+                    overall_ok = False
+
+            if not oss_verifier_url or oss_started:
+                try:
+                    ok, results = phase4_sip_calls(api_key, orig_tn, dest_tn,
+                                                    args.json, args.verbose,
+                                                    verify_port=verify_port)
+                    all_results["phase4_sip"] = results
+                    if not ok:
+                        overall_ok = False
+                finally:
+                    if oss_started:
+                        _stop_oss_verify_service(args.json)
 
         # Phase 5: Loopback (optional)
         if args.loopback:
