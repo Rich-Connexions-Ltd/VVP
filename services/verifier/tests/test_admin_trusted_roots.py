@@ -50,6 +50,7 @@ def client_with_token(monkeypatch):
     monkeypatch.setenv("VVP_ADMIN_TOKEN", "test-token")
     import app.core.config as cfg
     monkeypatch.setattr(cfg, "ADMIN_TOKEN", "test-token")
+    monkeypatch.setattr(cfg, "TEL_ALLOW_HTTP", True)
     import app.main as main_mod
     monkeypatch.setattr(main_mod, "_LAST_MUTATION_TS", 0.0)
     from app.main import app
@@ -128,6 +129,7 @@ class TestAddTrustedRoot:
         import app.core.config as cfg
         import app.main as main_mod
         monkeypatch.setattr(cfg, "ADMIN_TOKEN", "tok")
+        monkeypatch.setattr(cfg, "TEL_ALLOW_HTTP", True)
         monkeypatch.setattr(main_mod, "_LAST_MUTATION_TS", 0.0)
         # Set a known empty state
         asyncio.get_event_loop().run_until_complete(
@@ -152,6 +154,7 @@ class TestAddTrustedRoot:
         import app.core.config as cfg
         import app.main as main_mod
         monkeypatch.setattr(cfg, "ADMIN_TOKEN", "tok")
+        monkeypatch.setattr(cfg, "TEL_ALLOW_HTTP", True)
         monkeypatch.setattr(main_mod, "_LAST_MUTATION_TS", 0.0)
         asyncio.get_event_loop().run_until_complete(
             cfg._trusted_roots_store.replace({VALID_AID})
@@ -175,6 +178,7 @@ class TestAddTrustedRoot:
         import app.core.config as cfg
         import app.main as main_mod
         monkeypatch.setattr(cfg, "ADMIN_TOKEN", "tok")
+        monkeypatch.setattr(cfg, "TEL_ALLOW_HTTP", True)
         monkeypatch.setattr(main_mod, "_LAST_MUTATION_TS", 0.0)
         from app.main import app
         c = TestClient(app)
@@ -191,6 +195,7 @@ class TestAddTrustedRoot:
         import app.core.config as cfg
         import app.main as main_mod
         monkeypatch.setattr(cfg, "ADMIN_TOKEN", "real-token")
+        monkeypatch.setattr(cfg, "TEL_ALLOW_HTTP", True)
         monkeypatch.setattr(main_mod, "_LAST_MUTATION_TS", 0.0)
         from app.main import app
         c = TestClient(app)
@@ -207,6 +212,7 @@ class TestAddTrustedRoot:
         import app.core.config as cfg
         import app.main as main_mod
         monkeypatch.setattr(cfg, "ADMIN_TOKEN", "tok")
+        monkeypatch.setattr(cfg, "TEL_ALLOW_HTTP", True)
         monkeypatch.setattr(main_mod, "_LAST_MUTATION_TS", 0.0)
         asyncio.get_event_loop().run_until_complete(
             cfg._trusted_roots_store.replace(set())
@@ -233,6 +239,7 @@ class TestRemoveTrustedRoot:
         import app.core.config as cfg
         import app.main as main_mod
         monkeypatch.setattr(cfg, "ADMIN_TOKEN", "tok")
+        monkeypatch.setattr(cfg, "TEL_ALLOW_HTTP", True)
         monkeypatch.setattr(main_mod, "_LAST_MUTATION_TS", 0.0)
         asyncio.get_event_loop().run_until_complete(
             cfg._trusted_roots_store.replace({VALID_AID})
@@ -256,6 +263,7 @@ class TestRemoveTrustedRoot:
         import app.core.config as cfg
         import app.main as main_mod
         monkeypatch.setattr(cfg, "ADMIN_TOKEN", "tok")
+        monkeypatch.setattr(cfg, "TEL_ALLOW_HTTP", True)
         monkeypatch.setattr(main_mod, "_LAST_MUTATION_TS", 0.0)
         asyncio.get_event_loop().run_until_complete(
             cfg._trusted_roots_store.replace(set())
@@ -284,6 +292,7 @@ class TestReplaceTrustedRoots:
         import app.core.config as cfg
         import app.main as main_mod
         monkeypatch.setattr(cfg, "ADMIN_TOKEN", "tok")
+        monkeypatch.setattr(cfg, "TEL_ALLOW_HTTP", True)
         monkeypatch.setattr(main_mod, "_LAST_MUTATION_TS", 0.0)
         from app.main import app
         c = TestClient(app)
@@ -304,6 +313,7 @@ class TestReplaceTrustedRoots:
         import app.core.config as cfg
         import app.main as main_mod
         monkeypatch.setattr(cfg, "ADMIN_TOKEN", "tok")
+        monkeypatch.setattr(cfg, "TEL_ALLOW_HTTP", True)
         monkeypatch.setattr(main_mod, "_LAST_MUTATION_TS", 0.0)
         from app.main import app
         c = TestClient(app)
@@ -324,6 +334,7 @@ class TestReplaceTrustedRoots:
         import app.core.config as cfg
         import app.main as main_mod
         monkeypatch.setattr(cfg, "ADMIN_TOKEN", "tok")
+        monkeypatch.setattr(cfg, "TEL_ALLOW_HTTP", True)
         monkeypatch.setattr(main_mod, "_LAST_MUTATION_TS", 0.0)
         from app.main import app
         c = TestClient(app)
@@ -346,6 +357,7 @@ class TestRateLimiting:
         import app.core.config as cfg
         import app.main as main_mod
         monkeypatch.setattr(cfg, "ADMIN_TOKEN", "tok")
+        monkeypatch.setattr(cfg, "TEL_ALLOW_HTTP", True)
         monkeypatch.setattr(main_mod, "_LAST_MUTATION_TS", 0.0)
         asyncio.get_event_loop().run_until_complete(
             cfg._trusted_roots_store.replace(set())

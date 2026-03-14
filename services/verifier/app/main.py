@@ -163,6 +163,15 @@ def healthz():
     return {"ok": True}
 
 @app.middleware("http")
+async def admin_headers(request: Request, call_next):
+    """Add Vary and security headers to /admin/* responses (Sprint 88)."""
+    resp = await call_next(request)
+    if request.url.path.startswith("/admin"):
+        resp.headers["Vary"] = "Origin, Authorization"
+    return resp
+
+
+@app.middleware("http")
 async def req_log(request: Request, call_next):
     start = time.time()
     route = request.url.path
@@ -423,13 +432,24 @@ def _check_same_origin(request: Request) -> None:
 
 
 def _require_admin_write(request: Request) -> None:
-    """Enforce bearer token auth for mutation endpoints. Fail-closed when no token configured."""
-    from app.core.config import ADMIN_TOKEN
+    """Enforce bearer token auth for mutation endpoints. Fail-closed when no token configured.
+
+    Sprint 88: Also enforces HTTPS when VVP_ADMIN_TOKEN is configured,
+    unless VVP_ALLOW_HTTP=true (dev override).
+    """
+    from app.core.config import ADMIN_TOKEN, TEL_ALLOW_HTTP
     _require_admin(request)
     if ADMIN_TOKEN is None:
         raise HTTPException(
             status_code=503,
             detail="Admin mutations require VVP_ADMIN_TOKEN to be configured",
+        )
+    # HTTPS enforcement: reject plaintext admin when token is configured
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    if proto != "https" and not TEL_ALLOW_HTTP:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin mutations require HTTPS",
         )
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer ") or auth[7:] != ADMIN_TOKEN:
@@ -542,18 +562,12 @@ class LogLevelRequest(BaseModel):
 
 
 @app.post("/admin/log-level")
-def set_log_level(req: LogLevelRequest):
+def set_log_level(request: Request, req: LogLevelRequest):
     """Change log level at runtime (DEBUG, INFO, WARNING, ERROR, CRITICAL).
 
-    Gated by ADMIN_ENDPOINT_ENABLED.
+    Gated by ADMIN_ENDPOINT_ENABLED + bearer token auth (Sprint 88).
     """
-    from app.core.config import ADMIN_ENDPOINT_ENABLED
-
-    if not ADMIN_ENDPOINT_ENABLED:
-        return JSONResponse(
-            status_code=404,
-            content={"detail": "Admin endpoint disabled"}
-        )
+    _require_admin_write(request)
 
     valid_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
     level_upper = req.level.upper()
@@ -586,18 +600,12 @@ class CacheClearRequest(BaseModel):
 
 
 @app.post("/admin/cache/clear")
-async def admin_cache_clear(req: CacheClearRequest):
+async def admin_cache_clear(request: Request, req: CacheClearRequest):
     """Clear specified cache (dossier, revocation, schema).
 
-    Gated by ADMIN_ENDPOINT_ENABLED.
+    Gated by ADMIN_ENDPOINT_ENABLED + bearer token auth (Sprint 88).
     """
-    from app.core.config import ADMIN_ENDPOINT_ENABLED
-
-    if not ADMIN_ENDPOINT_ENABLED:
-        return JSONResponse(
-            status_code=404,
-            content={"detail": "Admin endpoint disabled"}
-        )
+    _require_admin_write(request)
 
     valid_types = ["dossier", "revocation", "schema", "verification"]
     cache_type = req.cache_type.lower()
@@ -635,19 +643,13 @@ async def admin_cache_clear(req: CacheClearRequest):
 
 
 @app.post("/admin/witnesses/discover")
-async def admin_witness_discover():
+async def admin_witness_discover(request: Request):
     """Trigger immediate GLEIF witness discovery.
 
-    Gated by ADMIN_ENDPOINT_ENABLED.
+    Gated by ADMIN_ENDPOINT_ENABLED + bearer token auth (Sprint 88).
     Forces rediscovery by resetting the discovery flag.
     """
-    from app.core.config import ADMIN_ENDPOINT_ENABLED
-
-    if not ADMIN_ENDPOINT_ENABLED:
-        return JSONResponse(
-            status_code=404,
-            content={"detail": "Admin endpoint disabled"}
-        )
+    _require_admin_write(request)
 
     try:
         from app.vvp.keri.witness_pool import get_witness_pool

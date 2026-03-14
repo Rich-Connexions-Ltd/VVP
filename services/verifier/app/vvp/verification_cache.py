@@ -1,12 +1,16 @@
 """
-Verification Result Cache — Sprint 51.
+Verification Result Cache — Sprint 51 + Sprint 88 negative caching.
 
 Caches dossier-derived verification artifacts (chain validation, ACDC signatures,
 revocation status) keyed by (dossier_url, passport_kid). On cache hit, expensive
 Phases 5, 5.5, and 9 are skipped while per-request phases always re-evaluate.
 
-Only VALID chain results are cached. INVALID and INDETERMINATE results are not
-cached to avoid sticky failures from transient conditions.
+Only VALID chain results are cached in the positive cache. INVALID and INDETERMINATE
+results are not cached to avoid sticky failures from transient conditions.
+
+Sprint 88: Governance-deterministic INDETERMINATE results (schema governance failures,
+not transient network errors) are cached in a separate slim negative cache with
+shorter TTL and separate quota.
 """
 
 import asyncio
@@ -71,6 +75,36 @@ class CachedDossierVerification:
     created_at: float = field(default_factory=time.time)
     cache_version: int = CACHE_VERSION
     config_fingerprint: str = ""
+
+
+# =============================================================================
+# NegativeCacheEntry (Sprint 88)
+# Slim cache for governance-deterministic INDETERMINATE results.
+# =============================================================================
+
+# Negative cache limits
+NEGATIVE_CACHE_MAX_ENTRIES = 1000
+NEGATIVE_CACHE_TTL_SECONDS = 60
+
+
+@dataclass
+class NegativeCacheEntry:
+    """Slim negative cache entry for governance-deterministic INDETERMINATE.
+
+    Only caches deterministic failures (schema governance mismatch, missing
+    required edges). Does NOT cache transient failures (network timeouts,
+    witness unavailability).
+
+    Invalidated when SCHEMA_REGISTRY_VERSION changes.
+    """
+    dossier_url: str
+    reason: str  # e.g., "CVD_MISSING_REQUIRED_EDGE: ..."
+    registry_version: str  # From SCHEMA_REGISTRY_VERSION — invalidation key
+    created_at: float = field(default_factory=time.time)
+
+    @property
+    def is_expired(self) -> bool:
+        return (time.time() - self.created_at) > NEGATIVE_CACHE_TTL_SECONDS
 
 
 # =============================================================================
@@ -175,6 +209,8 @@ class VerificationResultCache:
         self._access_order: OrderedDict[CacheKey, None] = OrderedDict()  # LRU: O(1) ops
         self._lock = asyncio.Lock()
         self._metrics = VerificationCacheMetrics()
+        # Sprint 88: Negative cache for governance-deterministic INDETERMINATE
+        self._negative_cache: Dict[str, NegativeCacheEntry] = {}  # dossier_url → entry
 
     async def get(
         self, dossier_url: str, passport_kid: str,
@@ -361,10 +397,32 @@ class VerificationResultCache:
         return len(self._cache)
 
     async def clear(self) -> None:
-        """Clear entire cache."""
+        """Clear entire cache (positive + negative)."""
         async with self._lock:
             self._cache.clear()
             self._access_order.clear()
+            self._negative_cache.clear()
+
+    # ---- Negative cache (Sprint 88) ----
+
+    def get_negative(self, dossier_url: str, registry_version: str) -> Optional[NegativeCacheEntry]:
+        """Get a negative cache entry if unexpired and version-matching."""
+        entry = self._negative_cache.get(dossier_url)
+        if entry is None:
+            return None
+        if entry.is_expired or entry.registry_version != registry_version:
+            del self._negative_cache[dossier_url]
+            return None
+        return entry
+
+    def put_negative(self, entry: NegativeCacheEntry) -> None:
+        """Store a governance-deterministic INDETERMINATE result."""
+        # Enforce quota
+        while len(self._negative_cache) >= NEGATIVE_CACHE_MAX_ENTRIES:
+            # Evict oldest
+            oldest_key = next(iter(self._negative_cache))
+            del self._negative_cache[oldest_key]
+        self._negative_cache[entry.dossier_url] = entry
 
     # ---- Internal helpers (must be called with lock held) ----
 

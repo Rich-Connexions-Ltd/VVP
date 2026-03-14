@@ -8,8 +8,13 @@ Validates:
 Also collects ToIP Verifiable Dossiers spec warnings (non-blocking).
 """
 
-from typing import Any, Callable, Dict, List, Optional, Set
+import logging
+from typing import Any, Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 
+from common.vvp.models import ACDC
+from common.vvp.schema.registry import CredentialClassification, SchemaGovernanceStatus
+
+from ..api_models import ClaimStatus
 from .exceptions import GraphError
 from .models import (
     ACDCNode,
@@ -19,6 +24,8 @@ from .models import (
     EdgeValidationWarning,
     ToIPWarningCode,
 )
+
+log = logging.getLogger(__name__)
 
 
 def extract_edge_targets(acdc: ACDCNode) -> Set[str]:
@@ -859,3 +866,117 @@ def validate_all_edge_schemas(dag: DossierDAG) -> List[DossierWarning]:
                 warnings.append(warning)
 
     return warnings
+
+
+# ---------------------------------------------------------------------------
+# Dossier CVD Root Edge Validation (Sprint 88, Checklist 8.8)
+# Validates that the dossier root credential's edges conform to the
+# normative dossier schema contract (EH1jN4U4...).
+# ---------------------------------------------------------------------------
+
+DOSSIER_CVD_REQUIRED_EDGES: FrozenSet[str] = frozenset({
+    "vetting", "alloc", "tnalloc", "delsig",
+})
+DOSSIER_CVD_OPTIONAL_EDGES: FrozenSet[str] = frozenset({
+    "bownr", "bproxy",
+})
+DOSSIER_CVD_ALL_EDGES: FrozenSet[str] = (
+    DOSSIER_CVD_REQUIRED_EDGES | DOSSIER_CVD_OPTIONAL_EDGES
+)
+
+
+def validate_dossier_cvd_edges(
+    root_acdc: ACDC,
+    dossier_acdcs: Dict[str, ACDC],
+    classifications: Dict[str, CredentialClassification],
+) -> Tuple[ClaimStatus, List[str]]:
+    """Validate dossier CVD root edges per the dossier schema contract.
+
+    The dossier root is a Compact Verifiable Document (CVD) with schema
+    EH1jN4U4LMYHmPVI4FYdZ10bIPR7YWKp8TDdZ9Y9Al-P. Its edges are
+    structural slots defined by the schema, NOT credential-internal edges.
+
+    Checks:
+    1. All 4 required edges are present (vetting, alloc, tnalloc, delsig)
+    2. Each edge's target SAID references a credential in the dossier
+    3. Each edge's target has GOVERNED classification
+    4. Optional edges (bownr, bproxy) are valid if present
+
+    Does NOT re-validate credential-internal edges — those are handled by
+    EDGE_RULES in acdc/verifier.py and VLEI_CHAIN_REQUIREMENTS in vlei_chain.py.
+
+    Args:
+        root_acdc: The dossier root ACDC credential.
+        dossier_acdcs: Map of SAID → ACDC for all credentials in the dossier.
+        classifications: Map of SAID → CredentialClassification for each ACDC.
+
+    Returns:
+        Tuple of (ClaimStatus, list of evidence/warning strings):
+        - VALID if all required edges present with governed targets
+        - INVALID if required edges missing or targets not in dossier
+        - INDETERMINATE if targets present but non-GOVERNED
+    """
+    evidence: List[str] = []
+    status = ClaimStatus.VALID
+
+    root_edges = root_acdc.edges or {}
+
+    # Check all required edges are present
+    for required_edge in sorted(DOSSIER_CVD_REQUIRED_EDGES):
+        if required_edge not in root_edges:
+            evidence.append(
+                f"CVD_MISSING_REQUIRED_EDGE: dossier root missing "
+                f"required edge '{required_edge}'"
+            )
+            status = ClaimStatus.INVALID
+
+    if status == ClaimStatus.INVALID:
+        return status, evidence
+
+    # Validate each known edge (required + optional if present)
+    for edge_name, edge_ref in root_edges.items():
+        if edge_name == "d":
+            continue  # Skip edge block SAID
+
+        # Extract target SAID
+        target_said = None
+        if isinstance(edge_ref, str):
+            target_said = edge_ref
+        elif isinstance(edge_ref, dict):
+            target_said = edge_ref.get("n") or edge_ref.get("d")
+
+        if not target_said:
+            continue
+
+        is_required = edge_name in DOSSIER_CVD_REQUIRED_EDGES
+        is_known = edge_name in DOSSIER_CVD_ALL_EDGES
+
+        # Check target is in dossier
+        if target_said not in dossier_acdcs:
+            if is_required:
+                evidence.append(
+                    f"CVD_TARGET_NOT_IN_DOSSIER: required edge '{edge_name}' "
+                    f"target {target_said[:20]}... not found in dossier"
+                )
+                status = ClaimStatus.INVALID
+            elif is_known:
+                evidence.append(
+                    f"CVD_TARGET_NOT_IN_DOSSIER: optional edge '{edge_name}' "
+                    f"target {target_said[:20]}... not found in dossier"
+                )
+            continue
+
+        # Check target has GOVERNED classification
+        classification = classifications.get(target_said)
+        if classification and not classification.is_governed:
+            code = "CVD_TARGET_NOT_GOVERNED"
+            msg = (
+                f"{code}: edge '{edge_name}' target "
+                f"{target_said[:20]}... has status "
+                f"{classification.governance_status.value}"
+            )
+            evidence.append(msg)
+            if status != ClaimStatus.INVALID:
+                status = ClaimStatus.INDETERMINATE
+
+    return status, evidence

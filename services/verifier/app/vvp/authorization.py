@@ -9,10 +9,11 @@ Implementation:
 - Case B (with delegation): DE issuee == OP, DE chain terminates at APE
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 from common.vvp.models import ACDC
+from common.vvp.schema.registry import CredentialClassification
 from common.vvp.utils.tn_utils import TNParseError, is_subset, parse_tn_allocation
 
 from app.vvp.api_models import ClaimStatus
@@ -26,10 +27,12 @@ class AuthorizationContext:
         pss_signer_aid: AID extracted from PASSporT kid header.
         orig_tn: E.164 telephone number from passport.payload.orig["tn"].
         dossier_acdcs: All ACDC credentials parsed from the dossier.
+        classifications: Canonical credential classifications (Sprint 88).
     """
     pss_signer_aid: str
     orig_tn: str
     dossier_acdcs: Dict[str, ACDC]
+    classifications: Optional[Dict[str, CredentialClassification]] = None
 
 
 @dataclass
@@ -86,17 +89,29 @@ def _get_issuee(acdc: ACDC) -> Optional[str]:
 
 def _find_credentials_by_type(
     dossier_acdcs: Dict[str, ACDC],
-    cred_type: str
+    cred_type: str,
+    classifications: Optional[Dict[str, CredentialClassification]] = None,
 ) -> List[ACDC]:
     """Find all credentials of a specific type in the dossier.
+
+    When classifications are provided, uses governance-authoritative type and
+    requires type_is_reliable for auth-relevant decisions.
 
     Args:
         dossier_acdcs: All credentials from dossier.
         cred_type: Credential type to find (e.g., "APE", "DE", "TNAlloc").
+        classifications: Optional canonical classifications (Sprint 88).
 
     Returns:
         List of matching credentials.
     """
+    if classifications:
+        return [
+            acdc for acdc in dossier_acdcs.values()
+            if acdc.said in classifications
+            and classifications[acdc.said].credential_type == cred_type
+            and classifications[acdc.said].type_is_reliable
+        ]
     return [acdc for acdc in dossier_acdcs.values() if acdc.credential_type == cred_type]
 
 
@@ -333,9 +348,9 @@ def verify_party_authorization(
     """
     claim = AuthorizationClaimBuilder("party_authorized")
 
-    # Find APE and DE credentials
-    ape_credentials = _find_credentials_by_type(ctx.dossier_acdcs, "APE")
-    de_credentials = _find_credentials_by_type(ctx.dossier_acdcs, "DE")
+    # Find APE and DE credentials (use classifications when available)
+    ape_credentials = _find_credentials_by_type(ctx.dossier_acdcs, "APE", ctx.classifications)
+    de_credentials = _find_credentials_by_type(ctx.dossier_acdcs, "DE", ctx.classifications)
 
     # Find DEs where issuee == signer (matching DEs for Case B)
     matching_des = [
@@ -414,8 +429,8 @@ def verify_tn_rights(
         )
         return claim
 
-    # Find TNAlloc credentials
-    tnalloc_credentials = _find_credentials_by_type(ctx.dossier_acdcs, "TNAlloc")
+    # Find TNAlloc credentials (use classifications when available)
+    tnalloc_credentials = _find_credentials_by_type(ctx.dossier_acdcs, "TNAlloc", ctx.classifications)
 
     if not tnalloc_credentials:
         claim.fail(

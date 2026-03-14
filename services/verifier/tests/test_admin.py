@@ -169,79 +169,87 @@ class TestAdminEndpointDisabled:
         importlib.reload(app.main)
 
 
+def _admin_mutation_setup(monkeypatch):
+    """Configure admin token and reset rate limiter for mutation endpoint tests."""
+    import app.core.config as cfg
+    monkeypatch.setattr(cfg, "ADMIN_TOKEN", "test-token")
+    monkeypatch.setattr(cfg, "TEL_ALLOW_HTTP", True)
+    import app.main as main_mod
+    monkeypatch.setattr(main_mod, "_LAST_MUTATION_TS", 0.0)
+    from app.main import app
+    return TestClient(app), {"Authorization": "Bearer test-token"}
+
+
 class TestLogLevelEndpoint:
-    """Tests for POST /admin/log-level endpoint."""
+    """Tests for POST /admin/log-level endpoint.
 
-    def test_set_log_level_debug(self):
+    Sprint 88: Mutation endpoints now require bearer token auth.
+    """
+
+    def test_set_log_level_debug(self, monkeypatch):
         """Can set log level to DEBUG."""
-        from app.main import app
-        client = TestClient(app)
+        client, headers = _admin_mutation_setup(monkeypatch)
 
-        response = client.post("/admin/log-level", json={"level": "DEBUG"})
+        response = client.post("/admin/log-level", json={"level": "DEBUG"}, headers=headers)
         assert response.status_code == 200
 
         data = response.json()
         assert data["success"] is True
         assert data["log_level"] == "DEBUG"
 
-    def test_set_log_level_info(self):
+    def test_set_log_level_info(self, monkeypatch):
         """Can set log level to INFO."""
-        from app.main import app
-        client = TestClient(app)
+        client, headers = _admin_mutation_setup(monkeypatch)
 
-        response = client.post("/admin/log-level", json={"level": "info"})
+        response = client.post("/admin/log-level", json={"level": "info"}, headers=headers)
         assert response.status_code == 200
 
         data = response.json()
         assert data["success"] is True
         assert data["log_level"] == "INFO"
 
-    def test_set_log_level_warning(self):
+    def test_set_log_level_warning(self, monkeypatch):
         """Can set log level to WARNING."""
-        from app.main import app
-        client = TestClient(app)
+        client, headers = _admin_mutation_setup(monkeypatch)
 
-        response = client.post("/admin/log-level", json={"level": "WARNING"})
+        response = client.post("/admin/log-level", json={"level": "WARNING"}, headers=headers)
         assert response.status_code == 200
 
         data = response.json()
         assert data["log_level"] == "WARNING"
 
-    def test_set_log_level_error(self):
+    def test_set_log_level_error(self, monkeypatch):
         """Can set log level to ERROR."""
-        from app.main import app
-        client = TestClient(app)
+        client, headers = _admin_mutation_setup(monkeypatch)
 
-        response = client.post("/admin/log-level", json={"level": "error"})
+        response = client.post("/admin/log-level", json={"level": "error"}, headers=headers)
         assert response.status_code == 200
 
         data = response.json()
         assert data["log_level"] == "ERROR"
 
-    def test_set_log_level_invalid_returns_400(self):
+    def test_set_log_level_invalid_returns_400(self, monkeypatch):
         """Invalid log level returns 400."""
-        from app.main import app
-        client = TestClient(app)
+        client, headers = _admin_mutation_setup(monkeypatch)
 
-        response = client.post("/admin/log-level", json={"level": "INVALID"})
+        response = client.post("/admin/log-level", json={"level": "INVALID"}, headers=headers)
         assert response.status_code == 400
         assert "Invalid log level" in response.json()["detail"]
 
-    def test_log_level_reflected_in_admin(self):
+    def test_log_level_reflected_in_admin(self, monkeypatch):
         """Changed log level is reflected in /admin response."""
-        from app.main import app
-        client = TestClient(app)
+        client, headers = _admin_mutation_setup(monkeypatch)
 
         # Set to DEBUG
-        client.post("/admin/log-level", json={"level": "DEBUG"})
+        client.post("/admin/log-level", json={"level": "DEBUG"}, headers=headers)
 
         # Check /admin shows DEBUG
-        response = client.get("/admin")
+        response = client.get("/admin", headers=headers)
         data = response.json()
         assert data["environment"]["log_level_name"] == "DEBUG"
 
         # Reset to INFO
-        client.post("/admin/log-level", json={"level": "INFO"})
+        client.post("/admin/log-level", json={"level": "INFO"}, headers=headers)
 
 
 class TestVerificationCacheMetrics:
@@ -301,16 +309,19 @@ class TestVerificationCacheMetrics:
 
 
 class TestCacheClearEndpoint:
-    """Sprint 51: POST /admin/cache/clear for verification cache."""
+    """Sprint 51: POST /admin/cache/clear for verification cache.
 
-    def test_clear_verification_cache_succeeds(self):
+    Sprint 88: Mutation endpoints now require bearer token auth.
+    """
+
+    def test_clear_verification_cache_succeeds(self, monkeypatch):
         """POST /admin/cache/clear with cache_type=verification returns success."""
-        from app.main import app
-        client = TestClient(app)
+        client, headers = _admin_mutation_setup(monkeypatch)
 
         response = client.post(
             "/admin/cache/clear",
             json={"cache_type": "verification"},
+            headers=headers,
         )
         assert response.status_code == 200
 
@@ -319,14 +330,14 @@ class TestCacheClearEndpoint:
         assert data["cache_type"] == "verification"
         assert "cleared" in data["message"].lower()
 
-    def test_clear_invalid_cache_type_returns_400(self):
+    def test_clear_invalid_cache_type_returns_400(self, monkeypatch):
         """POST /admin/cache/clear with invalid type returns 400."""
-        from app.main import app
-        client = TestClient(app)
+        client, headers = _admin_mutation_setup(monkeypatch)
 
         response = client.post(
             "/admin/cache/clear",
             json={"cache_type": "nonexistent"},
+            headers=headers,
         )
         assert response.status_code == 400
         assert "Invalid cache type" in response.json()["detail"]
@@ -352,19 +363,19 @@ class TestCacheClearEndpoint:
         importlib.reload(app.core.config)
         importlib.reload(app.main)
 
-    def test_clear_verification_cache_empties_entries(self):
+    def test_clear_verification_cache_empties_entries(self, monkeypatch):
         """Clearing verification cache sets entries count to 0."""
-        from app.main import app
-        client = TestClient(app)
+        client, headers = _admin_mutation_setup(monkeypatch)
 
         # Clear
         resp = client.post(
             "/admin/cache/clear",
             json={"cache_type": "verification"},
+            headers=headers,
         )
         assert resp.status_code == 200
 
         # Verify entries is 0
-        admin_resp = client.get("/admin")
+        admin_resp = client.get("/admin", headers=headers)
         ver = admin_resp.json()["cache_metrics"]["verification"]
         assert ver["entries"] == 0

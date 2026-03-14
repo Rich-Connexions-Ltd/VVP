@@ -61,6 +61,7 @@ from .dossier import (
     get_dossier_cache,
     CachedDossier,
 )
+from common.vvp.schema.registry import classify_credential, CredentialClassification
 from .exceptions import VVPIdentityError, PassportError
 from .authorization import AuthorizationContext, validate_authorization
 from .sip_context import verify_sip_context_alignment
@@ -904,6 +905,13 @@ async def verify_vvp(
                 raw_dossier = _cached_verification.raw_dossier
                 has_variant_limitations = _cached_verification.has_variant_limitations
                 dossier_acdcs = _cached_verification.dossier_acdcs  # deep-copied by get()
+                # Build classifications for cached dossier (Sprint 88)
+                classifications = {}
+                for _said, _acdc in dossier_acdcs.items():
+                    classifications[_said] = classify_credential(
+                        schema_said=_acdc.schema_said,
+                        heuristic_type_hint=_acdc.credential_type,
+                    )
                 for _ev in _cached_verification.dossier_claim_evidence:
                     dossier_claim.add_evidence(_ev)
                 dossier_claim.add_evidence("cache_hit:dossier_verification")
@@ -1082,6 +1090,14 @@ async def verify_vvp(
         # Convert DossierDAG nodes to ACDC format
         dossier_acdcs = _convert_dag_to_acdcs(dag)
 
+        # Build canonical classifications dict (Sprint 88 — schema-first governance)
+        classifications: Dict[str, CredentialClassification] = {}
+        for _said, _acdc in dossier_acdcs.items():
+            classifications[_said] = classify_credential(
+                schema_said=_acdc.schema_said,
+                heuristic_type_hint=_acdc.credential_type,
+            )
+
         # Get PSS signer AID from passport kid for DE validation (if passport available)
         # Per §6.3.4, PSS signer must match delegate in DE credential
         pss_signer_aid = None
@@ -1149,6 +1165,7 @@ async def verify_vvp(
                     validate_schemas=SCHEMA_VALIDATION_STRICT,
                     credential_resolver=credential_resolver,
                     witness_urls=witness_urls if credential_resolver else None,
+                    classifications=classifications,
                 )
 
                 # Track variant limitations from chain result (§1.4)
@@ -1423,6 +1440,7 @@ async def verify_vvp(
                     pss_signer_aid=pss_signer_aid_for_auth,
                     orig_tn=orig_tn,
                     dossier_acdcs=dossier_acdcs,
+                    classifications=classifications,
                 )
 
                 # Validate authorization

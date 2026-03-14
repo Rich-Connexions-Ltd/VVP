@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from .schema_resolver import SchemaResolver
 from .models import ACDC, ACDCChainResult
 from .parser import _acdc_canonical_serialize
+from common.vvp.schema.registry import CredentialClassification
 from .schema_registry import (
     KNOWN_SCHEMA_SAIDS,
     get_known_schemas,
@@ -222,11 +223,21 @@ EDGE_RULES: Dict[str, List[Dict]] = {
     ],
 }
 
+# Per-type normative edge allowlists (Sprint 88)
+# Unknown edges produce a warning, not INVALID — EDGE_RULES handles required edges.
+NORMATIVE_EDGE_ALLOWLISTS: Dict[str, FrozenSet[str]] = {
+    "APE": frozenset({"vetting", "le", "legalentity", "vlei", "qvi"}),
+    "DE": frozenset({"delegation", "d", "delegate", "delegator", "issuer"}),
+    "TNAlloc": frozenset({"jl", "jurisdiction", "parent", "allocator", "tnalloc", "le"}),
+    "VetterCert": frozenset({"issuer"}),
+}
+
 
 def validate_edge_semantics(
     acdc: ACDC,
     dossier_acdcs: Dict[str, ACDC],
-    is_root: bool = False
+    is_root: bool = False,
+    classifications: Optional[Dict[str, CredentialClassification]] = None,
 ) -> Tuple[List[str], ClaimStatus]:
     """Validate edge relationships match credential type rules.
 
@@ -256,7 +267,11 @@ def validate_edge_semantics(
     """
     warnings = []
     status = ClaimStatus.VALID
-    cred_type = acdc.credential_type
+    # Use classification type when available (governance-authoritative)
+    if classifications and acdc.said in classifications:
+        cred_type = classifications[acdc.said].credential_type
+    else:
+        cred_type = acdc.credential_type
     is_compact = getattr(acdc, 'variant', 'full') == 'compact'
 
     if cred_type not in EDGE_RULES:
@@ -333,8 +348,24 @@ def validate_edge_semantics(
             else:
                 warnings.append(f"Optional edge target not found in dossier: {found_edge}")
         else:
-            # Validate target credential type
-            if found_target.credential_type not in target_types:
+            # Validate target credential type (use classification if available)
+            if classifications and target_said and target_said in classifications:
+                target_cls = classifications[target_said]
+                target_type = target_cls.credential_type
+                if target_type not in target_types:
+                    raise ACDCChainInvalid(
+                        f"{cred_type} credential {acdc.said[:20]}... edge '{found_edge}' "
+                        f"points to {target_type} but expected one of: "
+                        f"{target_types}"
+                    )
+                if not target_cls.type_is_reliable:
+                    warnings.append(
+                        f"EDGE_GOVERNANCE_PENDING: edge '{found_edge}' target "
+                        f"{target_said[:20]}... has non-governed classification "
+                        f"({target_cls.governance_status.value})"
+                    )
+                    status = ClaimStatus.INDETERMINATE
+            elif found_target.credential_type not in target_types:
                 raise ACDCChainInvalid(
                     f"{cred_type} credential {acdc.said[:20]}... edge '{found_edge}' "
                     f"points to {found_target.credential_type} but expected one of: "
@@ -465,6 +496,7 @@ async def validate_credential_chain(
     pss_signer_aid: Optional[str] = None,
     credential_resolver: Optional["CredentialResolver"] = None,
     witness_urls: Optional[List[str]] = None,
+    classifications: Optional[Dict[str, CredentialClassification]] = None,
 ) -> ACDCChainResult:
     """Walk the credential chain back to a trusted root.
 
@@ -583,7 +615,9 @@ async def validate_credential_chain(
 
         # Validate edge semantics per §6.3.3/§6.3.4/§6.3.6
         # This validates that APE has vetting edge to LE, DE has delegation edge, etc.
-        edge_warnings, edge_status = validate_edge_semantics(current, dossier_acdcs, is_root=is_at_root)
+        edge_warnings, edge_status = validate_edge_semantics(
+            current, dossier_acdcs, is_root=is_at_root, classifications=classifications
+        )
         if edge_warnings:
             errors.extend(edge_warnings)
         # Propagate worst status (INVALID > INDETERMINATE > VALID)
