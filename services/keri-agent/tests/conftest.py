@@ -24,6 +24,7 @@ from app.keri.registry import (
     close_registry_manager,
 )
 from app.keri.witness import reset_witness_publisher
+from app.keri.witness_recovery import reset_recovery_service
 from app.keri.seed_store import reset_seed_store
 from app.keri.readiness import reset_readiness_tracker
 from app.dossier.builder import reset_dossier_builder
@@ -91,6 +92,7 @@ def _reset_all_singletons():
     reset_credential_issuer()
     reset_persistence_manager()
     reset_witness_publisher()
+    reset_recovery_service()
     reset_seed_store()
     reset_readiness_tracker()
     reset_dossier_builder()

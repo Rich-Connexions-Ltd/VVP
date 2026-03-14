@@ -952,6 +952,26 @@ class AgentErrorResponse(BaseModel):
     error_code: str | None
 ```
 
+### vvp/models/witness.py - Witness Recovery DTOs (Sprint 86)
+Shared request/response models for witness republish operations. Used by both the KERI Agent (endpoint) and Issuer (proxy).
+
+```python
+class WitnessRepublishRequest(BaseModel):
+    force: bool = False            # Bypass circuit breaker and cooldown
+
+class WitnessRepublishResponse(BaseModel):
+    action: str                    # e.g. "admin_republish"
+    witnesses_checked: int
+    witnesses_degraded: int
+    identities_published: int
+    identities_total: int
+    identities_verified: int
+    identities_failed: int
+    fully_recovered: bool
+    elapsed_seconds: float
+    error_codes: list[str] = []    # e.g. CIRCUIT_OPEN, COOLDOWN_ACTIVE, BUDGET_EXHAUSTED
+```
+
 ### SeedStore Methods (`services/keri-agent/app/db/seed_store.py`) — Sprint 69+73
 
 The SeedStore manages PostgreSQL-backed KERI key material (identity seeds, rotation seeds, credential seeds). Sprint 73 added bulk deletion and lookup-by-issuer/schema methods.
@@ -984,6 +1004,51 @@ def get_credential_seeds_by_schema(schema_said: str) -> list[KeriCredentialSeed]
 
 def get_identity_seed_by_aid(aid: str) -> KeriIdentitySeed | None
     """Look up an identity seed by its AID prefix."""
+```
+
+---
+
+## KERI Agent Internal Models (`services/keri-agent/`)
+
+### app/keri/witness_recovery.py - Recovery Dataclasses (Sprint 86)
+Internal dataclasses used by `WitnessRecoveryService`. Not shared DTOs — used only within the KERI Agent process.
+
+```python
+@dataclass
+class WitnessStateCheck:
+    witness_url: str
+    aid: str
+    expected_sn: int
+    expected_said: str
+    witness_sn: int | None = None
+    witness_said: str | None = None
+    healthy: bool = False
+    status: str = "unknown"        # healthy, stale, corrupted, divergent, unreachable, config_error
+
+@dataclass
+class WitnessRecoveryResult:
+    witness_url: str
+    was_degraded: bool = False
+    identities_published: int = 0
+    identities_verified: int = 0
+    identities_failed: int = 0
+    receipt_redistribution_ok: bool = False
+    fully_recovered: bool = False
+    error_codes: list[str]         # default_factory=list
+
+@dataclass
+class RecoveryReport:
+    action: str = "admin_republish"
+    witnesses_checked: int = 0
+    witnesses_degraded: int = 0
+    identities_published: int = 0
+    identities_total: int = 0
+    identities_verified: int = 0
+    identities_failed: int = 0
+    fully_recovered: bool = False
+    elapsed_seconds: float = 0.0
+    per_witness: list[WitnessRecoveryResult]  # default_factory=list
+    error_codes: list[str]                     # default_factory=list
 ```
 
 ---

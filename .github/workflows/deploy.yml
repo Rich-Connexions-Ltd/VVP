@@ -964,6 +964,71 @@ jobs:
           echo "::warning::Witness OOBI endpoint returned $HTTP_CODE after 5 attempts"
 
   # =========================================================================
+  # REPUBLISH WITNESSES (Sprint 86)
+  # =========================================================================
+  # After witness-only deploys (no keri-agent change), trigger re-publishing
+  # so identity OOBIs are restored before system tests run.
+  republish-witnesses:
+    needs: [changes, verify-witnesses]
+    if: |
+      needs.changes.outputs.witness == 'true' &&
+      needs.changes.outputs.keri-agent != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger witness re-publishing
+        run: |
+          sleep 30  # Wait for witnesses to warm up
+          for i in {1..5}; do
+            HTTP_CODE=$(curl -s -o response.json -w "%{http_code}" \
+              -X POST "https://vvp-issuer.rcnx.io/admin/republish-witnesses" \
+              -H "X-API-Key: ${{ secrets.VVP_ADMIN_API_KEY }}" \
+              -H "Content-Type: application/json" \
+              -d '{"force": true}')
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Witness re-publishing complete"
+              cat response.json
+              RECOVERED=$(python3 -c "import json; print(json.load(open('response.json'))['fully_recovered'])" 2>/dev/null || echo "unknown")
+              echo "Fully recovered: $RECOVERED"
+              break
+            fi
+            echo "Attempt $i/5: HTTP $HTTP_CODE, retrying in 30s..."
+            sleep 30
+          done
+
+      - name: Verify recovery success
+        run: |
+          # Primary validation: the republish endpoint's fully_recovered field
+          if [ -f response.json ]; then
+            RECOVERED=$(python3 -c "import json; r=json.load(open('response.json')); print(r.get('fully_recovered', False))" 2>/dev/null || echo "false")
+            VERIFIED=$(python3 -c "import json; r=json.load(open('response.json')); print(r.get('identities_verified', 0))" 2>/dev/null || echo "0")
+            FAILED=$(python3 -c "import json; r=json.load(open('response.json')); print(r.get('identities_failed', 0))" 2>/dev/null || echo "0")
+            echo "Recovery result: fully_recovered=$RECOVERED, verified=$VERIFIED, failed=$FAILED"
+            if [ "$RECOVERED" = "True" ] || [ "$RECOVERED" = "true" ]; then
+              echo "All identities verified on all witnesses"
+              exit 0
+            fi
+          fi
+
+          # Fallback: probe a known seeded application identity OOBI
+          SEEDED_AID="${{ secrets.VVP_PROBE_AID }}"
+          if [ -z "$SEEDED_AID" ]; then
+            echo "::warning::VVP_PROBE_AID secret not set — skipping fallback OOBI verification"
+            exit 0
+          fi
+          sleep 15
+          OOBI_URL="https://vvp-witness1.rcnx.io/oobi/${SEEDED_AID}/controller"
+          for i in {1..10}; do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$OOBI_URL")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Seeded identity OOBI verified: state restored"
+              exit 0
+            fi
+            echo "Attempt $i/10: OOBI returned $HTTP_CODE, waiting..."
+            sleep 10
+          done
+          echo "::warning::Seeded identity OOBI not restored after verification attempts"
+
+  # =========================================================================
   # POST-DEPLOYMENT INTEGRATION TESTS
   # =========================================================================
   # Run selective integration tests after deployment based on which services changed.

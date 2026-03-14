@@ -1,5 +1,36 @@
 # VVP Verifier Change Log
 
+## Sprint 86: Witness State Resilience — 2026-03-14
+
+**Problem:** Witnesses use ephemeral storage and lose all published KELs on restart. Independent witness restarts (Azure scaling, CI/CD) broke OOBI resolution without KERI Agent restart.
+
+**Files changed:**
+- `common/common/vvp/models/witness.py` — New: shared `WitnessRepublishRequest` and `WitnessRepublishResponse` DTOs
+- `services/keri-agent/app/keri/witness_recovery.py` — New: `WitnessRecoveryService` — centralized recovery with three phases (KEL replay, receipt redistribution, full verification), fail-closed health predicate, URL allowlist, abuse controls (cooldown, budget, circuit breaker)
+- `services/keri-agent/app/keri/witness_monitor.py` — New: `WitnessHealthMonitor` — periodic background health check with sampling, auto-recovery on degradation
+- `services/keri-agent/app/api/admin.py` — Added `POST /admin/republish-witnesses` endpoint with typed request/response, cache headers
+- `services/keri-agent/app/main.py` — Wire recovery service and monitor into lifespan startup/shutdown
+- `services/keri-agent/tests/conftest.py` — Added `reset_recovery_service` to singleton cleanup
+- `services/keri-agent/tests/test_witness_recovery.py` — New: recovery service unit tests (URL validation, cooldown, budget, circuit breaker, health predicate)
+- `services/keri-agent/tests/test_witness_monitor.py` — New: monitor lifecycle and behavior tests
+- `services/issuer/app/keri_client.py` — Added `republish_witnesses(force)` method to `KeriAgentClient`
+- `services/issuer/app/api/admin.py` — Added `POST /admin/republish-witnesses` proxy endpoint with `require_admin`
+- `.github/workflows/deploy.yml` — Added `republish-witnesses` CI/CD job for witness-only deploys
+- `knowledge/api-reference.md` — Documented both republish endpoints
+- `knowledge/data-models.md` — Documented shared witness DTOs and internal dataclasses
+- `knowledge/deployment.md` — Documented witness resilience, new env vars, CI/CD job
+- `knowledge/architecture.md` — Documented recovery service and monitor components
+
+**New environment variables:**
+- `VVP_WITNESS_MONITOR_INTERVAL` (default 300) — health check interval in seconds
+- `VVP_WITNESS_MONITOR_ENABLED` (default true) — enable/disable background monitor
+
+**New secrets (CI/CD):**
+- `VVP_ADMIN_API_KEY` — admin API key for CI/CD witness republish
+- `VVP_PROBE_AID` — optional seeded AID for fallback OOBI verification
+
+**Commit:** `pending`
+
 ## Sprint 85: OVC Verifier Tier 2 + Cross-Verifier System Test — 2026-03-14
 
 **Files changed (VVP monorepo):**

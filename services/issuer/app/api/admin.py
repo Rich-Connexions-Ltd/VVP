@@ -2016,3 +2016,39 @@ async def event_loop_health(
     from app.core.event_loop_monitor import get_event_loop_monitor
     monitor = get_event_loop_monitor()
     return monitor.metrics.to_dict()
+
+
+# Sprint 86: Witness re-publish proxy endpoint
+@router.post("/republish-witnesses")
+async def republish_witnesses(
+    request: Request,
+    principal: Principal = require_admin,
+):
+    """Proxy to KERI Agent's republish-witnesses endpoint.
+
+    Requires issuer:admin role (same as all /admin/* endpoints).
+    Forwards request body (including force parameter) to KERI Agent.
+    Returns typed WitnessRepublishResponse (same schema as KERI Agent).
+    """
+    from fastapi.responses import JSONResponse
+    from common.vvp.models.witness import WitnessRepublishRequest
+    from app.keri_client import get_keri_client
+
+    # Parse request body
+    try:
+        body_json = await request.json()
+        body = WitnessRepublishRequest(**body_json)
+    except Exception:
+        body = WitnessRepublishRequest()
+
+    client = get_keri_client()
+    result = await client.republish_witnesses(force=body.force)
+
+    return JSONResponse(
+        content=result.model_dump(),
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, private",
+            "Pragma": "no-cache",
+            "Vary": "Authorization, X-API-Key",
+        },
+    )

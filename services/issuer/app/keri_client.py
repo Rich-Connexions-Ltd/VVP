@@ -634,3 +634,23 @@ class KeriAgentClient:
             return health.status == "ok"
         except (KeriAgentUnavailableError, HTTPException, Exception):
             return False
+
+    # =========================================================================
+    # Witness Recovery (Sprint 86)
+    # =========================================================================
+
+    async def republish_witnesses(self, force: bool = False):
+        """Trigger witness state recovery on KERI Agent.
+
+        Args:
+            force: Bypass circuit breaker and cooldown on KERI Agent.
+
+        Returns typed WitnessRepublishResponse.
+        """
+        from common.vvp.models.witness import WitnessRepublishResponse
+
+        resp = await self._post(
+            "/admin/republish-witnesses",
+            json={"force": force},
+        )
+        return WitnessRepublishResponse.model_validate(resp.json())

@@ -5,6 +5,7 @@ for identity, registry, credential, dossier, VVP, and bootstrap operations.
 
 Sprint 68: KERI Agent Service Extraction.
 Sprint 81: Readiness gating via ReadinessTracker.
+Sprint 86: Witness health monitor for auto-recovery.
 """
 import logging
 import os
@@ -66,6 +67,18 @@ async def lifespan(app: FastAPI):
         else:
             log.info("Mock vLEI disabled (VVP_MOCK_VLEI_ENABLED=false)")
 
+        # Sprint 86: Start witness health monitor after rebuild
+        from app.keri.witness_recovery import get_recovery_service
+        from app.keri.witness_monitor import WitnessHealthMonitor
+
+        recovery_service = get_recovery_service()
+        monitor = WitnessHealthMonitor(recovery_service=recovery_service)
+
+        if tracker.is_ready:
+            monitor_task = await monitor.start()
+            if monitor_task:
+                tracker.track_task(monitor_task)
+
         log.info("VVP KERI Agent service started")
     except Exception as e:
         log.error(f"Failed to initialize KERI managers: {e}")
@@ -73,8 +86,9 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Shutdown: Cancel background tasks, close managers in reverse order
+    # Shutdown: Stop monitor, cancel background tasks, close managers
     log.info("Shutting down VVP KERI Agent service...")
+    await monitor.stop()
     await tracker.cancel_all_tasks()
     await close_credential_issuer()
     await close_registry_manager()

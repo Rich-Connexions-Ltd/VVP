@@ -2,6 +2,7 @@
 
 Sprint 73: Credential & Identity Cleanup — bulk delete endpoints
 with filter support, dry-run mode, and safety guards.
+Sprint 86: Witness re-publish endpoint for state recovery.
 """
 import fnmatch
 import json
@@ -9,9 +10,11 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from common.vvp.models.witness import WitnessRepublishRequest, WitnessRepublishResponse
 from app.keri.identity import get_identity_manager, IdentityNotFoundError
 from app.keri.issuer import get_credential_issuer
 from app.keri.seed_store import get_seed_store
@@ -321,4 +324,66 @@ async def bulk_cleanup_identities(request: BulkIdentityCleanupRequest):
         blocked_names=blocked_names,
         cascaded_credential_count=cascaded_credential_count,
         dry_run=False,
+    )
+
+
+# -- Witness Re-publish (Sprint 86) --
+
+CACHE_CONTROL_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, private",
+    "Pragma": "no-cache",
+    "Vary": "Authorization",
+}
+
+
+@router.post(
+    "/republish-witnesses",
+    response_model=WitnessRepublishResponse,
+    responses={
+        200: {"description": "Recovery completed"},
+        429: {"description": "Cooldown active, retry later"},
+        401: {"description": "Missing or invalid auth token"},
+    },
+)
+async def republish_witnesses(
+    request: Request,
+    body: WitnessRepublishRequest = WitnessRepublishRequest(),
+) -> JSONResponse:
+    """Trigger synchronous witness state check and targeted recovery.
+
+    Runs recovery inline (typically 2-30s for ~69 identities).
+    Returns completed WitnessRepublishResponse directly.
+    """
+    from app.keri.witness_recovery import get_recovery_service
+
+    recovery_service = get_recovery_service()
+
+    # Audit log
+    client_ip = request.client.host if request.client else "unknown"
+    log.info(
+        f"admin_republish_witnesses "
+        f"caller={client_ip} force={body.force}"
+    )
+
+    report = await recovery_service.recover_degraded_witnesses(
+        action="admin_republish",
+        force=body.force,
+    )
+
+    response_data = WitnessRepublishResponse(
+        action=report.action,
+        witnesses_checked=report.witnesses_checked,
+        witnesses_degraded=report.witnesses_degraded,
+        identities_published=report.identities_published,
+        identities_total=report.identities_total,
+        identities_verified=report.identities_verified,
+        identities_failed=report.identities_failed,
+        fully_recovered=report.fully_recovered,
+        elapsed_seconds=round(report.elapsed_seconds, 2),
+        error_codes=report.error_codes,
+    )
+
+    return JSONResponse(
+        content=response_data.model_dump(),
+        headers=CACHE_CONTROL_HEADERS,
     )

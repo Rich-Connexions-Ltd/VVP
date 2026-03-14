@@ -39,6 +39,9 @@ The pipeline has separate jobs triggered by path filters:
 
 **Deploy ordering**: When both keri-agent and issuer change (e.g., `common/**` change), keri-agent deploys first. The issuer's `deploy-issuer` job depends on `deploy-keri-agent` completing successfully. This ensures the KERI Agent is healthy before the issuer starts routing to it.
 
+| `verify-witnesses` | After witness deploy | Verifies witness AIDs match expected config |
+| `republish-witnesses` | After `verify-witnesses` (when witnesses changed but keri-agent didn't) | Triggers `POST /admin/republish-witnesses` on the issuer with admin API key and `force=true`. Verifies `fully_recovered` field in response. Ensures KERI Agent re-publishes KELs/receipts to newly restarted witnesses. |
+
 All path filters are bypassed when `force_all=true` is passed via workflow dispatch.
 
 ### Post-Deployment Integration Tests
@@ -106,6 +109,11 @@ Failed witness publishes are retried in supervised background tasks (up to 3 rou
 - Export via `GET /admin/seeds/export` — AES-256-GCM encrypted, requires passphrase query parameter
 - PostgreSQL is the single source of truth; LMDB is a disposable runtime cache
 
+**Witness state resilience (Sprint 86):** Witnesses use ephemeral storage (deterministic salts recreate the same AID on restart), but their KERI databases are empty after restart — they have no KELs or receipts. Recovery happens via full KEL replay and receipt redistribution from the KERI Agent. This recovery is triggered in two ways:
+1. **On KERI Agent startup** — the standard startup sequence (step 5 above) publishes all KELs to witnesses automatically.
+2. **Via background health monitor** — a periodic background task checks witness health and auto-detects degraded witnesses (those missing expected KEL events or receipts). When degradation is detected, the monitor triggers republication to the affected witnesses. Controlled by `VVP_WITNESS_MONITOR_ENABLED` (default `true`) and `VVP_WITNESS_MONITOR_INTERVAL` (default `300` seconds).
+3. **Via CI/CD `republish-witnesses` job** — when witnesses are redeployed without a corresponding KERI Agent redeploy, the pipeline calls `POST /admin/republish-witnesses?force=true` on the issuer to trigger recovery.
+
 **Self-healing** still applies: after the deploy step, CI/CD verifies the new revision is active and healthy (polling `/healthz` for up to 2 minutes). Fails the pipeline if health check never succeeds.
 
 **Issuer probe contract** (Sprint 68c): Three-endpoint probe model:
@@ -125,6 +133,13 @@ The issuer intentionally stays in ACA rotation (`/healthz` returns 200) when onl
 Deploys via tarball upload to Azure Blob Storage, then single `az vm run-command` that downloads, extracts, symlink-switches, updates systemd, and restarts. Uses a single run-command to avoid Azure serialization conflicts (only one run-command per VM at a time).
 
 Version verification uses `az vm run-command` to curl `localhost:8085/version` (port not externally accessible via NSG).
+
+### CI/CD Secrets
+
+| Secret | Purpose |
+|--------|---------|
+| `VVP_ADMIN_API_KEY` | Admin API key for CI/CD to call issuer admin endpoints (e.g., `republish-witnesses` job). Sprint 86. |
+| `VVP_PROBE_AID` | Optional. Fallback AID for OOBI verification when witness probing needs a known identifier. Sprint 86. |
 
 ### Verifying Deployment
 ```bash
@@ -412,6 +427,8 @@ az vm run-command invoke --resource-group VVP --name vvp-pbx \
 | `VVP_MOCK_GLEIF_NAME` | `mock-gleif` | Mock GLEIF identity name |
 | `VVP_MOCK_QVI_NAME` | `mock-qvi` | Mock QVI identity name |
 | `VVP_MOCK_GSMA_NAME` | `mock-gsma` | Mock GSMA identity name |
+| `VVP_WITNESS_MONITOR_ENABLED` | `true` | Enable/disable the background witness health monitor (Sprint 86) |
+| `VVP_WITNESS_MONITOR_INTERVAL` | `300` | Witness health check interval in seconds (Sprint 86) |
 
 #### Authentication
 | Variable | Default | Purpose |

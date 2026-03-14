@@ -75,6 +75,7 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 83 | Root of Trust Admin Configuration | COMPLETE | Sprint 82 |
 | 84 | Dossier TEL Event Filtering & INDETERMINATE Brand Policy | COMPLETE | Sprint 82, 83 |
 | 85 | OVC Verifier Tier 2 + Cross-Verifier System Test | COMPLETE | Sprint 82, 83, 84 |
+| 86 | Witness State Resilience | IN PROGRESS | Sprint 70, 81 |
 
 ---
 
@@ -6447,3 +6448,51 @@ Finally, we add a `--oss-verifier` mode to `scripts/system-test.py` that exercis
 - [ ] System test: cross-verifier results match monorepo verifier results (same brand name, logo, status)
 - [ ] All existing OVC tests continue to pass
 - [ ] New KEL tests pass (parser, resolver, delegation, witness receipts, CESR binary)
+
+---
+
+## Sprint 86: Witness State Resilience
+
+**Status:** IN PROGRESS
+**Goal:** Ensure witness OOBI resolution never degrades after any component restart — whether KERI Agent, witnesses, or Azure infrastructure — by adding a periodic witness health monitor with automatic re-publishing, and a CI/CD re-publish trigger after witness-only deployments.
+
+### Problem Statement
+
+Sprint 70 added automatic witness re-publishing during KERI Agent startup, and Sprint 81 extended it with full KEL publishing and readiness gating. However, witnesses still lose published identity state in two scenarios:
+
+1. **Witness restarts independently** — Azure Container Apps may restart witnesses due to scaling, health check failures, or platform updates. Witnesses use ephemeral storage (`KERI_DB_PATH=/tmp/witness`), so they lose all published KELs. The KERI Agent doesn't restart, so no re-publish occurs.
+
+2. **CI/CD witness-only deployment** — When only witness code changes, `deploy-witnesses` runs but `deploy-keri-agent` is skipped. Witnesses come up with fresh LMDB. Nothing triggers re-publishing.
+
+Both scenarios result in OOBI 404s → KERI_RESOLUTION_FAILED → INDETERMINATE verification → broken VVP calls.
+
+### Deliverables
+
+- [ ] **Witness OOBI health monitor** — Background task in KERI Agent that periodically checks a sample of identity OOBIs against each witness. When any witness returns 404 for a known identity, triggers re-publishing for all identities to that witness.
+- [ ] **Admin re-publish-all endpoint** — `POST /admin/republish-witnesses` that triggers full witness re-publishing on demand (reuses existing `_publish_to_witnesses` logic).
+- [ ] **CI/CD witness re-publish step** — After `verify-witnesses` in `deploy.yml`, add a step that calls the KERI Agent's re-publish endpoint when witnesses were deployed but KERI Agent was not.
+- [ ] **Tests** — Unit tests for health monitor, integration test for re-publish endpoint.
+- [ ] **Knowledge updates** — Update `knowledge/deployment.md` and `knowledge/architecture.md`.
+
+### Technical Notes
+
+- The KERI Agent already has `publish_full_kel()` in `WitnessPublisher` — the monitor reuses this
+- Health check only needs to probe one identity OOBI per witness (if one is missing, all are likely missing)
+- Monitor interval should be configurable via env var (default: 5 minutes)
+- Re-publishing is idempotent — witnesses accept duplicate events safely
+- The admin endpoint needs auth (KERI_AGENT_AUTH_TOKEN)
+- CI/CD step should use the issuer's existing `/admin/publish-identity` or a new bulk endpoint
+
+### Dependencies
+
+- Sprint 70 (Automatic Witness Re-Publishing on Startup)
+- Sprint 81 (Robust Post-Update State Restoration — readiness infrastructure)
+
+### Exit Criteria
+
+- [ ] After witness-only restart, OOBI resolution recovers automatically within the monitor interval (default 5 min)
+- [ ] After CI/CD witness-only deployment, re-publish step restores all identity OOBIs
+- [ ] `POST /admin/republish-witnesses` triggers full re-publishing and returns report
+- [ ] Monitor logs show periodic health checks and any re-publish actions
+- [ ] System test passes after witness restart without manual intervention
+- [ ] All existing tests pass (no regressions)

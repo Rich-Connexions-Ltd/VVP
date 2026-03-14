@@ -592,8 +592,44 @@ Thin proxy to KERI Agent's `/tels/credential/{said}`. Returns raw CESR bytes unc
 | `POST` | `/admin/cleanup/identities` | Bulk delete identities. Requires admin. Forwards to KERI Agent (Sprint 73) |
 | `GET` | `/admin/witness-status/{name}` | Proxy to KERI Agent `/identities/{name}/witness-status` (Sprint 75) |
 | `GET` | `/admin/event-loop-health` | Event loop latency metrics per worker (Sprint 76) |
+| `POST` | `/admin/republish-witnesses` | Re-publish identities to witnesses after recovery (Sprint 86) |
 
 **`GET /admin/event-loop-health`** — Returns `EventLoopMetrics` per worker process: `worker_pid`, `current_latency_ms` (drift from last sleep interval), `max_latency_ms`, `blocked_count` (probes exceeding threshold), `probe_count`, `threshold_ms`. Useful for diagnosing sync operations blocking the event loop.
+
+**`POST /admin/republish-witnesses`** (Sprint 86) — Proxies to KERI Agent `POST /admin/republish-witnesses`. Re-publishes all identities to witnesses after witness recovery or network partition.
+
+**Auth:** API key with `issuer:admin` role (`require_admin`)
+
+**Request:** `WitnessRepublishRequest`
+```json
+{
+  "force": false    // Skip cooldown check (default false)
+}
+```
+
+**Response:** `WitnessRepublishResponse` (proxied from KERI Agent)
+```json
+{
+  "action": "republished",
+  "witnesses_checked": 3,
+  "witnesses_degraded": 1,
+  "identities_published": 5,
+  "identities_total": 5,
+  "identities_verified": 5,
+  "identities_failed": 0,
+  "fully_recovered": true,
+  "elapsed_seconds": 12.3,
+  "error_codes": []
+}
+```
+
+**Status Codes:**
+- `200`: Republish completed (check `fully_recovered` for success)
+- `401`: Missing or invalid API key
+- `429`: Cooldown period active (retry later)
+- `503`: KERI Agent unavailable
+
+**Cache Headers:** `Cache-Control: no-store, no-cache, must-revalidate, private`, `Vary: Authorization, X-API-Key`
 
 ### PBX Management (`/pbx`) — Sprint 71, 77
 
@@ -679,6 +715,42 @@ Returns concatenated CESR: `iss` event (sn=0) + `rev` event (sn=1, if revoked). 
 | `GET` | `/admin/seeds/export?passphrase=<passphrase>` | Export encrypted KERI seed backup |
 | `POST` | `/admin/cleanup/credentials` | Bulk delete credentials by SAID list, issuer, schema, or date filter (Sprint 73) |
 | `POST` | `/admin/cleanup/identities` | Bulk delete identities by name list, pattern, or metadata type (Sprint 73) |
+
+#### POST /admin/republish-witnesses (Sprint 86)
+
+Re-publish all identities to witnesses after witness recovery or network partition. Checks witness health, identifies degraded witnesses, and re-publishes identity inception events.
+
+**Auth:** Bearer token (`Authorization: Bearer <VVP_KERI_AGENT_AUTH_TOKEN>`)
+
+**Request:** `WitnessRepublishRequest`
+```json
+{
+  "force": false    // Skip cooldown check (default false)
+}
+```
+
+**Response** (200): `WitnessRepublishResponse`
+```json
+{
+  "action": "republished",
+  "witnesses_checked": 3,
+  "witnesses_degraded": 1,
+  "identities_published": 5,
+  "identities_total": 5,
+  "identities_verified": 5,
+  "identities_failed": 0,
+  "fully_recovered": true,
+  "elapsed_seconds": 12.3,
+  "error_codes": []
+}
+```
+
+**Status Codes:**
+- `200`: Republish completed (check `fully_recovered` for success)
+- `401`: Missing or invalid bearer token
+- `429`: Cooldown period active (retry later)
+
+**Cache Headers:** `Cache-Control: no-store, no-cache, must-revalidate, private`, `Vary: Authorization`
 
 #### GET /admin/seeds/export (Sprint 69)
 

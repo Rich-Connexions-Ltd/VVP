@@ -303,6 +303,21 @@ All KERI state is persisted as "seeds" in PostgreSQL — the minimal parameters 
 
 **SeedStore** (`app/keri/seed_store.py`): Module-level singleton. All save operations are idempotent upserts. Uses synchronous SQLAlchemy sessions (keripy operations are sync/CPU-bound; async DB adds complexity without benefit for this single-replica service).
 
+### Witness Recovery and Health Monitoring (Sprint 86)
+
+When KERI witnesses restart independently (Azure scaling events, CI/CD deploys), they lose their in-memory state and no longer hold receipts for the agent's identities. The KERI Agent includes two components that detect and recover from this automatically, without requiring an agent restart.
+
+**WitnessRecoveryService** (`services/keri-agent/app/keri/witness_recovery.py`): Centralized witness state validation and recovery. Executes three recovery phases in sequence:
+- **Phase A** — Full KEL replay: re-publishes all key event logs to the affected witness
+- **Phase B** — Event-digest-aware receipt redistribution for establishment events
+- **Phase C** — Full verification: confirms the witness now holds correct state
+
+Includes abuse controls to prevent runaway recovery loops: per-witness cooldown periods, an hourly recovery budget, and a circuit breaker that trips after repeated failures.
+
+**WitnessHealthMonitor** (`services/keri-agent/app/keri/witness_monitor.py`): Thin background task that periodically samples witness health. When degradation is detected (e.g., a witness no longer acknowledges an identity's KEL), it triggers targeted recovery via `WitnessRecoveryService`. The monitor starts only after the KERI Agent reaches `READY` state, ensuring it does not interfere with the initial seed-based rebuild.
+
+Together, these components ensure the witness pool remains consistent with the agent's KERI state across infrastructure lifecycle events.
+
 ### Mock Trust Infrastructure (Issuer)
 
 The issuer bootstraps two parallel mock trust chains on startup:
