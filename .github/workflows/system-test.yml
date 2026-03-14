@@ -1,6 +1,9 @@
 name: System Test
 
 on:
+  schedule:
+    # Nightly at 02:00 UTC — full loopback test
+    - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
       loopback:
@@ -45,7 +48,8 @@ jobs:
           if [ "${{ inputs.skip_sip }}" = "true" ]; then
             FLAGS="$FLAGS --skip-sip"
           fi
-          if [ "${{ inputs.loopback }}" = "true" ]; then
+          # Enable loopback on scheduled (nightly) runs or manual request
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ inputs.loopback }}" = "true" ]; then
             FLAGS="$FLAGS --loopback"
           fi
           echo "Running: python3 scripts/system-test.py $FLAGS"
@@ -58,7 +62,7 @@ jobs:
           if [ "${{ inputs.skip_sip }}" = "true" ]; then
             FLAGS="$FLAGS --skip-sip"
           fi
-          if [ "${{ inputs.loopback }}" = "true" ]; then
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ inputs.loopback }}" = "true" ]; then
             FLAGS="$FLAGS --loopback"
           fi
           python3 scripts/system-test.py $FLAGS > system-test-results.json 2>&1 || true

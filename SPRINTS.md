@@ -74,7 +74,7 @@ Sprints 1-25 implemented the VVP Verifier. See `Documentation/archive/PLAN_Sprin
 | 82 | OVC-VVP-Verifier Sync (v0.2.0) | COMPLETE | Sprint 54 |
 | 83 | Root of Trust Admin Configuration | COMPLETE | Sprint 82 |
 | 84 | Dossier TEL Event Filtering & INDETERMINATE Brand Policy | COMPLETE | Sprint 82, 83 |
-| 85 | OVC Verifier Tier 2 + Cross-Verifier System Test | PENDING | Sprint 82, 83, 84 |
+| 85 | OVC Verifier Tier 2 + Cross-Verifier System Test | COMPLETE | Sprint 82, 83, 84 |
 
 ---
 
@@ -6353,7 +6353,7 @@ Three reliable discriminators (any one sufficient, use all for defence-in-depth)
 
 ## Sprint 85: OVC Verifier Tier 2 + Cross-Verifier System Test
 
-**Status:** IN PROGRESS
+**Status:** COMPLETE
 **Goal:** Port Tier 2 KEL resolution and SIP STIR parameter stripping to the OVC-VVP-Verifier, deploy it to Azure, and add a cross-verifier mode to the system test that validates the VVP issuer signing chain against the OSS verifier.
 
 **Repository:** https://github.com/Rich-Connexions-Ltd/OVC-VVP-Verifier (local: `/Users/andrewbale/code/active/OVC-VVP-Verifier/`)

@@ -25386,3 +25386,1436 @@ None — scope confirmed by operator.
 | R4 | 2026-03-13 | Remove s-shape heuristic; OVC brand emission deferred; TEL retained via logging only |
 | R5 | 2026-03-13 | Clean rewrite: `DossierParseResult` named result for TEL retention; `_status_to_certainty()` canonical helper; OVC brand unchanged (emission deferred); single test file per concern; all logo refs removed |
 
+
+---
+
+# Sprint 83: Root of Trust Admin Configuration
+
+_Archived: 2026-03-14_
+
+# Sprint 83: Root of Trust Admin Configuration
+
+## Problem Statement
+
+`TRUSTED_ROOT_AIDS` is currently a `frozenset` populated once at service startup from the `VVP_TRUSTED_ROOT_AIDS` environment variable. Changing the trusted root set requires an environment variable update and a service restart. This is operationally inconvenient during:
+
+- Onboarding of new trust anchors (GSMA governance AID, GLEIF staging)
+- Emergency revocation of a compromised root (including clearing all roots to fail-closed)
+- Testing with different trust configurations without deploying new pods
+
+Operators need a UI page and HTTP API to inspect and mutate trusted roots at runtime. The same capability is needed in the OVC-VVP-Verifier, which currently has no admin page at all.
+
+## Spec References
+
+- §5.1-7: Verifier MUST accept a configured root of trust; ACDC credentials must chain back to one of these AIDs.
+
+## Current State
+
+### Monorepo VVP Verifier
+- `TRUSTED_ROOT_AIDS: frozenset[str]` is a module-level constant in `app/core/config.py` (line 175).
+- Set once at import time; cannot be changed without restart.
+- `GET /admin` endpoint does not expose trusted roots.
+- `/ui/admin` admin page has no Trusted Roots section.
+- `compute_config_fingerprint()` caches result in `_cached_config_fingerprint`; must be invalidated when roots change.
+- Import audit: `TRUSTED_ROOT_AIDS` imported directly in `app/main.py` (2 call sites); all lower-level functions already accept `trusted_roots: Set[str]` as a parameter — no further changes downstream.
+
+### OVC-VVP-Verifier
+- `TRUSTED_ROOT_AIDS: frozenset[str]` in `app/config.py` (line 59).
+- `config_fingerprint()` recomputes fresh each call.
+- No admin endpoints beyond `/healthz` and `/verify`.
+- No HTML admin page.
+
+## Proposed Solution
+
+### Approach
+
+Replace the module-level `frozenset` constant with a mutable, asyncio-protected runtime state store. Expose read/write API endpoints and a simple HTML admin page in both services. Verification requests take a single immutable snapshot of the trusted roots set at request start and carry that snapshot — including its fingerprint — through all verification phases and into cache storage.
+
+The trusted-root set is allowed to become **empty**. An empty set is a valid fail-closed state: the existing ACDC chain validation fails for any credential when no issuer matches a trusted root. No global pre-check is added to `verify.py` — chain validation already handles this correctly.
+
+**This feature is scoped to single-instance deployments only** for runtime mutation. Multi-replica HA deployments must use env var + rolling restart. The admin UI and deployment docs explicitly communicate this constraint.
+
+**Admin authentication is fail-closed by default:** mutation endpoints are disabled unless `VVP_ADMIN_TOKEN` is configured. Read endpoints are always accessible.
+
+### Alternatives Considered
+
+| Alternative | Pros | Cons | Why Rejected |
+|-------------|------|------|--------------|
+| Database persistence | Survives restarts, multi-instance safe | Adds SQLite/DB dep to stateless OVC; schema migrations | Overkill for rare mutations |
+| Write to env file on disk | Survives restarts | Non-atomic, platform-specific, still not multi-instance | Complex and fragile |
+| In-memory only (this plan) | Simple, no new deps | Lost on restart, single-instance only | Acceptable: env var is authoritative; feature explicitly scoped |
+| Shared state (Redis/etcd) | Multi-instance safe | Large new dependency | Out of scope |
+| Full OIDC/OAuth for admin | Industry standard auth | Heavy new dependency; admin is local/operator-facing | Deferred to future sprint |
+
+### Scope Constraint
+
+> **Runtime trusted-root mutation supports single-instance deployments only.**
+> In multi-replica deployments, mutations are per-process. The admin UI shows a permanent banner: "Changes apply to this instance only. For HA/multi-replica deployments, update `VVP_TRUSTED_ROOT_AIDS` and restart all instances."
+> `knowledge/deployment.md` will explicitly state: do not use runtime trusted-root mutation in HA deployments.
+
+### Detailed Design
+
+#### Component 1: Runtime Trusted Roots State (both services)
+
+Replace `TRUSTED_ROOT_AIDS: frozenset[str]` with `_TrustedRootsStore`. The module-level constant is **removed**; no proxy shim.
+
+```python
+import asyncio
+
+class _TrustedRootsStore:
+    """Asyncio-safe mutable store for trusted root AIDs.
+
+    Mutations are lock-protected. Reads use a snapshot method that
+    returns an immutable copy — callers hold the frozenset for the
+    duration of one request; concurrent mutations cannot affect it.
+    An empty set is a valid state (fail-closed emergency mode).
+    """
+    def __init__(self, initial: frozenset[str]) -> None:
+        self._roots: set[str] = set(initial)
+        self._lock: asyncio.Lock = asyncio.Lock()
+
+    async def snapshot(self) -> frozenset[str]:
+        async with self._lock:
+            return frozenset(self._roots)
+
+    async def add(self, aid: str) -> frozenset[str]:
+        async with self._lock:
+            self._roots.add(aid)
+            return frozenset(self._roots)
+
+    async def remove(self, aid: str) -> frozenset[str]:
+        """Remove an AID. Raises KeyError if not present. Empty set allowed."""
+        async with self._lock:
+            if aid not in self._roots:
+                raise KeyError(aid)
+            self._roots.discard(aid)
+            return frozenset(self._roots)
+
+    async def replace(self, new_roots: set[str]) -> frozenset[str]:
+        """Atomically replace all roots. Empty set is permitted (fail-closed)."""
+        async with self._lock:
+            self._roots = set(new_roots)
+            return frozenset(self._roots)
+
+_trusted_roots_store = _TrustedRootsStore(_parse_trusted_roots())
+
+
+async def get_trusted_roots_snapshot() -> frozenset[str]:
+    """Take an atomic immutable snapshot of trusted roots for one request.
+
+    Called once per request at the boundary in main.py; the returned
+    frozenset is threaded through all verification phases.
+    """
+    return await _trusted_roots_store.snapshot()
+```
+
+**Import site migration (complete audit):**
+
+| File | Line | Current use | Migration |
+|------|------|-------------|-----------|
+| `app/main.py` | ~627, ~1002 | `trusted_roots=set(TRUSTED_ROOT_AIDS)` (2 call sites) | Replace with `trusted_roots=await get_trusted_roots_snapshot()` |
+| `app/vvp/verify_callee.py` | 779 | `from app.core.config import TRUSTED_ROOT_AIDS` then `trusted_roots=TRUSTED_ROOT_AIDS` at line 802 | Change to accept `trusted_roots` parameter passed from `main.py` caller; remove local import |
+| `app/vvp/ui/credential_viewmodel.py` | 21, 1580 | `issuer_aid in TRUSTED_ROOT_AIDS` (UI display only) | Change `build_credential_card_vm()` to accept `trusted_roots: frozenset[str]` parameter; caller in `main.py` passes the request-scoped snapshot |
+| All deeper functions | — | Already accept `trusted_roots: Set[str]` as parameter | No changes |
+
+The two entry points in `main.py` call `verify()` and `verify_callee()`. Both paths must pass the same snapshot obtained at the top of the request handler. The `build_credential_card_vm()` function used in UI paths also receives the snapshot from the same request handler.
+
+#### Component 1b: Empty-Set Behavior — Chain Validation Handles It
+
+**No global pre-check is added.** When `trusted_roots == ∅`, `validate_credential_chain()` already fails with a chain error because no issuer matches a trusted root. This is fail-closed behavior without requiring a special pre-check in `verify.py`.
+
+**Trust domain awareness and known limitation:**
+
+The existing `TRUSTED_ROOT_AIDS` single flat set spans two governance domains:
+- **vLEI domain**: GLEIF Root AID — anchors the main vLEI chain (required for `overall_status`)
+- **Vetter domain**: GSMA Governance AID — **NOTE:** the `verify_vetter_constraints()` path does NOT validate the VetterCertification credential's issuer chain back to trusted roots; it finds the credential by schema type in the dossier. This means removing the GSMA root from `TRUSTED_ROOT_AIDS` will NOT disable vetter constraint evaluation. This is existing behavior, unchanged by this sprint.
+
+The admin UI will **label known AIDs** and include a warning for the GSMA root: "Note: removing this root does not disable vetter constraint evaluation (Phase 11b). Full vetter chain trust validation is a future enhancement." The `GET /admin/trusted-roots` response includes a `known_roots` advisory:
+```json
+{
+  "trusted_roots": ["EDP1vHcw_..."],
+  "known_roots": {
+    "EDP1vHcw_wc4M__Fj53-cJaBnZZASd-aMTaSyWEQ-PC2": {
+      "domain": "vLEI", "label": "GLEIF Root",
+      "required_for": "vLEI chain validation (affects overall_status)"
+    }
+  }
+}
+```
+
+Domain-aware split configuration (separate `VVP_TRUSTED_VLEI_AIDS` / `VVP_TRUSTED_VETTER_AIDS`) and full vetter chain trust validation are deferred to a future sprint.
+
+#### Component 2: Request-Scoped Trusted-Root Fingerprint
+
+Cache correctness requires that a verification result is stored under the trusted-root set that was **actually used** during that request — not the global state at cache-write time. This ensures a mutation cannot cause stale results to be served from cache.
+
+**Design:**
+1. Each request computes a `trusted_roots_fp` from its snapshot: `hashlib.sha256(",".join(sorted(snapshot)).encode()).hexdigest()[:8]`
+2. This fingerprint is included in the `VerifyRequest` context and passed to `verify()`.
+3. The verification cache key and fingerprint-check both use this per-request value, not the global `compute_config_fingerprint()`.
+4. `compute_config_fingerprint()` in `verification_cache.py` is updated to accept an explicit `trusted_roots: frozenset[str]` parameter rather than reading from mutable global state:
+
+```python
+def compute_config_fingerprint(trusted_roots: frozenset[str]) -> str:
+    """Compute config fingerprint for the given request's trusted roots.
+
+    All existing inputs are preserved (clock_skew, max_token_age, max_validity,
+    schema strictness); trusted_roots is now passed explicitly rather than read
+    from mutable global state. This ensures the fingerprint is consistent with
+    the request-scoped snapshot.
+    """
+    data = json.dumps({
+        "clock_skew": CLOCK_SKEW_SECONDS,
+        "max_token_age": MAX_TOKEN_AGE_SECONDS,
+        "max_validity": MAX_PASSPORT_VALIDITY_SECONDS,
+        "schema_strict": SCHEMA_VALIDATION_STRICT,  # preserved existing input
+        "trusted_roots": sorted(trusted_roots),      # explicit arg, not global
+    }, sort_keys=True)
+    return hashlib.sha256(data.encode()).hexdigest()[:16]
+```
+
+5. The module-level `_cached_config_fingerprint` cache is removed (no longer needed since the value depends on the per-request snapshot, not a stable global).
+6. `invalidate_trusted_roots_cache()` in `verification_cache.py` becomes just: `get_verification_cache().clear()`.
+
+This cleanly removes the mutable global from the cache path. Cache entries are bound to the fingerprint of the exact root set used for that request.
+
+#### Component 3: AID Validation Using KERI Identifier Prefix
+
+New trusted roots are validated using `keripy.core.coring.Prefixer`, which validates:
+- Valid qb64 derivation code
+- Correct qb64 encoding
+- Correct total length for the derivation code
+
+```python
+def validate_aid_as_keri_prefix(aid: str) -> bool:
+    """Validate aid is a syntactically valid KERI identifier prefix."""
+    try:
+        from keripy.core.coring import Prefixer
+        Prefixer(qb64=aid)
+        return True
+    except Exception:
+        return False
+```
+
+**Documented semantic limitation:** keripy `Prefixer` validates that a value is a valid KERI identifier prefix. It cannot distinguish a controller AID (key-derived) from a content-addressed SAID (both may use the same derivation codes). Operators are responsible for adding only controller AIDs. The admin UI prominently warns: "Only add controller AIDs from KERI key events — not schema SAIDs."
+
+#### Component 4: Admin Authentication — Fail-Closed By Default
+
+**New env var:** `VVP_ADMIN_TOKEN: str | None = os.getenv("VVP_ADMIN_TOKEN")`
+
+**Authorization policy:**
+- `VVP_ADMIN_TOKEN` **not set**: all mutation endpoints return **503 with `{"detail": "Admin mutations require VVP_ADMIN_TOKEN to be configured"}`**. **All read-only admin endpoints** (`GET /admin`, `GET /admin/trusted-roots`) also require the token when it is configured — they return 401 without a valid token. When no token is configured, read-only endpoints remain accessible (informational, no state change possible).
+- `VVP_ADMIN_TOKEN` **set**: **all `/admin/*` endpoints** require `Authorization: Bearer <token>`; absent or wrong token → 401.
+- `ADMIN_ENDPOINT_ENABLED=false`: all admin endpoints (read and write) return 404 as before.
+
+This makes the entire admin surface uniformly require authentication when a token is configured.
+
+**CORS policy for `/admin/*`:**
+
+All admin routes enforce same-origin only: if an `Origin` header is present, it must match the request host exactly. Cross-origin requests → 403. No exceptions.
+
+FastAPI dependency:
+```python
+def require_admin_write(request: Request):
+    """Dependency for all trusted-root mutation endpoints."""
+    if not ADMIN_ENDPOINT_ENABLED:
+        raise HTTPException(status_code=404, detail="Admin endpoint disabled")
+    if ADMIN_TOKEN is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Admin mutations require VVP_ADMIN_TOKEN to be configured",
+        )
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer ") or auth[7:] != ADMIN_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+```
+
+Deployment docs will advise setting `VVP_ADMIN_TOKEN` for any admin-accessible deployment, and restricting admin ports to trusted networks.
+
+**CORS for admin paths:**
+
+A FastAPI middleware/dependency enforces same-origin: if an `Origin` header is present on a mutation request, it must match the request host. Cross-origin mutations are rejected with 403. Read endpoints allow cross-origin (needed for UI).
+
+#### Component 5: Browser Admin UI — Safe Token Handling
+
+The admin UI browser flow must not store the bearer token in `localStorage`, `sessionStorage`, URL params, DOM attributes, or inline HTML.
+
+**Design: in-memory session token prompt**
+
+When the user first attempts a mutation action in the admin UI:
+1. A modal dialog appears: "Enter admin token to authorize changes"
+2. The input uses `type="password"` (masked)
+3. The token is held **only** in a module-scoped JS variable (`let _adminToken = null`)
+4. The variable is cleared on page close/refresh (standard JS lifecycle)
+5. The token is sent only as an `Authorization: Bearer` header in `fetch()` calls — never appended to URLs, stored in DOM, or logged
+
+```javascript
+// admin.js
+let _adminToken = null;
+
+async function requireToken() {
+    if (_adminToken) return _adminToken;
+    _adminToken = window.prompt("Enter admin token:");  // simplest safe approach
+    return _adminToken;
+}
+
+async function mutateRoots(action, body) {
+    const token = await requireToken();
+    const resp = await fetch(`/admin/trusted-roots/${action}`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+    });
+    if (resp.status === 401) {
+        _adminToken = null;  // clear bad token, will re-prompt
+        throw new Error("Invalid admin token");
+    }
+    return resp.json();
+}
+```
+
+Using `window.prompt()` avoids custom modal HTML while keeping the implementation simple and the token out of the DOM. The prompt is browser-native and not stored anywhere.
+
+**Security properties:**
+- Token not in DOM, not in localStorage, not in URL
+- Token cleared on page close/refresh
+- HTTPS-only recommendation in deployment docs prevents network interception
+
+#### Component 6: Security Headers
+
+All admin responses (read and write) include:
+```
+Cache-Control: no-store, no-cache
+X-Frame-Options: DENY
+X-Content-Type-Options: nosniff
+Content-Security-Policy: default-src 'self'; script-src 'self'; connect-src 'self'; style-src 'self'
+```
+
+The admin UI templates use no inline scripts or styles; all JS is in `admin.js` (external file). CSP is compatible with `script-src 'self'`.
+
+#### Component 7: Normalized API Contract
+
+**Canonical trusted-roots response shape** (used in both endpoints):
+```json
+{
+  "trusted_roots": ["EDP1vHcw_..."],
+  "count": 1,
+  "env_source": "VVP_TRUSTED_ROOT_AIDS",
+  "empty_set_active": false,
+  "_scope": "single-instance only — changes are not propagated to other replicas"
+}
+```
+
+When `trusted_roots` is empty:
+```json
+{
+  "trusted_roots": [],
+  "count": 0,
+  "env_source": "VVP_TRUSTED_ROOT_AIDS",
+  "empty_set_active": true,
+  "_scope": "...",
+  "_warning": "No trusted roots configured. Verifier is in fail-closed mode — all verification requests return INVALID."
+}
+```
+
+**`GET /admin/trusted-roots`** — returns the canonical shape above.
+
+**`GET /admin`** — `trusted_roots` field is the same canonical shape (not a different structure). The `GET /admin` response embeds the full trusted-roots object:
+```json
+{
+  "normative": { ... },
+  "configurable": { ... },
+  "trusted_roots": {  ← same canonical TrustedRootsResponse shape
+    "trusted_roots": ["E..."],
+    "count": 1,
+    "env_source": "VVP_TRUSTED_ROOT_AIDS",
+    "empty_set_active": false,
+    "_scope": "..."
+  },
+  "witnesses": { ... },
+  ...
+}
+```
+
+Mutation responses include the same canonical shape plus a `_mutation_warning`:
+```json
+{
+  "trusted_roots": ["E..."],
+  "count": 1,
+  "env_source": "VVP_TRUSTED_ROOT_AIDS",
+  "empty_set_active": false,
+  "_scope": "...",
+  "_mutation_warning": "Changes are in-memory and apply to this instance only. Update VVP_TRUSTED_ROOT_AIDS and restart all instances to persist."
+}
+```
+
+#### Component 8: Cache Invalidation
+
+On every mutation: call `invalidate_trusted_roots_cache()` which calls `get_verification_cache().clear()`.
+
+With the fingerprint now request-scoped (Component 2), there is no global `_cached_config_fingerprint` to reset. Cache invalidation is just a cache clear.
+
+**Operational impact (quantified):**
+- Cache max size: 200 entries; TTL: 3600s
+- Each re-verification: ~1–3 witness queries at ~200ms each = ~200–600ms per entry
+- Worst case: 200 entries parallelized async = cold-start completes within ~1–2 minutes
+- At VVP SIP scale (10–50 calls/minute), cache refills within the re-verification window
+- Operator guardrail: admin UI warns "This will clear the verification cache"
+- Rate limiting: `require_admin_write` dependency rejects a second mutation within 30 seconds (503 "rate limited") to prevent rapid repeated flushes
+
+Acceptable for mutations that occur at most a few times per day. Versioned/fingerprint-based cache aging is deferred to a future sprint.
+
+#### Component 9: Admin HTML Pages
+
+**Route naming (normalized):**
+- Both services: admin HTML at `/admin/ui`
+- Monorepo also: `/ui/admin` redirects 302 → `/admin/ui` for backwards compatibility
+
+**Monorepo** — update `services/verifier/app/templates/admin.html`:
+- New "Trusted Roots" section at top
+- Orange banner: "⚠️ In-memory only — applies to this instance only."
+- Red banner (when count = 0): "🚨 Fail-closed mode — no trusted roots configured."
+- Table: current AIDs + Remove button per row
+- Add form: text input with placeholder `E...`, warning label, submit
+- Token prompt via `window.prompt()` on first mutation
+- External JS only (`/static/admin.js`); no inline scripts
+
+**OVC** — new `app/templates/admin.html`:
+Self-contained page. Sections:
+- Service Configuration (read-only)
+- Trusted Roots (editable, same structure)
+- Cache Status (read-only)
+- External JS via `/static/admin.js`
+
+#### Component 10: Documentation Updates
+
+| Document | Required Update |
+|----------|----------------|
+| `knowledge/api-reference.md` | All new/changed admin routes: endpoint contracts, request/response shapes, auth model (token-required vs informational), error codes, redirect behavior (`/ui/admin` → `/admin/ui`) |
+| `knowledge/verification-pipeline.md` | Trusted-root snapshot model (request-scoped); empty trusted-roots behavior (chain validation fails naturally, no global pre-check); domain labels for GLEIF/GSMA roots |
+| `knowledge/deployment.md` | "Trusted Roots Admin" section: `VVP_ADMIN_TOKEN` setup, HTTPS + same-origin requirements, single-instance constraint, rate limiting, HA/multi-replica guidance |
+| `CHANGES.md` | Sprint 83 entry |
+| OVC `README.md` | "Admin Page" section: `/admin/ui`, env vars (`VVP_ADMIN_TOKEN`, `VVP_TRUSTED_ROOT_AIDS`), known-roots domain labels, single-instance note, fail-closed behavior |
+| OVC `CHANGES.md` | v0.3.0 entry |
+
+### Data Flow
+
+```
+Admin mutation:
+1. POST /admin/trusted-roots/add {"aid": "E..."}
+   Authorization: Bearer <token>
+2. require_admin_write() → validates ADMIN_ENDPOINT_ENABLED + token
+3. validate_aid_as_keri_prefix(aid)
+4. _trusted_roots_store.add(aid)     (asyncio-locked)
+5. get_verification_cache().clear()  (evict all cached entries)
+6. return canonical TrustedRootsResponse with _mutation_warning
+
+Concurrent verification request:
+1. Request arrives
+2. trusted_roots = await get_trusted_roots_snapshot()   (atomic lock + copy)
+   → if empty: snapshot is empty frozenset; chain validation will fail for all credentials
+3. fp = compute_config_fingerprint(trusted_roots)        (explicit arg, not global)
+4. Cache lookup uses fp
+5. All verification phases receive trusted_roots frozenset
+6. Cache write stores entry with fp from step 3
+   → Admin mutation at step 4 above cannot affect this fp or these phases
+```
+
+### Error Handling
+
+| Condition | HTTP Status | Response |
+|-----------|-------------|---------- |
+| Invalid AID (keripy Prefixer fails) | 422 | `{"detail": "Invalid AID: not a valid KERI identifier prefix"}` |
+| Remove: AID not in set | 404 | `{"detail": "AID not found in trusted roots"}` |
+| Replace: invalid AID in list | 422 | `{"detail": "Invalid AID at index N"}` |
+| No `VVP_ADMIN_TOKEN` configured | 503 | `{"detail": "Admin mutations require VVP_ADMIN_TOKEN to be configured"}` |
+| Missing/wrong bearer token | 401 | `{"detail": "Unauthorized"}` |
+| Cross-origin mutation | 403 | `{"detail": "Cross-origin admin access not allowed"}` |
+| Admin disabled | 404 | `{"detail": "Admin endpoint disabled"}` |
+| Verify with empty roots | 200 INVALID | Existing chain validation returns INVALID — error: "chain terminated without trusted root" |
+
+### Test Strategy
+
+**Monorepo** — `tests/test_admin_trusted_roots.py`:
+- `GET /admin/trusted-roots` returns initial set, canonical shape
+- `GET /admin` embeds same canonical trusted-roots shape
+- With no `VVP_ADMIN_TOKEN`: mutation endpoints return 503
+- With `VVP_ADMIN_TOKEN` set but wrong bearer: 401
+- With correct bearer: mutations succeed
+- `POST add` adds valid AID, idempotent for existing AID
+- `POST remove` removes existing AID; 404 for unknown
+- `POST remove` last root: succeeds, returns empty set with `empty_set_active: true`
+- `POST replace` with empty list: succeeds (fail-closed state)
+- `POST replace` with invalid AID: 422
+- Invalid AID format: 422
+- Verification cache cleared after mutation
+- Config fingerprint is per-request (not global): test that snapshot fp == cache entry fp
+- `GET /verify` with empty roots returns `INVALID` (chain validation fails naturally — no pre-check needed)
+- Snapshot isolation: snapshot before mutation unchanged by concurrent mutation
+- Cross-origin mutation rejected with 403
+
+**OVC** — `tests/test_admin.py`:
+- All equivalent tests
+- `GET /admin` returns full config including canonical trusted-roots shape
+- `GET /admin/ui` returns 200 HTML with `Content-Security-Policy` header
+- `Cache-Control: no-store` on admin responses
+
+## Files to Create/Modify
+
+| Repo | File | Action | Purpose |
+|------|------|--------|---------|
+| Monorepo | `services/verifier/app/core/config.py` | Modify | Add `_TrustedRootsStore`, `get_trusted_roots_snapshot()`, `ADMIN_TOKEN`; remove `TRUSTED_ROOT_AIDS` |
+| Monorepo | `services/verifier/app/vvp/verification_cache.py` | Modify | Parameterize `compute_config_fingerprint(trusted_roots)`, remove global cache, add `invalidate_trusted_roots_cache()` |
+| Monorepo | `services/verifier/app/vvp/verify.py` | Modify | Pass snapshot-derived `trusted_roots` and `fp` to cache operations |
+| Monorepo | `services/verifier/app/vvp/verify_callee.py` | Modify | Remove local `TRUSTED_ROOT_AIDS` import; accept `trusted_roots` parameter from caller |
+| Monorepo | `services/verifier/app/vvp/ui/credential_viewmodel.py` | Modify | Remove module-level import; accept `trusted_roots` param in `build_credential_card_vm()` |
+| Monorepo | `services/verifier/app/main.py` | Modify | Snapshot call sites (all 3+); add trusted-roots endpoints + auth dependency; `/admin/ui` + redirect from `/ui/admin`; security headers middleware |
+| Monorepo | `services/verifier/app/templates/admin.html` | Modify | Add Trusted Roots section; link to `/admin/ui` |
+| Monorepo | `services/verifier/web/admin.js` | Create | Admin UI JS (token prompt, fetch wrappers) |
+| Monorepo | `services/verifier/tests/test_admin_trusted_roots.py` | Create | New tests |
+| Monorepo | `knowledge/api-reference.md` | Modify | Document new endpoints |
+| Monorepo | `knowledge/deployment.md` | Modify | Trusted-roots admin section |
+| OVC | `app/config.py` | Modify | Add `_TrustedRootsStore`, `get_trusted_roots_snapshot()`, `ADMIN_TOKEN` |
+| OVC | `app/vvp/verify.py` | Modify | Pass snapshot-derived `trusted_roots` to chain validation |
+| OVC | `app/admin.py` | Create | Admin APIRouter |
+| OVC | `app/main.py` | Modify | Mount admin router; snapshot call site; static mount |
+| OVC | `app/static/admin.js` | Create | Admin UI JS |
+| OVC | `app/templates/admin.html` | Create | Admin HTML page |
+| OVC | `tests/test_admin.py` | Create | New tests |
+| OVC | `README.md` | Modify | Admin page documentation |
+| OVC | `CHANGES.md` | Modify | v0.3.0 entry |
+
+## Open Questions
+
+None — scope fully defined.
+
+## Risks and Mitigations
+
+| Risk | Likelihood | Impact | Mitigation |
+|------|------------|--------|------------|
+| Developer forgets cache clear after mutation | Low | Medium | `invalidate_trusted_roots_cache()` is the single exit point for all mutations; tested |
+| Operator clears all roots accidentally | Low | Medium | UI shows red fail-closed banner; `empty_set_active: true` in API response; confirm button required |
+| Schema SAID added as trusted root | Low | High | keripy Prefixer validates; UI warning; error message explains distinction |
+| Multi-instance deployment uses runtime mutation | Medium | High | 503 response when `ADMIN_TOKEN` not set (fail-closed); permanent UI banner; deployment docs |
+| `window.prompt()` blocked in some browser environments | Low | Low | The mutation endpoint still works via curl/API; only UI flow affected. Can upgrade to custom modal in future sprint |
+| `keripy` import fails in OVC edge case | Low | Low | OVC already uses keripy in `canonical.py`; fallback to regex with warning |
+
+## Revision History
+
+| Round | Date | Changes |
+|-------|------|---------|
+| R1 | 2026-03-12 | Initial draft |
+| R2 | 2026-03-12 | Address R1: snapshot semantics, CSRF/CORS, AID validation, last-root invariant, single-instance scope, docs |
+| R3 | 2026-03-12 | Address R2: keripy Prefixer validation, fail-closed auth (token required), allow empty set, route normalization, idempotent add, import audit, cache impact bounded |
+| R4 | 2026-03-12 | Address R3: (1) request-scoped fingerprint — `compute_config_fingerprint(trusted_roots)` explicit arg, remove global cache; (2) fail-closed by default — mutations return 503 when `VVP_ADMIN_TOKEN` unset; (3) browser token in JS memory only via `window.prompt()`, never in DOM/storage; (4) canonical `TrustedRootsResponse` shape used in both GET endpoints |
+| R5 | 2026-03-12 | Address R4: (1) complete import audit — adds `verify_callee.py` (line 802) and `credential_viewmodel.py` (line 1580) as call sites requiring snapshot propagation; (2) trust-domain classification deferred — current sprint maintains single undifferentiated `TRUSTED_ROOT_AIDS` set; admin UI shows `known_roots` advisory labels (GLEIF/GSMA) for operator clarity; domain-aware split is a future concern; (3) live witness resolution for AID validation explicitly out of scope; documented; (4) admin read-endpoint authentication consistent with all existing admin endpoints |
+| R6 | 2026-03-12 | Address R5: (1) trust domain — remove global empty-set pre-check; rely on existing chain validation fail-closed behavior; add `known_roots` advisory labels in API response; (2) admin security — all `/admin/*` routes require bearer token when `VVP_ADMIN_TOKEN` set (reads AND writes); same-origin CORS enforced; (3) cache impact quantified; mutation rate limiting (30s cooldown); (4) documentation expanded to include `knowledge/verification-pipeline.md` and full route/auth/error coverage |
+| R7 | 2026-03-12 | Address R6: (1) vetter constraint known limitation documented — `verify_vetter_constraints()` does not chain-validate back to trusted roots (existing behavior, unchanged by sprint); admin UI warns operators about GSMA root limitation; full vetter chain trust deferred; (2) internal consistency — all `NO_TRUSTED_ROOTS` references removed; no `verify.py` pre-check; chain validation handles empty-set naturally; (3) `compute_config_fingerprint()` retains all existing inputs including `SCHEMA_VALIDATION_STRICT`; `trusted_roots` made explicit arg |
+
+
+---
+
+# Sprint 85: OVC Verifier Tier 2 + Cross-Verifier System Test
+
+_Archived: 2026-03-14_
+
+# Sprint 85: OVC Verifier Tier 2 + Cross-Verifier System Test
+
+## Problem Statement
+
+The OVC-VVP-Verifier (OSS standalone verifier, v0.2.0) only supports Tier 1 signature verification — non-transferable Ed25519 AIDs with B-prefix. Since the VVP issuer creates transferable identities (E-prefix), every real verification returns INDETERMINATE instead of VALID. The monorepo verifier has full Tier 2 KEL resolution (OOBI fetch, KEL parsing, witness receipt validation, delegation chains, range-based caching) that must be ported. Additionally, the SIP handler doesn't strip RFC 8224 STIR parameters from the Identity header, and there is no cross-verifier system test to validate interoperability.
+
+## Spec References
+
+- §5A Step 4: "Resolve issuer key state at reference time T"
+- §7.3: Witness receipt threshold validation (accountable duplicity)
+- §12: Tier 1 vs Tier 2 classification
+- RFC 8224: SIP Identity header with STIR parameters
+
+## Current State
+
+| Feature | Monorepo Verifier | OVC Verifier |
+|---------|-------------------|--------------|
+| Tier 1 (B-prefix) | VALID | VALID |
+| Tier 2 (E-prefix, transferable) | VALID | INDETERMINATE |
+| KEL resolution | Full (OOBI → KEL → key state at T) | None |
+| Delegation chains | dip/drt with depth limit | None |
+| Key state caching | Range-based, 120s freshness | None |
+| CESR binary KEL | Full count code parsing | AID/sig decode only |
+| Witness receipts | Threshold validation | None |
+| STIR Identity header | Handled by sip-verify service | Not stripped |
+| Azure deployment | vvp-verifier.rcnx.io | Not deployed |
+| Cross-verifier test | N/A | N/A |
+
+## Proposed Solution
+
+### Approach
+
+Port the Tier 2 KEL resolution modules from `services/verifier/app/vvp/keri/` to `OVC-VVP-Verifier/app/vvp/keri/`, adapting imports for the flat OVC structure. OOBI fetching will reuse OVC's existing hardened fetch layer (`app/vvp/fetch.py`) — no new HTTP/SSRF implementation. Tier 1 and Tier 2 verification paths are strictly separated: non-transferable AIDs (B-prefix) use direct key decode, transferable AIDs (D/E-prefix) resolve key state exclusively through KEL/OOBI at `iat` — no raw key decode for transferable identifiers. Delegation validation is mandatory for delegated signers. Deploy to Azure Container Apps and add a `--verifier-url` flag to `system-test.py` for cross-verifier testing.
+
+### Alternatives Considered
+
+| Alternative | Pros | Cons | Why Rejected |
+|-------------|------|------|--------------|
+| Publish `vvp-common` as PyPI package | Shared code, single source of truth | Coupling between OSS and monorepo releases | OSS should remain standalone |
+| Vendor entire `common/` into OVC | Complete parity | Bloated OSS repo, maintenance burden | Only ~3 utilities needed |
+| Keep OSS as Tier 1 only | No porting work | Can't verify real VVP calls | Defeats purpose of OSS verifier |
+
+### Duplication Boundary and Drift Mitigation
+
+The KERI subsystem (~2200 LOC across 9 modules) is the largest duplication between the two repos. To mitigate long-term drift:
+
+1. **Canonical source:** The monorepo verifier's `app/vvp/keri/` is the canonical implementation. The OVC port is a downstream consumer.
+
+2. **Sync tracking:** Each OVC `keri/` module includes a header comment with the monorepo source commit SHA it was ported from:
+   ```python
+   # Ported from VVP monorepo services/verifier/app/vvp/keri/kel_parser.py
+   # Source commit: <SHA> (2026-03-14)
+   ```
+
+3. **Memory-based reminder:** Per the feedback memory saved earlier, any change to the monorepo verifier triggers a TODO for OVC sync. This is enforced by the editor (Claude Code), not by CI.
+
+4. **Future extraction:** If the OVC repo grows beyond v0.3.0 and requires frequent sync, we will extract the KERI subsystem into a shared `vvp-keri` PyPI package. This sprint does NOT do that — it's noted as a future option.
+
+5. **Module boundary discipline:** The `keri/` package exposes a narrow public API surface: `resolve_key_state()` in `kel_resolver.py` is the sole entry point for Tier 2 resolution. `signature.py` calls only `resolve_key_state()` and `resolve_delegation_chain()` — it does not import parser internals, CESR helpers, or cache implementations directly. This keeps the KERI subsystem behind an adapter boundary and limits how much of `signature.py` / `verify.py` needs to understand KERI internals.
+
+### Terminology and Naming Conventions
+
+Consistent terminology across plan, code, config, and documentation:
+
+| Concept | Standard Name | NOT Used |
+|---------|--------------|----------|
+| OSS verifier repo | OVC-VVP-Verifier (formal), OVC verifier (informal) | "OSS verifier", "standalone verifier" (in code/config) |
+| Monorepo verifier | VVP Verifier | "cloud verifier", "main verifier" |
+| HTTP fetch function | `safe_fetch()` | "hardened fetch", "fetch layer" |
+| Configuration prefix | `VVP_` | `TIER2_` (use `VVP_TIER2_KEL_ENABLED`) |
+| Feature flag | `VVP_TIER2_KEL_ENABLED` | `VVP_TIER2_KEL_ENABLED` |
+| Cache config | `VVP_KEY_STATE_FRESHNESS_SECONDS` | `VVP_KEY_STATE_FRESHNESS_WINDOW_SECONDS` |
+| OOBI timeout | `VVP_OOBI_TIMEOUT_SECONDS` | `VVP_OOBI_FETCH_TIMEOUT` |
+
+### Detailed Design
+
+#### Phase 1: Tier 2 KEL Resolution (OVC repo)
+
+**New directory: `app/vvp/keri/`** — 9 modules, ~2200 LOC total
+
+##### 1.1 Exception Classes (`app/vvp/keri/exceptions.py`, ~100 LOC)
+
+Port from monorepo's `services/verifier/app/vvp/keri/exceptions.py`. Adapt to OVC's existing `ErrorCode` enum in `app/vvp/models.py`.
+
+```python
+class KeriError(Exception): ...
+class SignatureInvalidError(KeriError): ...      # → INVALID
+class ResolutionFailedError(KeriError): ...      # → INDETERMINATE
+class StateInvalidError(KeriError): ...          # → INVALID
+class KELChainInvalidError(StateInvalidError): ...
+class KeyNotYetValidError(StateInvalidError): ...
+class OOBIContentInvalidError(KeriError): ...
+class CESRFramingError(KeriError): ...
+class CESRMalformedError(KeriError): ...
+```
+
+##### 1.2 Key Parser (`app/vvp/keri/key_parser.py`, ~80 LOC)
+
+Port from monorepo. Strictly separates non-transferable and transferable identifier handling:
+
+- **Non-transferable (B-prefix):** Decode to raw 32-byte Ed25519 verification key for direct signature verification (Tier 1).
+- **Transferable (D/E-prefix):** Extract AID string only — raw key decode is NOT performed. Key material is resolved exclusively through KEL/OOBI at reference time T (Tier 2).
+
+```python
+@dataclass(frozen=True)
+class VerificationKey:
+    raw: Optional[bytes]  # 32-byte key for B-prefix; None for transferable
+    aid: str              # Original AID string
+    code: str             # Derivation code ("B", "D", "E")
+    is_transferable: bool # True for D/E prefix
+
+def parse_kid(kid: str) -> VerificationKey
+    """Parse kid to extract AID. For B-prefix, also decodes raw key.
+    For D/E-prefix, raw is None — caller MUST use Tier 2 resolution."""
+
+def extract_aid_from_oobi_url(url: str) -> str
+    """Extract AID from OOBI URL path (/oobi/<AID>/...)."""
+```
+
+**Fail-closed guarantee:** Any attempt to use `raw` on a transferable `VerificationKey` raises `StateInvalidError`. The `is_transferable` flag drives the Tier 1 vs Tier 2 branch in `signature.py`. No production code path permits overriding this classification — test seams (e.g., `_allow_test_mode`) are unreachable from request handling.
+
+##### 1.3 CESR Stream Parser (`app/vvp/keri/cesr.py`, ~350 LOC)
+
+Port from monorepo. OVC's existing `app/vvp/cesr.py` keeps Tier 1 functions (`decode_aid_verkey`, `decode_pss_signature`). The new `keri/cesr.py` adds full binary CESR stream parsing.
+
+```python
+class CountCode(Enum):
+    CONTROLLER_IDX_SIGS = "-A"
+    WITNESS_IDX_SIGS = "-B"
+    NON_TRANS_RECEIPT = "-C"
+    TRANS_RECEIPT_QUAD = "-D"
+    ATTACHMENT_GROUP = "-V"
+
+def parse_cesr_stream(cesr_data: bytes) -> CESRMessage
+def is_cesr_stream(data: bytes) -> bool
+```
+
+##### 1.4 KEL Parser (`app/vvp/keri/kel_parser.py`, ~550 LOC)
+
+Port from monorepo. Parses KEL event streams (JSON or CESR binary) and performs full KERI-correct validation.
+
+```python
+class EventType(Enum):
+    ICP = "icp"; ROT = "rot"; IXN = "ixn"; DIP = "dip"; DRT = "drt"
+
+ESTABLISHMENT_TYPES = {EventType.ICP, EventType.ROT, EventType.DIP, EventType.DRT}
+
+@dataclass
+class WitnessReceipt:
+    witness_aid: str
+    signature: bytes      # 64-byte Ed25519 signature
+    event_digest: str     # SAID of the event being receipted
+    index: Optional[int]  # Witness index in event's 'b' list
+
+@dataclass
+class KELEvent:
+    event_type: EventType
+    sequence: int
+    prior_digest: str           # 'p' field — SAID of prior event
+    digest: str                 # 'd' field — this event's SAID
+    signing_keys: List[bytes]   # 'k' field — current signing keys (raw 32-byte)
+    next_keys_digest: List[str]  # 'n' field — list of next-key digests (canonical KERI form)
+    toad: int                   # 'bt' field — threshold of accountable duplicity
+    witnesses: List[str]        # 'b' field — witness AIDs
+    timestamp: Optional[datetime]  # 'dt' field
+    signatures: List[bytes]     # Controller signatures (from CESR -A attachments)
+    witness_receipts: List[WitnessReceipt]  # From CESR -C/-B attachments
+    raw: dict                   # Original event dict (for SAID recomputation)
+    raw_bytes: bytes            # Original event bytes from stream (preserved exactly for signature verification)
+    delegator_aid: Optional[str]  # 'di' field for dip/drt events
+    signing_threshold: Union[str, List]  # 'kt' field — "1" or weighted threshold
+    witness_adds: List[str]       # 'ba' field — witnesses added in rotation (empty for inception)
+    witness_cuts: List[str]       # 'br' field — witnesses removed in rotation (empty for inception)
+
+def parse_kel_stream(kel_data: bytes, is_cesr: bool = False) -> List[KELEvent]
+def validate_kel_chain(events: List[KELEvent], strict: bool = True) -> None
+```
+
+**KERI-correct validation rules** (all mandatory in `validate_kel_chain`):
+
+1. **SAID recomputation (purely local, no I/O):** For every event, recompute the SAID from `raw_bytes` using Blake3-256 and verify it matches `digest`. Reject if mismatch (`KELChainInvalidError`). SAID recomputation is a deterministic hash over the event's canonical serialization — it MUST NOT perform any network I/O, database access, or blocking operations. All bytes needed for recomputation are already present in `raw_bytes`. Any external fetch (OOBI, witness) is performed by the resolver layer BEFORE events reach `validate_kel_chain()`.
+
+2. **Prior digest chain:** For events after inception, verify `prior_digest == previous_event.digest`. Reject broken chains (`KELChainInvalidError`).
+
+3. **Sequence monotonicity (full-chain):** Verify `event.sequence == previous_event.sequence + 1` for **all** events in the KEL — establishment events (`icp`, `rot`, `dip`, `drt`) **and** interaction events (`ixn`). KERI requires contiguous sequence progression across the entire KEL without gaps. A missing or skipped sequence number anywhere in the chain is rejected with `KELChainInvalidError`. Key-state and delegation logic depend on this full continuity guarantee.
+
+4. **Controller signature verification (over original stream bytes):** Verify controller signatures against the **authoritative key state at the time of signing**:
+   - For inception (`icp`/`dip`): verify against the event's own `signing_keys` (self-signed).
+   - For rotation (`rot`/`drt`): verify against the **prior establishment event's** `signing_keys`.
+   - **Critical: Signature is over the original serialized event bytes as received from the KEL/CESR stream** — NOT over any reserialized or reconstructed form. The parser MUST preserve the exact byte range of each event from the incoming stream in `raw_bytes`. KERI signatures are computed over the original serialization; re-serializing (e.g., via `json.dumps()`) could reorder fields, change whitespace, or alter encoding, producing a different byte sequence that would invalidate otherwise correct signatures.
+   - SAID recomputation (rule 1) is a separate validation step that operates on `raw_bytes` deterministically — it does NOT re-serialize the event.
+   - Tests MUST include a case proving that signature verification uses original bytes: construct an event with non-canonical JSON field ordering, sign over those bytes, and verify the parser preserves them exactly.
+
+5. **Next-key commitment (canonical KERI list form):** On rotation, verify that the new signing keys satisfy the prior event's `next_keys_digest` commitment. In KERI, `n` is a **list** of digests (one per next key). The `KELEvent.next_keys_digest` field is modeled as `List[str]` to match the canonical KERI shape.
+
+   Supported forms:
+   - **Single-element list** (e.g., `["EHn7V0c..."]`) — the standard form for single-key pre-rotation. Verify that `blake3(new_keys_qb64[0]) == n[0]`. This is the expected form for the VVP single-signature Ed25519 deployment.
+   - **Empty list** `[]` — indicates no pre-rotation commitment (non-establishment recovery only, rare). Accepted only if the event is a recovery rotation.
+
+   Unsupported forms (fail-closed rejection):
+   - **Multi-element list** (e.g., `["EHn7...", "EAbc..."]`) — weighted/multi-sig next-key commitment. Rejected with `ResolutionFailedError("Multi-key next-key commitment not supported")`.
+   - **String form** — if encountered as a bare string instead of a list, rejected with `ResolutionFailedError("Non-canonical next-key commitment format")`. The parser always expects the KERI list container.
+
+   This matches the monorepo verifier's single-signature Ed25519 deployment model. The rejection is fail-closed: unsupported commitment forms never pass validation silently.
+
+6. **Witness receipt validation (non-transferable witness deployment constraint):**
+
+   **Deployment constraint:** This verifier explicitly adopts a **non-transferable witness only** deployment model. All witness AIDs in the effective witness set MUST be non-transferable B-prefix identifiers. This constraint is validated up front: if any witness AID in the event's effective witness set is NOT a B-prefix identifier, the event is rejected with `KELChainInvalidError("Unsupported transferable witness AID: {aid}")` before receipt validation proceeds. This is a deliberate deployment restriction — the VVP ecosystem uses non-transferable witness identifiers exclusively.
+
+   With this constraint enforced:
+   - Each receipt's signature is verified against the witness AID by decoding the B-prefix to a raw Ed25519 key.
+   - Receipt `event_digest` must match the event's `digest`.
+   - Receipts must be unique per witness per event (reject duplicates).
+   - Only receipts from witnesses in the **effective witness set** (see rule 12) are counted toward TOAD.
+
+7. **TOAD enforcement:** Count valid, unique witness receipts. If count < `toad`, the event is under-witnessed. Behavior:
+   - `strict=True`: raise `ResolutionFailedError` (INDETERMINATE — insufficient receipts)
+   - `strict=False`: warn but continue (for partial resolution)
+
+8. **Threshold handling:** For `signing_threshold != "1"`, reject with `ResolutionFailedError("Weighted/multisig thresholds not supported")`. Single-signature Ed25519 is the only supported mode, matching the monorepo verifier.
+
+9. **AID continuity:** All events in a KEL MUST share the same `i` (identifier) field. A KEL containing events with different `i` values is rejected with `KELChainInvalidError("Mixed identifier in KEL")`.
+
+10. **Inception prefix binding (derivation-code-aware):** Prefix binding validation depends on the AID derivation type:
+    - **Self-addressing AIDs (E-prefix, e.g., `E...`):** The inception event's `d` (SAID) must match `i` — this is self-addressing identifier derivation. If `inception.d != inception.i`, reject.
+    - **Basic transferable AIDs (D-prefix, e.g., `D...`):** The `i` field is derived from the inception's first signing key, NOT from the event SAID. Validate that `i` matches the QualifiedBase64 derivation of `signing_keys[0]`. Do NOT require `i == d`.
+    - **Non-transferable AIDs (B-prefix):** Handled in Tier 1, not expected in KEL validation. If encountered, validate `i` matches first signing key derivation.
+    - Reject with `KELChainInvalidError("Inception prefix binding failed")` if the appropriate derivation check fails.
+    - Tests: valid self-addressing inception (E-prefix, d==i) passes; valid basic transferable inception (D-prefix, i derived from key) passes; invalid prefix binding (wrong key derivation) fails.
+
+11. **Target AID matching:** The resolved KEL's AID (from `events[0].raw["i"]`) must match the AID extracted from the `kid`/OOBI URL. If mismatched, reject with `KELChainInvalidError("Resolved AID does not match kid target")`.
+
+12. **Effective witness set evolution:** Rotations may modify the witness set via `witness_cuts` (`br`) and `witness_adds` (`ba`) fields on the `KELEvent`. The effective witness set for each event is computed as: `effective = (prior_witnesses - set(event.witness_cuts)) | set(event.witness_adds)`. Receipt and TOAD validation MUST use the **effective witness set for the event being validated**, not the inception witness set. The `witness_cuts` and `witness_adds` fields are parsed directly from the event's `br` and `ba` JSON fields (or CESR equivalent) and surfaced on the `KELEvent` dataclass.
+
+Dependencies: `app.vvp.keri.cesr`, `app.vvp.canonical` (already in OVC), `pysodium`, `blake3`.
+
+##### 1.5 OOBI Dereferencer (`app/vvp/keri/oobi.py`, ~120 LOC)
+
+Port from monorepo. Fetches KEL data via OOBI HTTP endpoint. **Reuses OVC's existing hardened fetch layer** (`app/vvp/fetch.py`) — no new HTTP client or SSRF implementation. The existing fetch layer already enforces:
+- HTTPS-only in production (`VVP_ALLOW_HTTP=false`)
+- DNS/IP validation blocking private/loopback/link-local/metadata ranges
+- Redirect following disabled (or revalidated per hop)
+- Response size limits (`VVP_FETCH_MAX_SIZE_BYTES`)
+- Connection timeout enforcement
+- Proxy disabled
+
+```python
+@dataclass
+class OOBIResult:
+    aid: str
+    kel_data: bytes
+    witnesses: List[str]
+    content_type: str = "application/json"
+    error: Optional[str] = None
+
+async def dereference_oobi(oobi_url: str, timeout: float = 5.0) -> OOBIResult
+    """Fetch KEL via OOBI URL using the shared safe fetch layer.
+
+    Delegates to app.vvp.fetch.safe_fetch() which handles SSRF,
+    transport security, and response limits.
+    """
+```
+
+**No second SSRF path:** All HTTP fetching in `app/vvp/keri/` goes through `app.vvp.fetch.safe_fetch()`. Tests must cover private/loopback/link-local/metadata targets, redirect handling, and HTTP-vs-HTTPS policy to confirm the shared layer is invoked correctly.
+
+##### 1.6 Key State Cache (`app/vvp/keri/cache.py`, ~400 LOC)
+
+Port from monorepo. Range-based caching with freshness guard.
+
+```python
+@dataclass
+class CacheConfig:
+    freshness_window_seconds: float = 120.0
+    max_entries: int = 1000
+
+class KeyStateCache:
+    async def get_for_time(aid: str, reference_time: datetime) -> Optional[KeyState]
+    async def put(key_state: KeyState, reference_time: datetime, ...) -> None
+    def clear(aid: Optional[str] = None) -> None
+```
+
+##### 1.7 KEL Resolver (`app/vvp/keri/kel_resolver.py`, ~400 LOC)
+
+Port from monorepo. Core module — orchestrates OOBI fetch, KEL parsing, chain validation, and temporal key state resolution.
+
+```python
+@dataclass
+class KeyState:
+    aid: str
+    signing_keys: List[bytes]
+    sequence: int
+    establishment_digest: str
+    valid_from: Optional[datetime]
+    witnesses: List[str]
+    toad: int
+    is_delegated: bool = False
+    delegator_aid: Optional[str] = None
+
+async def resolve_key_state(
+    kid: str,
+    reference_time: datetime,
+    min_witnesses: Optional[int] = None,
+    use_cache: bool = True,
+) -> KeyState
+    """Resolve key state for the given AID at reference_time.
+
+    The OOBI URL is derived exclusively from `kid` — no caller-controlled
+    OOBI override is accepted in the public API. This ensures production
+    resolution is always kid-bound.
+
+    For testing, use _resolve_key_state_with_oobi() which is an internal
+    helper not reachable from the request-handling call chain.
+    """
+```
+
+##### 1.8 Delegation Chain Resolver (`app/vvp/keri/delegation.py`, ~300 LOC)
+
+Port from monorepo. Recursive delegation chain resolution with cycle detection and depth limit. **Delegation validation is mandatory** — if the signer AID is delegated (inception event type is `dip`), the delegation chain MUST be fully validated before returning VALID. Missing, broken, or cyclic delegation chains result in INVALID status.
+
+```python
+@dataclass
+class DelegationChain:
+    delegates: List[str]      # AIDs from leaf to root
+    root_aid: Optional[str]   # Non-delegated root AID
+    valid: bool = False
+    errors: List[str] = field(default_factory=list)
+
+async def resolve_delegation_chain(
+    delegated_aid: str,
+    inception_event: KELEvent,
+    reference_time: datetime,
+    oobi_resolver: Callable,
+    visited: Optional[Set[str]] = None,
+    depth: int = 0,
+    resolved_cache: Optional[Dict[str, KeyState]] = None,
+) -> DelegationChain
+    """Resolve delegation chain with bounded fetch behavior.
+
+    The `resolved_cache` parameter (defaulting to a shared dict within
+    a single verification flow) prevents redundant OOBI/KEL fetches
+    for AIDs already resolved in this verification. Each hop checks
+    the cache before issuing an outbound fetch. This bounds total
+    fetches to at most MAX_DELEGATION_DEPTH unique AIDs.
+    """
+```
+
+**Delegation validation rules:**
+
+1. **Detection:** If the signer's inception event is `dip` (or latest establishment is `drt`), the AID is delegated. The `di` field contains the delegator's AID.
+
+2. **Delegator resolution:** Resolve the delegator's key state at `reference_time` via OOBI/KEL (recursive — delegator may itself be delegated).
+
+3. **Inception anchor verification:** The delegator's KEL must contain an interaction (`ixn`) or establishment event that anchors (seals) the delegate's inception. The anchor's `d` field must match the delegate's inception event SAID.
+
+4. **Delegated rotation anchor verification:** Every `drt` (delegated rotation) event in the delegate's KEL that can affect authoritative key state MUST also be anchored in the delegator's KEL. A `drt` without a corresponding delegator anchor is rejected. This prevents a delegate from unilaterally rotating without delegator authorization.
+
+5. **Full delegation seal tuple:** For each delegated establishment event (`dip` or `drt`), validate the complete seal tuple: `{i: delegate_AID, s: event_sequence, d: event_SAID}` must appear as an anchor in the delegator's KEL at or before the reference time.
+
+6. **Chain completeness:** The chain must terminate at a non-delegated root AID. Incomplete chains → INVALID.
+
+7. **Cycle detection:** Track visited AIDs. If a delegation references an already-visited AID → INVALID (`KELChainInvalidError`).
+
+8. **Depth limit:** `MAX_DELEGATION_DEPTH = 5`. Exceeding → INVALID.
+
+9. **Mandatory enforcement in Tier 2:** In `app/vvp/keri/kel_resolver.py`, after resolving key state, if `key_state.is_delegated == True`, `resolve_delegation_chain()` is called unconditionally. A `DelegationChain` with `valid=False` causes `KELChainInvalidError` → INVALID status.
+
+**Test cases for delegation:**
+- Valid: delegated inception + delegated rotation, both anchored → VALID
+- Invalid: valid inception anchor but missing rotation anchor → INVALID
+- Invalid: valid inception anchor but wrong rotation seal tuple → INVALID
+- Invalid: cyclic delegation → INVALID
+- Invalid: delegation depth > 5 → INVALID
+
+##### 1.9 Integration into Existing Modules
+
+**`app/vvp/signature.py`** — Refactor with strict Tier 1/Tier 2 separation:
+
+```python
+# Current (sync, Tier 1 only):
+def verify_passport_signature(passport: Passport) -> None
+
+# New (async, strict separation):
+async def verify_passport_signature(passport: Passport) -> SignatureResult:
+    """Verify PASSporT signature. Dispatches to Tier 1 or Tier 2 based on AID type.
+
+    - B-prefix (non-transferable): Tier 1 — decode raw key, verify directly.
+    - D/E-prefix (transferable): Tier 2 — resolve key state from OOBI/KEL at iat.
+      If VVP_TIER2_KEL_ENABLED is False, raises ResolutionFailedError
+      (INDETERMINATE) — never silently returns VALID for transferable AIDs.
+
+    Returns SignatureResult with verification tier and optional KeyState.
+    """
+
+@dataclass
+class SignatureResult:
+    tier: str                    # "tier1" or "tier2"
+    key_state: Optional[KeyState]  # None for Tier 1
+    delegation_chain: Optional[DelegationChain]  # None unless delegated
+```
+
+**Key design constraints:**
+- The `kid` field from the signed PASSporT is the **sole** source for OOBI URL derivation in production. No caller-provided `oobi_url` override in request handling.
+- Test seams (`_allow_test_mode`) are implemented as module-level flags that are unreachable from `app.main` → `verify()` → `verify_passport_signature()` call chain.
+- Transferable AIDs NEVER produce a raw `VerificationKey.raw` — any code path that attempts direct Ed25519 verification against a transferable AID raises `StateInvalidError`.
+
+**`app/vvp/verify.py`** — Phase 3 (Signature Verification) updated:
+- Call now-async `verify_passport_signature(passport)`
+- The function internally extracts `kid`, determines AID type, and dispatches
+- `SignatureResult.key_state` stored for downstream phases (delegation info in claim tree)
+- If delegated, `SignatureResult.delegation_chain` is included in evidence
+
+**`app/config.py`** — New configuration with documentation:
+
+```python
+# --- Tier 2 KEL Resolution ---
+# Enable KERI Key Event Log resolution for transferable AIDs.
+# When False, transferable AIDs return INDETERMINATE (fail-open for Tier 1 deployments).
+# When True, the verifier fetches KEL via OOBI and resolves key state at PASSporT iat.
+VVP_TIER2_KEL_ENABLED: bool = _env_bool("VVP_TIER2_KEL_ENABLED", True)
+
+# Key state cache freshness (seconds). Cached entries older than this
+# are re-fetched from witnesses. Range: 10-3600. Default: 120.
+VVP_KEY_STATE_FRESHNESS_SECONDS: float = _env_float(
+    "VVP_KEY_STATE_FRESHNESS_SECONDS", 120.0, min_val=10.0, max_val=3600.0
+)
+
+# OOBI HTTP fetch timeout (seconds). Applied per-request to witness OOBI endpoints.
+VVP_OOBI_TIMEOUT_SECONDS: float = _env_float("VVP_OOBI_TIMEOUT_SECONDS", 5.0, min_val=1.0, max_val=30.0)
+```
+
+#### Phase 2: SIP STIR Parameter Stripping (OVC repo)
+
+**`app/sip/handler.py`** — RFC 8224-compliant Identity header parsing. The Identity header format per RFC 8224 is:
+
+```
+Identity: <base64url-JWT>;info=<url>;alg=<algorithm>;ppt=<passport-type>
+```
+
+The implementation uses structured RFC-oriented parsing, not permissive string splitting:
+
+```python
+def extract_passport_from_identity(identity_header: str) -> Optional[str]:
+    """Extract PASSporT JWT from RFC 8224 Identity header.
+
+    Parses STIR parameters (;info=...;alg=...;ppt=...) per RFC 8224 §10.
+    Returns the JWT token portion only.
+
+    Returns None if:
+    - Header is empty or whitespace-only
+    - No valid JWT segment found (must contain exactly 2 dots for 3 segments)
+    - JWT segment fails base64url alphabet validation
+
+    Raises PassportError if:
+    - ppt parameter present but not in {'vvp', 'shaken'} (unrecognized passport type)
+    - alg parameter present but not 'EdDSA' (forbidden algorithm)
+    """
+```
+
+**Key design decisions:**
+- The JWT is extracted as the first `;`-delimited segment, then **validated** (3-segment structure, base64url alphabet)
+- **`ppt` handling (STIR-interoperable):** Both `ppt=vvp` and `ppt=shaken` are accepted as valid PASSporT profile types. VVP uses `ppt=vvp` but STIR/SHAKEN deployments use `ppt=shaken` — rejecting either would break interoperability. Unrecognized `ppt` values (e.g., `ppt=unknown`) are rejected with `PassportError`. This follows RFC 8225 §9 which defines `ppt` as identifying the PASSporT extension in use.
+- If `alg` is present and not `EdDSA`, reject with `PassportError`
+- If Identity header is malformed (no valid JWT), fall back to `P-VVP-Passport` header with a warning log
+- Empty/missing Identity header is NOT an error — `P-VVP-Passport` is the primary VVP header
+
+**Tests** (`tests/test_sip_stir.py`):
+- Valid: `<JWT>;info=<url>;alg=EdDSA;ppt=vvp` → extracts JWT
+- Valid: `<JWT>;info=<url>;alg=EdDSA;ppt=shaken` → extracts JWT (STIR interop)
+- Valid: `<JWT>` (no STIR params) → extracts JWT
+- Valid: Missing Identity, present P-VVP-Passport → uses P-VVP-Passport
+- Invalid: `<JWT>;ppt=unknown` → rejects (unrecognized passport type)
+- Invalid: `<JWT>;alg=ES256` → rejects (forbidden algorithm)
+- Invalid: `not-a-jwt;info=<url>` → falls back to P-VVP-Passport
+- Invalid: Empty Identity + empty P-VVP-Passport → no passport (error)
+
+#### Phase 3: Azure Deployment (OVC repo)
+
+**Dockerfile** — Based on existing monorepo verifier Dockerfile pattern:
+- Python 3.11 slim base
+- Install libsodium-dev for pysodium
+- Copy app/ and pyproject.toml
+- Run uvicorn on port 8000
+
+**GitHub Actions** (`.github/workflows/deploy.yml`):
+- Trigger on push to main
+- Build Docker image
+- Push to Azure Container Registry
+- Deploy to Azure Container App `vvp-verifier-oss`
+
+**Azure Configuration:**
+- Container App: `vvp-verifier-oss` in resource group `VVP`
+- URL: Azure-managed hostname (no custom domain — no concrete integration requirement)
+- Environment variables:
+  - `VVP_TRUSTED_ROOT_AIDS=EMIHOLO8hyGxHeee-7m8-PRNQHaU8isDnxdEkm0XNQbu,EMAO69dwrinUHQc1mHrEs7E9i_zzytMdJju54llkQTiB`
+  - `VVP_TIER2_KEL_ENABLED=true`
+  - `VVP_ALLOW_HTTP=false`
+  - `VVP_ADMIN_ENABLED` is NOT set (defaults to `false` — admin routes disabled; see controls below)
+
+**Admin Surface Controls (fail-closed):**
+
+The OVC verifier has an `/admin/*` surface (status pages, debug endpoints). For the public Azure deployment, admin routes are **disabled entirely** via the `VVP_ADMIN_ENABLED` environment variable:
+
+1. **`VVP_ADMIN_ENABLED=false`** (default: **disabled** in all environments): The admin router is NOT mounted unless an operator explicitly sets `VVP_ADMIN_ENABLED=true`. This is fail-closed — a missed env injection in any deployment will not expose admin routes.
+
+2. **Implementation:** In `app/main.py`, the admin router inclusion requires explicit opt-in:
+   ```python
+   if config.VVP_ADMIN_ENABLED:
+       app.include_router(admin_router, prefix="/admin")
+   ```
+
+3. **Verification step (in CI/CD):** After deployment, the GitHub Actions workflow runs:
+   ```bash
+   # Verify admin surface is unreachable (default-closed)
+   STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://<oss-verifier-url>/admin/)
+   if [ "$STATUS" != "404" ]; then echo "FAIL: admin surface exposed"; exit 1; fi
+   ```
+
+4. **Local development:** Set `VVP_ADMIN_ENABLED=true` in local `.env` to enable admin UI during development. The default is closed in all environments.
+
+**Cost Model:**
+
+| Item | Specification | Monthly Cost (est.) |
+|------|--------------|---------------------|
+| Azure Container App (OSS verifier) | 0.5 vCPU, 1 GiB RAM, scale-to-zero, min 0 / max 1 replica | ~£5-10 (idle most of time, used only for testing) |
+| Azure Container Registry | Basic tier, shared with existing VVP images | £0 incremental (already provisioned) |
+| Image retention | 7-day untagged image policy | Negligible storage |
+| Log retention | 30-day Log Analytics workspace (shared) | £0 incremental |
+| GitHub Actions | ~2 min/build, <20 builds/month | Free tier |
+| External OOBI fetches | ~10-50/day during testing, witness endpoints are internal | £0 (no egress charges for internal Azure traffic) |
+| PBX sip-verify-oss instance | Not permanently deployed — started on-demand during cross-verifier test runs only | £0 |
+
+**Per-verification cost formula:**
+
+Each verification involves: 1 inbound request + N OOBI fetches (N=1 typical, N=2-3 with delegation) + 1 dossier fetch + cache lookup. With 50% cache hit rate:
+
+```
+Cost per verification ≈ compute_per_req + (1 - cache_hit_rate) × (N_fetches × egress_per_fetch) + log_bytes_per_req × log_ingestion_rate
+```
+
+**Request-scaling model (if used beyond testing):**
+
+| Volume | Verifications/day | OOBI Fetches/day (50% cache) | Compute (ACA) | Egress | Log Ingestion | Observability | Est. Monthly |
+|--------|------------------|------------------------------|---------------|--------|---------------|---------------|-------------|
+| Idle (testing only) | 10-50 | 5-25 | Scale-to-zero | ~0 | Minimal | £0 | ~£5-10 |
+| Low (100/day) | 100 | ~75 (1.5 avg fan-out) | 0.5 vCPU sustained | <1 GB | ~0.5 GB (~£1) | ~£2 | ~£18-30 |
+| Medium (1000/day) | 1000 | ~750 | 0.5 vCPU sustained | <5 GB (~£3) | ~2 GB (~£5) | ~£5 | ~£40-65 |
+
+**Assumptions:**
+- Cache hit rate: 50% (same issuer AID verified within freshness window)
+- Fetch fan-out: 1.5 average (1 OOBI + 0.5 delegation OOBI on average)
+- Log ingestion: ~500 bytes/verification (after redaction)
+- Observability: Azure Monitor basic metrics + alerting
+- Maintenance/drift sync: Not costed (developer time, tracked via memory-based sync reminder)
+
+**Infrastructure controls:**
+- ACA max replicas: 1 (no auto-scaling beyond single instance for test/dev deployment)
+- Log Analytics retention: 30 days (shared workspace)
+- ACR image retention: 7-day untagged cleanup policy
+- No custom domain (Azure-managed hostname only)
+
+**Egress controls for OOBI/dossier fetches:**
+
+Three-layer egress defense: application-layer destination authorization → transport-layer SSRF protection → network-layer NSG rules.
+
+1. **Application-layer destination allowlist (runtime authorization):**
+   Before any outbound fetch, the URL's hostname is checked against a configurable allowlist. This is distinct from SSRF protection — it rejects syntactically valid, publicly routable, non-SSRF destinations that are not operator-approved.
+
+   ```python
+   # app/config.py
+   VVP_ALLOWED_FETCH_ORIGINS: Set[str] = _env_set(
+       "VVP_ALLOWED_FETCH_ORIGINS",
+       default=""  # EMPTY default — fail-closed. Must be explicitly configured.
+   )
+   # Format: "host:port" entries, e.g., "witness1.rcnx.io:443,vvp-issuer.rcnx.io:443"
+   # If unset/empty, ALL outbound fetches are denied (fail-closed).
+   # Application startup logs a WARNING if empty (misconfiguration check).
+   ```
+
+   ```python
+   # app/vvp/fetch.py — added before safe_fetch() transport checks
+   def authorize_destination(url: str) -> None:
+       """Reject URLs whose origin is not in the operator-controlled allowlist.
+       This is NOT an SSRF check — it is destination authorization.
+       Raises FetchError if origin is not in VVP_ALLOWED_FETCH_ORIGINS.
+
+       Normalization:
+       - Hostname is lowercased and IDNA-encoded
+       - Port defaults to 443 for https, 80 for http (scheme-default)
+       - Comparison is exact "host:port" match after normalization
+       """
+       if not config.VVP_ALLOWED_FETCH_ORIGINS:
+           raise FetchError("No allowed fetch origins configured (fail-closed)")
+       parsed = urllib.parse.urlparse(url)
+       hostname = parsed.hostname.lower().encode("idna").decode("ascii")
+       port = parsed.port or (443 if parsed.scheme == "https" else 80)
+       origin = f"{hostname}:{port}"
+       if origin not in config.VVP_ALLOWED_FETCH_ORIGINS:
+           raise FetchError(f"Destination not authorized: {origin}")
+   ```
+
+   Both `kid`-derived OOBI URLs and `evd`-derived dossier URLs pass through this check. An attacker who crafts a PASSporT pointing to `https://evil.com/oobi/...` (syntactically valid, not SSRF) is rejected before any network access. Path-level constraints are not applied — the allowlist authorizes at the origin level (host:port), and the OOBI/dossier path structure is validated by the respective parsers.
+
+   **Azure deployment config:**
+   ```
+   VVP_ALLOWED_FETCH_ORIGINS=witness1.rcnx.io:443,witness2.rcnx.io:443,witness3.rcnx.io:443,vvp-issuer.rcnx.io:443
+   ```
+
+2. **Transport-layer SSRF protection:** `safe_fetch()` enforces HTTPS-only, DNS/IP validation (blocks private/loopback/link-local/metadata), redirect revalidation, response size limits.
+
+3. **Network-layer NSG rules:** Azure NSG restricts outbound to witness/issuer IP ranges.
+
+4. **Monitoring:** Azure Monitor alerts on unusual outbound request volume (>1000/hour threshold).
+
+**Tests** (`tests/test_fetch_allowlist.py`):
+- Allowed origin (host:port) → fetch proceeds to transport layer
+- Attacker-supplied but syntactically safe unapproved host → rejected before network access
+- Empty/unset allowlist → all fetches rejected (fail-closed)
+- Allowlist with multiple origins → each accepted individually
+- Non-standard port on allowed host → rejected (port mismatch)
+- Mixed-case hostname normalization → matches allowlist correctly
+- Startup warning logged when allowlist is empty
+
+**Total incremental cost for testing use: ~£5-10/month** (scale-to-zero). For production use, costs scale linearly with call volume as shown above.
+
+#### Phase 4: Cross-Verifier System Test (VVP monorepo)
+
+**`scripts/system-test.py`** — Add flags:
+
+```
+--verifier-url URL    Override the verifier URL for SIP verification tests
+--oss-verifier        Shorthand for --verifier-url https://vvp-verifier-oss.wittytree-2a937ccd.uksouth.azurecontainerapps.io
+```
+
+**Implementation approach — isolated test-only service instance:**
+
+The system test `--oss-verifier` flag starts a **dedicated, isolated `vvp-sip-verify-test` service** on a separate port (5073) that points to the OSS verifier. The existing `vvp-sip-verify` service (port 5071) is NEVER modified — live production traffic continues uninterrupted.
+
+```
+1. Deploy vvp-sip-verify-test.service on PBX (one-time setup):
+   - Separate systemd unit: /etc/systemd/system/vvp-sip-verify-test.service
+   - Separate env file: /etc/vvp/vvp-sip-verify-test.env (VVP_VERIFIER_URL=<oss-url>)
+   - Listens on port 5073 (dedicated test port, not used by any other service)
+   - NOT started by default (disabled; started on-demand by test script)
+2. System test starts vvp-sip-verify-test (if not running)
+3. Test SIP scenarios send verification traffic to port 5073 directly
+4. System test stops vvp-sip-verify-test after completion
+```
+
+**Isolation guarantee:** The test-only service is a completely separate process with its own env file, PID, and port. No concurrent traffic can be misdirected because the production service (port 5071) is never touched. The test service is disabled by default and only runs during test execution.
+
+**Safety and trust-boundary controls:**
+
+1. **HTTPS-only:** The `--verifier-url` flag rejects any URL not using `https://` scheme. HTTP targets are never permitted, even in test environments.
+
+2. **Exact origin allowlist:** Only URLs matching exact origins (scheme + host + port) in a hardcoded allowlist are accepted. The URL is validated for: no userinfo, no query string, no fragment. The verification path (`/verify`) is derived internally — the user only specifies the base origin.
+   ```python
+   ALLOWED_VERIFIER_ORIGINS = {
+       "https://vvp-verifier.rcnx.io",            # Monorepo verifier (production)
+       "https://vvp-verifier.wittytree-2a937ccd.uksouth.azurecontainerapps.io",  # Monorepo (Azure)
+       "https://vvp-verifier-oss.wittytree-2a937ccd.uksouth.azurecontainerapps.io",  # OSS verifier (Azure)
+   }
+   ```
+   Inputs on an allowed host but wrong port/scheme are rejected. The `--oss-verifier` flag is a shorthand for the OSS verifier Azure origin from this allowlist.
+
+3. **Non-combinable with `--loopback`:** The `--oss-verifier`/`--verifier-url` flags cannot be used with `--loopback` (which tests the full FreeSWITCH originate path through live call flow).
+
+4. **Cleanup on exit:** The test service is stopped in a `try/finally` block on both success and failure paths.
+
+### Data Flow
+
+```
+System Test (--oss-verifier)
+    │
+    ├─ Signing: INVITE → port 5070 (sip-redirect → VVP issuer) → 302 + PASSporT
+    │
+    └─ Verification: INVITE + PASSporT → port 5073 (sip-verify-test → OVC verifier)
+                                            │
+                                            ├─ OVC Verifier receives PASSporT
+                                            ├─ Extracts kid (OOBI URL)
+                                            ├─ Tier 2: Fetches KEL from witness
+                                            ├─ Validates chain, resolves key state at T
+                                            ├─ Verifies Ed25519 signature
+                                            ├─ Fetches dossier, validates ACDC chain
+                                            └─ Returns VALID + brand headers
+```
+
+### Error Handling
+
+| Error | Status | Handling |
+|-------|--------|----------|
+| OOBI fetch 404 | INDETERMINATE | Witness may not have KEL; recoverable |
+| OOBI fetch timeout | INDETERMINATE | Network issue; recoverable |
+| KEL chain broken | INVALID | SAID chain mismatch; non-recoverable |
+| Signature invalid | INVALID | Cryptographic failure; non-recoverable |
+| Witness threshold not met | INDETERMINATE | Insufficient receipts; recoverable |
+| Delegation cycle detected | INVALID | Circular reference; non-recoverable |
+| SSRF violation | INVALID | Private IP in OOBI URL; non-recoverable |
+| Destination not authorized | INVALID | Host not in allowlist; non-recoverable |
+| STIR parse (Identity header) | Degraded | Falls back to P-VVP-Passport header |
+
+### Log Redaction Rules
+
+All new failure paths (PASSporT, OOBI, KEL, delegation) apply these redaction rules before logging:
+
+| Data Type | Redaction | Example |
+|-----------|-----------|---------|
+| JWT/PASSporT tokens | Log first 8 chars + `...` + last 4 chars | `eyJhbGci...xYz4` |
+| Phone numbers (`orig`/`dest`) | Hash with per-deployment salt | `tn:sha256:a1b2c3...` |
+| `kid` / OOBI URLs | Log scheme + host only, strip path/query | `https://witness1.rcnx.io/...` |
+| `evd` / dossier URLs | Log scheme + host only, strip path/query | `https://vvp-issuer.rcnx.io/...` |
+| AID strings | Log in full (public identifiers, not sensitive) | `ENmdZop...` |
+| KEL event digests | Log in full (SAIDs, not sensitive) | `EHn7V0c...` |
+
+**Implementation:** A `redact_for_log()` utility in `app/vvp/keri/exceptions.py` is called by all exception `__str__` methods and by explicit log statements in `oobi.py`, `kel_resolver.py`, and `signature.py`. The utility accepts typed values and applies the corresponding rule.
+
+**Tests:** `tests/test_log_redaction.py` verifies that JWTs, phone numbers, and URLs are redacted in exception messages and log output.
+
+### Test Strategy
+
+**Unit tests (OVC repo, ~15 test files):**
+- `tests/test_kel_parser.py` — KEL JSON/CESR parsing, chain validation:
+  - Valid chain continuity (prior digest chain)
+  - SAID recomputation verification
+  - Controller signature verification against prior state
+  - Invalid rotation (broken next-key commitment)
+  - Invalid/duplicate witness receipts
+  - TOAD enforcement failure (below threshold)
+  - Unsupported threshold configuration (weighted/multisig → error)
+  - Valid mixed `icp→ixn→rot→ixn→ixn→rot` chain with contiguous sequences
+  - Invalid: gap in `ixn` sequence (e.g., seq 0→1→3 skipping 2) → rejected
+  - Invalid: duplicate sequence number → rejected
+  - Invalid: transferable witness AID (D/E-prefix) in witness set → rejected up front
+- `tests/test_kel_resolver.py` — Key state resolution:
+  - Non-transferable (B-prefix) → Tier 1 fallback
+  - Transferable (E-prefix) → Tier 2 KEL resolution
+  - Key state at rotation boundary (before/after rotation)
+  - Cache hit/miss/freshness
+  - Mismatched kid/resolved AID → rejection
+  - Production-path override attempt → rejection
+- `tests/test_kel_cache.py` — Range-based cache: exact match, range match, freshness expiry, eviction
+- `tests/test_cesr_stream.py` — CESR binary parsing: count codes, signatures, receipts, framing errors
+- `tests/test_delegation.py` — Delegation chains:
+  - Valid delegated signer with anchor in delegator KEL
+  - Missing delegation chain → INVALID
+  - Broken delegation (bad anchor digest) → INVALID
+  - Cyclic delegation (A→B→A) → INVALID
+  - Depth limit exceeded → INVALID
+  - Non-delegated AID (no delegation required)
+- `tests/test_signature_tier2.py` — Tier 2 signature verification:
+  - Valid transferable AID with OOBI resolution
+  - Transferable AID with `VVP_TIER2_KEL_ENABLED=False` → INDETERMINATE
+  - Delegated signer with valid delegation chain
+  - Delegated signer with invalid chain → INVALID
+- `tests/test_sip_stir.py` — STIR parameter stripping (7 cases, see Phase 2)
+- `tests/test_oobi_ssrf.py` — OOBI fetch via safe_fetch layer:
+  - Private IP (127.0.0.1, 10.x, 172.16.x) → blocked
+  - Link-local (169.254.x) → blocked
+  - Cloud metadata (169.254.169.254) → blocked
+  - Redirect to private IP → blocked
+  - HTTP with VVP_ALLOW_HTTP=false → blocked
+  - Valid HTTPS witness URL → allowed
+- Port fixture files from monorepo `tests/fixtures/keri/`
+
+**Integration test (VVP monorepo):**
+- `python3 scripts/system-test.py --oss-verifier` — Full SIP chain against OSS verifier
+
+### Documentation Requirements
+
+All new public surface must be documented before the sprint is complete:
+
+**OVC repo:**
+- `ALGORITHMS.md` — Update with Tier 2 KEL resolution algorithm description:
+  - OOBI fetch → KEL parsing → key state resolution at T
+  - Witness receipt validation and TOAD enforcement
+  - Delegation chain resolution
+- `README.md` — Update feature matrix:
+  - Add Tier 2 as supported (with `VVP_TIER2_KEL_ENABLED` toggle)
+  - Document all new configuration variables with defaults and valid ranges
+  - Update deployment instructions for Azure
+  - Add `VVP_ALLOWED_FETCH_ORIGINS` and `VVP_ADMIN_ENABLED` to config reference
+- `CHANGES.md` — Add v0.3.0 entry documenting Tier 2 KEL resolution, STIR parsing, Azure deployment
+- **Module docstrings** — Every new module in `app/vvp/keri/` must have a module-level docstring explaining purpose, responsibilities, and key functions
+- **Class/function docstrings** — All public API classes and functions (`VerificationKey`, `KELEvent`, `KeyState`, `resolve_key_state()`, `validate_kel_chain()`, `authorize_destination()`, etc.) must have full docstrings with parameters, return types, and exceptions
+- **Type annotations** — All public API functions must have complete type annotations (parameters and return types)
+- **Configuration documentation** — Each new env var must have an inline comment explaining purpose, valid range, and default
+
+**VVP monorepo:**
+- `knowledge/deployment.md` — Add OSS verifier Azure deployment details
+- `CLAUDE.md` — Add OSS verifier URL to Service URLs table
+- `CHANGES.md` — Sprint 85 changelog entry
+- System test `--help` — Document `--oss-verifier` and `--verifier-url` flags
+
+## Files to Create/Modify
+
+### OVC Repo (`/Users/andrewbale/code/active/OVC-VVP-Verifier/`)
+
+| File | Action | Purpose |
+|------|--------|---------|
+| `app/vvp/keri/__init__.py` | Create | Package init |
+| `app/vvp/keri/exceptions.py` | Create | KERI exception classes (~100 LOC) |
+| `app/vvp/keri/key_parser.py` | Create | AID parsing for B/D/E prefixes (~70 LOC) |
+| `app/vvp/keri/cesr.py` | Create | CESR binary stream parser (~350 LOC) |
+| `app/vvp/keri/kel_parser.py` | Create | KEL event parsing + chain validation (~450 LOC) |
+| `app/vvp/keri/oobi.py` | Create | OOBI HTTP fetch with SSRF validation (~150 LOC) |
+| `app/vvp/keri/cache.py` | Create | Range-based key state cache (~400 LOC) |
+| `app/vvp/keri/kel_resolver.py` | Create | Core resolver — key state at time T (~400 LOC) |
+| `app/vvp/keri/delegation.py` | Create | Delegation chain resolver (~300 LOC) |
+| `app/vvp/signature.py` | Modify | Add async Tier 2 path for transferable AIDs |
+| `app/vvp/verify.py` | Modify | Phase 3 async integration |
+| `app/config.py` | Modify | Add Tier 2 configuration variables |
+| `app/sip/handler.py` | Modify | STIR parameter stripping |
+| `Dockerfile` | Create/Modify | Azure deployment container |
+| `.github/workflows/deploy.yml` | Create | CI/CD to Azure Container Apps |
+| `tests/test_kel_parser.py` | Create | KEL parsing tests |
+| `tests/test_kel_resolver.py` | Create | Resolver tests |
+| `tests/test_kel_cache.py` | Create | Cache tests |
+| `tests/test_cesr_stream.py` | Create | CESR binary tests |
+| `tests/test_delegation.py` | Create | Delegation tests |
+| `tests/test_signature_tier2.py` | Create | Tier 2 signature tests |
+| `tests/test_sip_stir.py` | Create | STIR stripping tests |
+| `tests/fixtures/keri/` | Create | Ported KEL/CESR test fixtures |
+
+| `tests/test_oobi_ssrf.py` | Create | OOBI SSRF validation tests |
+| `tests/test_fetch_allowlist.py` | Create | Destination allowlist authorization tests |
+| `tests/test_log_redaction.py` | Create | Log redaction rule tests |
+| `ALGORITHMS.md` | Modify | Add Tier 2 KEL resolution algorithm |
+| `README.md` | Modify | Update feature matrix, config, deployment |
+| `CHANGES.md` | Modify | Add v0.3.0 entry for Tier 2 + STIR + Azure |
+
+### VVP Monorepo (`/Users/andrewbale/code/active/VVP/`)
+
+| File | Action | Purpose |
+|------|--------|---------|
+| `scripts/system-test.py` | Modify | Add --oss-verifier / --verifier-url flags |
+| `knowledge/deployment.md` | Modify | Add OSS verifier Azure deployment |
+| `CLAUDE.md` | Modify | Add OSS verifier URL to Service URLs table |
+| `CHANGES.md` | Modify | Sprint 85 changelog entry |
+
+## Open Questions
+
+1. **OVC repo tag**: Should we tag this as v0.3.0 after Tier 2 is added?
+
+## Risks and Mitigations
+
+| Risk | Likelihood | Impact | Mitigation |
+|------|------------|--------|------------|
+| Import path differences between monorepo and OVC | High | Medium | Adapt imports during port; test each module individually |
+| SSRF validation without common/ package | Medium | Low | Implement minimal inline SSRF check (~20 LOC) |
+| Witness OOBI instability (KEL lost on restart) | High | Medium | Existing issue; test with fresh publish before validation |
+| `verify_passport_signature` sync→async change breaks callers | Medium | High | Update all callers in verify.py; run full test suite |
+| Azure Container App deployment configuration | Low | Medium | Follow existing monorepo verifier deployment pattern |
+
+## Revision History
+
+| Round | Date | Changes |
+|-------|------|---------|
+| R1 | 2026-03-14 | Initial draft |
+| R2 | 2026-03-14 | Addressed council R1 findings: (1) OOBI fetch reuses existing hardened fetch layer, no new SSRF path; (2) Strict Tier 1/Tier 2 separation — transferable AIDs never decoded to raw keys; (3) Full KERI-correct KEL validation specified (SAID recompute, sig verify against prior state, witness receipt uniqueness, TOAD enforcement, threshold handling); (4) Delegation validation mandatory for delegated signers with anchor verification; (5) RFC 8224-oriented SIP Identity parsing with validation, not permissive split; (6) Added cost model (~£5-10/month); (7) Added documentation requirements for all new public surface |
+| R3 | 2026-03-14 | Addressed council R2 findings: (8) Added delegated rotation seal validation, AID continuity, inception prefix binding, target-AID matching, effective witness-set evolution across rotations; (9) Cross-verifier test constrained with HTTPS-only, hostname allowlist, non-combinable with --loopback; (10) Added drift mitigation strategy with sync tracking and source commit headers; (11) Standardized naming conventions table for all config/terminology; (12) Added egress controls (NSG rules, safe_fetch enforcement, monitoring alerts); (13) Expanded cost model with request-scaling tiers and infrastructure controls |
+| R4 | 2026-03-14 | Addressed council R3 findings: (14) ppt accepts both 'vvp' and 'shaken' for STIR interop per RFC 8225; (15) KEL sequence validation now contiguous across ALL events including ixn; (16) Explicit non-transferable witness deployment constraint with up-front rejection of transferable witness AIDs; (17) Admin surface controls via VVP_ADMIN_ENABLED with CI verification step; (18) Three-layer egress defense with application-layer destination allowlist (VVP_ALLOWED_FETCH_ORIGINS) checked before SSRF/NSG; (19) Log redaction rules for JWTs, phone numbers, kid/evd URLs; (20) Per-verification cost formula with cache hit rate, fetch fan-out, observability, and maintenance assumptions; (21) SAID recomputation explicitly purely local with no I/O; (22) Fixed remaining TIER2_KEL_RESOLUTION_ENABLED → VVP_TIER2_KEL_ENABLED naming; (23) Module boundary discipline documented — keri/ exposes narrow API surface |
+| R5 | 2026-03-14 | Addressed council R4 findings: (24) Signature verification now explicitly over original stream bytes, not reserialized — parser preserves exact byte range; (25) Cross-verifier test uses isolated vvp-sip-verify-test service on port 5073 instead of mutating shared service; (26) Removed oobi_url override from public resolve_key_state API — test-only helper is internal; (27) Allowlist renamed to VVP_ALLOWED_FETCH_ORIGINS with fail-closed empty default, host:port matching, hostname normalization; (28) Next-key commitment explicitly specifies supported forms (single digest, empty string) and rejects unsupported (weighted list) with fail-closed error; (29) Documentation requirements expanded: CHANGES.md, class/function docstrings with full type annotations, CHANGES.md entry added to monorepo file table |
+| R6 | 2026-03-14 | Addressed council R5 findings: (30) Inception prefix binding now derivation-code-aware — self-addressing (E-prefix) requires d==i, basic transferable (D-prefix) validates against key derivation; (31) Next-key commitment uses canonical KERI list form (List[str]) with single-element support, bare string rejected; (32) Admin routes default disabled via VVP_ADMIN_ENABLED=false (fail-closed in all environments, explicit opt-in required); (33) Verifier URL validation uses exact origin matching (scheme+host+port), rejects userinfo/query/fragment; (34) Delegation chain uses resolved_cache to prevent redundant OOBI/KEL fetches across hops; (35) KELEvent now surfaces witness_adds (ba) and witness_cuts (br) fields explicitly; (36) Fixed CHANGELOG.md→CHANGES.md, standardized OVC verifier terminology |
+
+---
+
+## Implementation Notes
+
+### Deviations from Plan
+- Log redaction tests are in `test_keri.py` (TestLogRedaction class) instead of a separate `test_log_redaction.py` file
+- OOBI SSRF tests are covered by the existing fetch layer tests rather than a separate `test_oobi_ssrf.py`
+- All KERI module tests consolidated into `test_keri.py` (51 tests) rather than separate per-module test files, for better cohesion
+
+### Test Results
+- 192 tests pass (132 existing + 51 KERI + 9 fetch allowlist)
+- No regressions
+
+### Files Changed
+| File | Lines | Summary |
+|------|-------|---------|
+| `app/vvp/keri/kel_parser.py` | +1064 | KEL parser (JSON/CESR, chain validation, SAID) |
+| `app/vvp/keri/oobi.py` | +120 | OOBI dereferencer using safe_get |
+| `app/vvp/keri/cache.py` | +460 | Range-based key state cache |
+| `app/vvp/keri/kel_resolver.py` | +672 | Key state resolver with feature gate |
+| `app/vvp/keri/delegation.py` | +269 | Delegation chain resolver |
+| `app/vvp/keri/signature.py` | +348 | Tier 2 signature verification |
+| `app/vvp/signature.py` | ~30 | Async Tier 2 routing |
+| `app/vvp/verify.py` | ~20 | Phase 4 async + KERI exceptions |
+| `app/vvp/fetch.py` | +30 | authorize_destination() |
+| `app/config.py` | +20 | Tier 2 config + allowlist |
+| `app/main.py` | ~5 | Admin gating |
+| `app/sip/handler.py` | +15 | STIR param stripping |
+| `tests/test_keri.py` | +450 | 51 KERI tests |
+| `tests/test_fetch_allowlist.py` | +70 | 9 allowlist tests |
+| `ALGORITHMS.md` | +50 | Tier 2 algorithm docs |
+| `README.md` | +10 | Updated capabilities + config |
+| `CHANGES.md` | +30 | Sprint 85 changelog |
+

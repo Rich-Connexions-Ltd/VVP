@@ -1935,3 +1935,52 @@ jobs:
               exit 1
             fi
           done
+
+  # =========================================================================
+  # POST-DEPLOYMENT SYSTEM TEST (SIP end-to-end)
+  # =========================================================================
+  # Runs the system test after all deployments complete. Validates health,
+  # PBX services, dialplan, and SIP signing→verification chain with X-VVP
+  # header checks. Uses --skip-sip to avoid SIP call overhead on every push;
+  # full SIP + loopback tests run nightly via system-test.yml schedule.
+  system-test:
+    needs: [post-deployment-tests, deploy-sip-redirect, deploy-sip-verify, deploy-pbx-config]
+    if: always() && !failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run system test (health + PBX + dialplan + SIP)
+        run: python3 scripts/system-test.py -v
+
+      - name: Upload results on failure
+        if: failure()
+        run: |
+          python3 scripts/system-test.py --json > system-test-results.json 2>&1 || true
+          echo "### System Test Results (post-deploy)" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          cat system-test-results.json >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: system-test-post-deploy
+          path: system-test-results.json
+          retention-days: 7
