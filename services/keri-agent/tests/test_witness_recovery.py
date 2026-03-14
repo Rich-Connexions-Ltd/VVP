@@ -217,7 +217,7 @@ class TestRecoverDegradedWitnesses:
     @pytest.mark.asyncio
     async def test_no_seeds_returns_recovered(self, recovery_service):
         """When no seeds exist, report is fully_recovered."""
-        with patch("app.keri.witness_recovery.get_seed_store") as mock_store, \
+        with patch("app.keri.seed_store.get_seed_store") as mock_store, \
              patch("app.keri.identity.get_identity_manager") as mock_mgr:
             mock_store.return_value.get_all_identity_seeds.return_value = []
             mock_mgr.return_value = AsyncMock()
@@ -243,7 +243,7 @@ class TestRecoverDegradedWitnesses:
                     healthy=False, status="stale",
                 ),
             ]
-            with patch("app.keri.witness_recovery.get_seed_store") as mock_store, \
+            with patch("app.keri.seed_store.get_seed_store") as mock_store, \
                  patch("app.keri.identity.get_identity_manager") as mock_mgr:
                 mock_store.return_value.get_all_identity_seeds.return_value = [
                     MagicMock(expected_aid="aid1", name="test")
@@ -280,7 +280,7 @@ class TestRecoverDegradedWitnesses:
                 fully_recovered=True,
             )
 
-            with patch("app.keri.witness_recovery.get_seed_store") as mock_store, \
+            with patch("app.keri.seed_store.get_seed_store") as mock_store, \
                  patch("app.keri.identity.get_identity_manager") as mock_mgr:
                 mock_store.return_value.get_all_identity_seeds.return_value = [
                     MagicMock(expected_aid="aid1", name="test")
@@ -308,7 +308,7 @@ class TestRecoverDegradedWitnesses:
                     healthy=False, status="stale",
                 ),
             ]
-            with patch("app.keri.witness_recovery.get_seed_store") as mock_store, \
+            with patch("app.keri.seed_store.get_seed_store") as mock_store, \
                  patch("app.keri.identity.get_identity_manager") as mock_mgr:
                 mock_store.return_value.get_all_identity_seeds.return_value = [
                     MagicMock(expected_aid="aid1", name="test")
