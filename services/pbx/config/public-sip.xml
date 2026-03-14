@@ -47,7 +47,7 @@
         <action application="set" data="effective_caller_id_name=VVP Brand Assure"/>
         <action application="set" data="sip_redirect_context=redirected"/>
         <action application="log" data="INFO [VVP] Routing to signing: +441923311002 → +44192331$1 via Brand Assure"/>
-        <action application="bridge" data="[sip_h_X-VVP-API-Key=KyGs1suZJR0dQAL0kymkhSvSeJQo4Dh11eWE6YrQXTs,origination_caller_id_number=+441923311002]sofia/external/${loopback_dest_tn}@127.0.0.1:5070"/>
+        <action application="bridge" data="[sip_h_X-VVP-API-Key=B9_Qz2IJs_94maycNru1zPswdZjakB3kRw4kVNA3R9A,origination_caller_id_number=+441923311002]sofia/external/${loopback_dest_tn}@127.0.0.1:5070"/>
       </condition>
     </extension>
 
@@ -67,7 +67,7 @@
         <action application="set" data="effective_caller_id_name=VVP Deutsche Vetters"/>
         <action application="set" data="sip_redirect_context=redirected"/>
         <action application="log" data="INFO [VVP] Routing to signing: +441923311003 → +44192331$1 via Deutsche Vetters"/>
-        <action application="bridge" data="[sip_h_X-VVP-API-Key=KyGs1suZJR0dQAL0kymkhSvSeJQo4Dh11eWE6YrQXTs,origination_caller_id_number=+441923311003]sofia/external/${loopback_dest_tn}@127.0.0.1:5070"/>
+        <action application="bridge" data="[sip_h_X-VVP-API-Key=B9_Qz2IJs_94maycNru1zPswdZjakB3kRw4kVNA3R9A,origination_caller_id_number=+441923311003]sofia/external/${loopback_dest_tn}@127.0.0.1:5070"/>
       </condition>
     </extension>
 
@@ -97,11 +97,11 @@
         <!-- Route through signing service with org API key + correct From TN -->
         <!-- API key and caller ID must be in bridge [endpoint vars] to appear in B-leg INVITE -->
         <action application="log" data="INFO [VVP] Routing to signing service: ${loopback_dest_tn}"/>
-        <action application="bridge" data="[sip_h_X-VVP-API-Key=KyGs1suZJR0dQAL0kymkhSvSeJQo4Dh11eWE6YrQXTs,origination_caller_id_number=+441923311000]sofia/external/${loopback_dest_tn}@127.0.0.1:5070"/>
+        <action application="bridge" data="[sip_h_X-VVP-API-Key=B9_Qz2IJs_94maycNru1zPswdZjakB3kRw4kVNA3R9A,origination_caller_id_number=+441923311000]sofia/external/${loopback_dest_tn}@127.0.0.1:5070"/>
       </condition>
     </extension>
 
-    <!-- VVP Loopback Inbound: calls from OVC-VVP-Verifier (port 5072) with VVP headers -->
+    <!-- VVP Loopback Inbound: calls from verifier with VVP headers -->
     <extension name="vvp-loopback-inbound">
       <condition field="${sofia_profile_name}" expression="^external$"/>
       <condition field="destination_number" expression="^\+?4419233110(\d{2})$">
@@ -224,7 +224,7 @@
   </context>
 
   <!-- Redirected context: handles calls after 302 redirect from signing service -->
-  <!-- Routes through OVC-VVP-Verifier (5072) before delivering to extension -->
+  <!-- Routes through VVP-SIP-Verify (5071) → cloud verifier before delivering to extension -->
   <context name="redirected">
 
     <!-- VVP Redirect: signing 302 -> verification service -> extension -->
@@ -249,8 +249,8 @@
         <action application="set" data="continue_on_fail=true"/>
         <action application="set" data="bridge_timeout=30"/>
         <action application="set" data="sip_invite_timeout=35"/>
-        <action application="log" data="INFO [VVP] Bridging to OVC-VVP-Verifier at 127.0.0.1:5072"/>
-        <action application="bridge" data="sofia/external/${destination_number}@127.0.0.1:5072"/>
+        <action application="log" data="INFO [VVP] Bridging to VVP-SIP-Verify at 127.0.0.1:5071"/>
+        <action application="bridge" data="sofia/external/${destination_number}@127.0.0.1:5071"/>
       </condition>
     </extension>
 

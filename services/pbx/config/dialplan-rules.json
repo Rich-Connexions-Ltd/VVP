@@ -42,7 +42,7 @@
       ],
       "checks": {
         "vvp-redirect-to-verify": {
-          "bridge_contains": "127.0.0.1:5072",
+          "bridge_contains": "127.0.0.1:5071",
           "exports_headers": [
             "Identity",
             "P-VVP-Identity",

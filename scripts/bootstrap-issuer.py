@@ -180,6 +180,21 @@ def step_create_org(base_url, admin_key, org_name):
     print(f"  Identity Name:  {identity_name}")
     print(f"  Registry Key:   {body.get('registry_key', 'N/A')}")
     body["_identity_name"] = identity_name
+
+    # Publish org identity to witnesses (ensures OOBI is resolvable by verifiers)
+    org_aid = body.get("aid")
+    if org_aid:
+        pub_status, pub_body = api_call(
+            "POST",
+            f"{base_url}/identity/{org_aid}/publish",
+            api_key=admin_key,
+            timeout=30,
+        )
+        if pub_status == 200:
+            print(f"  Published identity to witnesses")
+        else:
+            print(f"  WARNING: Failed to publish identity ({pub_status})")
+
     return body
 
 

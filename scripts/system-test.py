@@ -815,9 +815,11 @@ SIP_TEST_SCENARIOS = [
         },
         "expect_verification": {
             "status_code": 302,
-            # Accept VALID or INDETERMINATE — both prove the flow works.
-            # INDETERMINATE means vetter not authorized for jurisdiction (Sprint 84).
             "has_X-VVP-Status": True,
+            "X-VVP-Status": "VALID",
+            "has_X-VVP-Brand-Name": True,
+            "X-VVP-Brand-Name": "ACME Inc",
+            "has_X-VVP-Brand-Logo": True,
         },
         "chain_to_verification": True,
     },
@@ -835,6 +837,10 @@ SIP_TEST_SCENARIOS = [
         "expect_verification": {
             "status_code": 302,
             "has_X-VVP-Status": True,
+            "X-VVP-Status": "VALID",
+            "has_X-VVP-Brand-Name": True,
+            "X-VVP-Brand-Name": "ACME Inc",
+            "has_X-VVP-Brand-Logo": True,
         },
         "chain_to_verification": True,
     },
@@ -958,8 +964,7 @@ for i, scenario in enumerate(SCENARIOS):
         p_identity = headers.get("P-VVP-Identity", "")
         p_passport = headers.get("P-VVP-Passport", "")
         if p_identity and p_passport:
-            # Build Identity header
-            passport_b64 = base64.urlsafe_b64encode(p_passport.encode()).decode().rstrip("=")
+            # Build Identity header (RFC 8224 format: raw JWT, not re-encoded)
             try:
                 padded = p_identity + "=" * (4 - len(p_identity) % 4)
                 identity_data = json.loads(base64.urlsafe_b64decode(padded))
@@ -968,7 +973,7 @@ for i, scenario in enumerate(SCENARIOS):
                 info_url = ""
 
             extra = {
-                "Identity": f"<{passport_b64}>;info={info_url};alg=EdDSA;ppt=vvp",
+                "Identity": f"{p_passport};info=<{info_url}>;alg=EdDSA;ppt=vvp",
                 "P-VVP-Identity": p_identity,
                 "P-VVP-Passport": p_passport,
             }
