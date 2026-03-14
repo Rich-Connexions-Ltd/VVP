@@ -4,6 +4,8 @@
 
 **Files changed (VVP monorepo):**
 - `scripts/system-test.py` — Added `--oss-verifier` and `--verifier-url` flags for cross-verifier testing; HTTPS-only with origin allowlist; isolated test service on port 5073; try/finally cleanup
+- `.github/workflows/deploy.yml` — Added `system-test` job as post-deployment SIP end-to-end smoke test (health + PBX + dialplan + SIP signing→verification)
+- `.github/workflows/system-test.yml` — Added nightly schedule (`cron: 0 2 * * *`) with `--loopback` for full FreeSWITCH dialplan flow
 
 **Files changed (OVC repo — `OVC-VVP-Verifier/`):**
 - `app/vvp/keri/` — New: 9 modules ported from monorepo (kel_parser, oobi, cache, kel_resolver, delegation, signature, exceptions, key_parser, cesr)
