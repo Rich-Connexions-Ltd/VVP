@@ -3,7 +3,7 @@
   "council": {
     "parallel_timeout_seconds": 180,
     "consolidator_timeout_seconds": 180,
-    "max_plan_rounds": 5,
+    "max_plan_rounds": 6,
     "max_code_rounds": 6,
     "convergence_warning_at": 3,
     "output_dir": "council",

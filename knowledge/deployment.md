@@ -51,6 +51,20 @@ The `post-deployment-tests` job runs after deploy jobs complete. It:
 
 Test identities are tagged with `metadata={"type": "test"}` during creation and named with `test-` prefixes for visibility. Three cleanup layers ensure no test data persists: per-test fixture teardown, session-scoped autouse cleanup, and the CI cleanup step.
 
+### Post-Deployment System Test (Sprint 85)
+
+The `system-test` job runs after all deployments complete (depends on `post-deployment-tests`, `deploy-sip-redirect`, `deploy-sip-verify`, `deploy-pbx-config`). It executes `python3 scripts/system-test.py -v` which validates:
+1. Service health (Verifier, Issuer, 3 Witnesses)
+2. PBX services (FreeSWITCH, SIP Redirect, SIP Verify)
+3. Dialplan configuration (matches `services/pbx/config/dialplan-rules.json`)
+4. SIP call flow (signing returns 302 with correct X-VVP headers; verification processes the signed PASSporT)
+
+This job runs on every push to main but does NOT include `--loopback` (full FreeSWITCH originate). The full loopback test runs nightly via `system-test.yml`.
+
+### Nightly System Test (Sprint 85)
+
+The `system-test.yml` workflow runs on a schedule (`cron: 0 2 * * *` — daily at 02:00 UTC) with `--loopback` enabled automatically. This exercises the full FreeSWITCH dialplan flow through all 3 contexts (public → redirected → verified). Manual dispatch is also supported via `workflow_dispatch` with optional `loopback` and `skip_sip` inputs.
+
 ### Issuer Session Persistence (Sprint 73)
 
 The issuer uses **sticky sessions** (Azure Container Apps session affinity) and **PostgreSQL-backed session storage** so that user login sessions survive across replicas and container restarts.
