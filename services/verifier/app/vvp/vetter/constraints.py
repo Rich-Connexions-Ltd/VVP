@@ -21,7 +21,7 @@ from app.vvp.vetter.country_codes import (
     extract_e164_country_code,
     normalize_country_code,
 )
-from app.vvp.vetter.traversal import find_vetter_certification
+from app.vvp.vetter.traversal import find_vetter_certification, has_certification_edge
 
 log = logging.getLogger(__name__)
 
@@ -291,11 +291,24 @@ def verify_vetter_constraints(
         assertion_country = e164_to_iso3166(dest_e164)
 
     # Validate TN credentials against ECC targets
+    # Note: TN allocation credentials typically lack certification edges —
+    # the certification backlink is on the brand credential (dossier root).
+    # TN credentials without a certification edge are skipped; the brand
+    # credential's certification check already covers jurisdiction.
     for cred in tn_credentials or []:
         cred_said = _get_credential_said(cred)
         cert = find_vetter_certification(cred, dossier_acdcs)
 
         if not cert:
+            if not has_certification_edge(cred):
+                # TN allocation credentials typically lack certification edges —
+                # the certification backlink is on the brand credential instead.
+                log.debug(
+                    f"TN credential {cred_said[:16]}... has no certification "
+                    f"edge — skipping (certification is on brand credential)"
+                )
+                continue
+            # Has a certification edge but it couldn't be resolved
             results[cred_said] = VetterConstraintResult(
                 credential_said=cred_said,
                 credential_type=CredentialType.TN,

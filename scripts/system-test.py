@@ -860,6 +860,54 @@ SIP_TEST_SCENARIOS = [
         "chain_to_verification": True,
     },
     {
+        "name": "Phase 2a UK Ltd (authorized vetter)",
+        "description": "Vetter authorized for UK (ECC=44) calling UK number — vetter PASS",
+        "orig_tn": "+441923311002",
+        "dest_tn": "+441923311006",
+        "api_key_config": "VVP_PHASE2A_API_KEY",
+        "expect_signing": {
+            "status_code": 302,
+            "has_P-VVP-Identity": True,
+            "has_P-VVP-Passport": True,
+            "has_Contact": True,
+        },
+        "expect_verification": {
+            "status_code": 302,
+            "has_X-VVP-Status": True,
+            "X-VVP-Status": "VALID",
+            "has_X-VVP-Brand-Name": True,
+            "X-VVP-Brand-Name": "Phase 2a UK Ltd",
+            "has_X-VVP-Brand-Logo": True,
+            "has_X-VVP-Vetter-Status": True,
+            "X-VVP-Vetter-Status": "PASS",
+        },
+        "chain_to_verification": True,
+    },
+    {
+        "name": "Phase 2b US Ltd (unauthorized vetter)",
+        "description": "Vetter authorized for US only (ECC=1) calling UK number — vetter jurisdiction violation",
+        "orig_tn": "+441923311003",
+        "dest_tn": "+441923311006",
+        "api_key_config": "VVP_PHASE2B_API_KEY",
+        "expect_signing": {
+            "status_code": 302,
+            "has_P-VVP-Identity": True,
+            "has_P-VVP-Passport": True,
+            "has_Contact": True,
+        },
+        "expect_verification": {
+            "status_code": 302,
+            "has_X-VVP-Status": True,
+            "X-VVP-Status": "WARNING",
+            "has_X-VVP-Brand-Name": True,
+            "X-VVP-Brand-Name": "Phase 2b US Ltd",
+            "has_X-VVP-Brand-Logo": True,
+            "has_X-VVP-Vetter-Status": True,
+            "has_X-VVP-Warning-Reason": True,
+        },
+        "chain_to_verification": True,
+    },
+    {
         "name": "Unmapped TN (negative)",
         "description": "From TN not in any mapping — signing returns 404",
         "orig_tn": "+441923319999",
@@ -1030,7 +1078,8 @@ for i, scenario in enumerate(SCENARIOS):
     result = {"name": name, "signing": None, "verification": None}
 
     # --- Signing ---
-    invite = build_invite(orig, dest, 5070, api_key=API_KEY)
+    scenario_api_key = scenario.get("api_key", API_KEY)
+    invite = build_invite(orig, dest, 5070, api_key=scenario_api_key)
     sign_resp = send_and_receive(invite, "127.0.0.1", 5070)
     result["signing"] = sign_resp
 
@@ -1111,12 +1160,14 @@ for i, scenario in enumerate(SCENARIOS):
 
 def phase4_sip_calls(api_key, orig_tn, dest_tn,
                      json_output=False, verbose=False,
-                     verify_port=5071):
+                     verify_port=5071, e2e_config=None):
     """Run scenario-driven SIP signing and verification tests on the PBX.
 
     Tests multiple scenarios sequentially:
     - ACME Inc primary (authorized vetter, valid dossier)
     - ACME Inc reverse TN (bidirectional mapping)
+    - Phase 2a UK Ltd (authorized vetter, ECC=44)
+    - Phase 2b US Ltd (unauthorized vetter for UK, ECC=1)
     - Unmapped TN (negative test)
 
     Each scenario sends a signing INVITE to port 5070, then chains the
@@ -1133,6 +1184,9 @@ def phase4_sip_calls(api_key, orig_tn, dest_tn,
         results.append({"test": "sip_calls", "ok": True, "skipped": True})
         return True, results
 
+    if e2e_config is None:
+        e2e_config = {}
+
     # Build scenario list — use e2e-config TNs as defaults
     scenarios = []
     for s in SIP_TEST_SCENARIOS:
@@ -1142,6 +1196,15 @@ def phase4_sip_calls(api_key, orig_tn, dest_tn,
             scenario["orig_tn"] = orig_tn
         if scenario["dest_tn"] == "+441923311006":
             scenario["dest_tn"] = dest_tn
+        # Resolve per-scenario API key from e2e-config
+        config_key = scenario.pop("api_key_config", None)
+        if config_key:
+            resolved = os.getenv(config_key, e2e_config.get(config_key, ""))
+            if resolved:
+                scenario["api_key"] = resolved
+            else:
+                log_warn(f"Scenario '{scenario['name']}': {config_key} not found "
+                         f"in .e2e-config — using default key", json_output)
         scenarios.append(scenario)
 
     # Build and deploy the test script
@@ -1672,7 +1735,8 @@ def main():
                 try:
                     ok, results = phase4_sip_calls(api_key, orig_tn, dest_tn,
                                                     args.json, args.verbose,
-                                                    verify_port=verify_port)
+                                                    verify_port=verify_port,
+                                                    e2e_config=e2e_config)
                     all_results["phase4_sip"] = results
                     if not ok:
                         overall_ok = False

@@ -17,6 +17,12 @@ VVP_ADMIN_KEY=sQO2aE-foISGVUYcY6aj3hhCiXnaE1sRqfaW87hMoeE
 # Organization ID for credential issuance (Sprint 67+: org context mandatory)
 VVP_TEST_ORG_ID=02bb815d-4c38-4347-b131-416365dc00ef
 
+# Phase 2a org API key (Brand Assure UK Ltd — vetter authorized for UK, ECC=44)
+VVP_PHASE2A_API_KEY=5pPjBXedfdMJJ0VMVMTaPf9JhQmYMngJrshYi1xaDqw
+
+# Phase 2b org API key (Deutsche Vetters US Ltd — vetter authorized for US only, ECC=1)
+VVP_PHASE2B_API_KEY=OXQ4vX4mLZeS26VS80V2H5F_6Y_5pOZg_l0OdsSP-v8
+
 # Test telephone numbers (must match TN allocations in issuer)
 VVP_TEST_FROM_TN=+441923311000
 VVP_TEST_TO_TN=+441923311006
