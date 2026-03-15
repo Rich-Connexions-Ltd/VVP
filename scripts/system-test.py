@@ -951,19 +951,35 @@ def _start_oss_verify_service(verifier_url, json_output=False):
     """Start the test-only sip-verify-test service on the PBX.
 
     Deploys a temporary env file and starts the service on port 5073.
+    The sip-verify-test service runs on the PBX itself, so if the OSS
+    verifier is also on the PBX (port 8072), we use the localhost URL
+    instead of the external URL.
     Returns True on success, False on failure.
     """
     log_check("Starting OSS verify test service on PBX (port 5073)", json_output)
 
-    env_content = f"VVP_VERIFIER_URL={verifier_url}\nVVP_VERIFY_PORT=5073\n"
+    # The OSS verifier runs on the PBX at localhost:8072.
+    # Use the localhost URL for the sip-verify-test service.
+    pbx_verifier_url = "http://127.0.0.1:8072"
+
+    env_content = (
+        f"VVP_VERIFIER_URL={pbx_verifier_url}\n"
+        f"VVP_SIP_VERIFY_PORT=5073\n"
+        f"VVP_REDIRECT_TARGET=127.0.0.1:5080\n"
+        f"PYTHONPATH=/opt/vvp/common-pkg\n"
+        f"LOG_LEVEL=INFO\n"
+        f"VVP_VERIFIER_TIMEOUT=15.0\n"
+        f"VVP_MONITOR_ENABLED=false\n"
+        f"VVP_STATUS_HTTP_PORT=8096\n"
+    )
     env_b64 = base64.b64encode(env_content.encode()).decode()
 
     ok, output = pbx_run(
         f"echo '{env_b64}' | base64 -d > /etc/vvp/vvp-sip-verify-test.env && "
-        f"systemctl start vvp-sip-verify-test && "
+        f"systemctl restart vvp-sip-verify-test && "
         f"sleep 2 && "
         f"systemctl is-active vvp-sip-verify-test",
-        timeout=30,
+        timeout=60,
     )
     if ok and "active" in strip_az_output(output).lower():
         log_pass("OSS verify test service started on port 5073", json_output)
@@ -976,7 +992,7 @@ def _start_oss_verify_service(verifier_url, json_output=False):
 
 def _stop_oss_verify_service(json_output=False):
     """Stop the test-only sip-verify-test service on the PBX."""
-    pbx_run("systemctl stop vvp-sip-verify-test 2>/dev/null || true", timeout=15)
+    pbx_run("systemctl stop vvp-sip-verify-test 2>/dev/null || true", timeout=60)
     log_info("OSS verify test service stopped", json_output)
 
 
@@ -1206,6 +1222,26 @@ def phase4_sip_calls(api_key, orig_tn, dest_tn,
                 log_warn(f"Scenario '{scenario['name']}': {config_key} not found "
                          f"in .e2e-config — using default key", json_output)
         scenarios.append(scenario)
+
+    # OSS verifier mode: relax expectations for features not implemented
+    # in the OSS verifier (brand extraction, vetter constraints).
+    if verify_port == OSS_VERIFY_PORT:
+        for scenario in scenarios:
+            ev = scenario.get("expect_verification")
+            if not ev:
+                continue
+            # OSS verifier returns VALID for all authorized dossiers
+            # (no vetter constraint checking, so WARNING→VALID).
+            if ev.get("X-VVP-Status") == "WARNING":
+                ev["X-VVP-Status"] = "VALID"
+            # OSS verifier doesn't extract brand info from dossiers.
+            ev.pop("has_X-VVP-Brand-Name", None)
+            ev.pop("X-VVP-Brand-Name", None)
+            ev.pop("has_X-VVP-Brand-Logo", None)
+            # OSS verifier doesn't implement vetter constraints.
+            ev.pop("has_X-VVP-Vetter-Status", None)
+            ev.pop("X-VVP-Vetter-Status", None)
+            ev.pop("has_X-VVP-Warning-Reason", None)
 
     # Build and deploy the test script
     sip_script = _build_sip_test_script(scenarios, api_key, verify_port=verify_port)
@@ -1674,7 +1710,8 @@ def main():
     oss_verifier_url = None
     verify_port = 5071  # default: production verify service
     if args.oss_verifier:
-        oss_verifier_url = _validate_verifier_url(OSS_VERIFIER_URL)
+        # OSS verifier runs on PBX at localhost:8072; no external URL validation needed.
+        oss_verifier_url = "http://127.0.0.1:8072"
         verify_port = OSS_VERIFY_PORT
     elif args.verifier_url:
         oss_verifier_url = _validate_verifier_url(args.verifier_url)
